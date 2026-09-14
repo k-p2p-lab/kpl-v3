@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Monitor K-P2PLab Agents and GossipSub network experiments in real time.">
   <title>K-P2PLab Dashboard</title>
+  <link rel="icon" type="image/jpeg" href="/kpl-logo.jpg">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -42,7 +43,7 @@
         </div>
       </header>
       <div class="metric-carousel" id="metricCarousel" role="group" aria-label="Live metrics" aria-roledescription="carousel" aria-describedby="metricsHint">
-        <article class="metric-card accent-cyan" data-metric="agents">
+        <article class="metric-card" data-metric="agents" data-metric-group="cluster">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-agents-details" aria-labelledby="metric-agents-label agentMetric">
             <span class="metric-category">Cluster<span class="metric-index" aria-hidden="true">01</span></span>
             <span class="metric-label" id="metric-agents-label">Online Agents</span>
@@ -55,7 +56,7 @@
             <p class="metric-description">Online Agents out of all registered Agents. Available slots count only online Agents.</p>
           </div>
         </article>
-        <article class="metric-card accent-green" data-metric="peers">
+        <article class="metric-card" data-metric="peers" data-metric-group="cluster">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-peers-details" aria-labelledby="metric-peers-label peerMetric">
             <span class="metric-category">Cluster<span class="metric-index" aria-hidden="true">02</span></span>
             <span class="metric-label" id="metric-peers-label">Ready Peers</span>
@@ -68,7 +69,7 @@
             <p class="metric-description">Ready Peers and observed transport links across the cluster, independent of the selected run.</p>
           </div>
         </article>
-        <article class="metric-card accent-amber" data-metric="latency">
+        <article class="metric-card" data-metric="latency" data-metric-group="delivery">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-latency-details" aria-labelledby="metric-latency-label latencyMetric">
             <span class="metric-category">Delivery<span class="metric-index" aria-hidden="true">03</span></span>
             <span class="metric-label" id="metric-latency-label">Propagation latency P95</span>
@@ -81,7 +82,7 @@
             <p class="metric-description">First on-time application delivery at a continuously subscribed remote session. Raw messages have no latency sample.</p>
           </div>
         </article>
-        <article class="metric-card accent-violet" data-metric="delivery">
+        <article class="metric-card" data-metric="delivery" data-metric-group="delivery">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-delivery-details" aria-labelledby="reachLabel reachMetric">
             <span class="metric-category">Delivery<span class="metric-index" aria-hidden="true">04</span></span>
             <span class="metric-label" id="reachLabel">Continuous-session delivery</span>
@@ -96,7 +97,7 @@
             <p class="metric-description">On-time deliveries / receiver sessions subscribed throughout the configured window. Departures are excluded from both counts, even after an early receipt.</p>
           </div>
         </article>
-        <article class="metric-card accent-cyan" data-metric="duplicates">
+        <article class="metric-card" data-metric="duplicates" data-metric-group="delivery">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-duplicates-details" aria-labelledby="metric-duplicates-label duplicateMetric">
             <span class="metric-category">Delivery<span class="metric-index" aria-hidden="true">05</span></span>
             <span class="metric-label" id="metric-duplicates-label">Avg duplicates / delivery</span>
@@ -110,7 +111,7 @@
             <p class="metric-description">Additional PubSub copies within the delivery window / on-time deliveries at continuously subscribed remote sessions. Missing telemetry may undercount duplicates.</p>
           </div>
         </article>
-        <article class="metric-card accent-cyan" data-metric="send">
+        <article class="metric-card" data-metric="send" data-metric-group="bandwidth">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-send-details" aria-labelledby="metric-send-label bandwidthSendMetric">
             <span class="metric-category">Bandwidth<span class="metric-index" aria-hidden="true">06</span></span>
             <span class="metric-label" id="metric-send-label">P2P B/W · Send</span>
@@ -123,7 +124,7 @@
             <p class="metric-description" id="bandwidthScope">P2P stream usage for the run above. Rates use recent source intervals; totals retain all accepted samples. Missing rates are N/A. Link capacity, transport overhead and HTTP management traffic are excluded.</p>
           </div>
         </article>
-        <article class="metric-card accent-green" data-metric="receive">
+        <article class="metric-card" data-metric="receive" data-metric-group="bandwidth">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-receive-details" aria-labelledby="metric-receive-label bandwidthReceiveMetric">
             <span class="metric-category">Bandwidth<span class="metric-index" aria-hidden="true">07</span></span>
             <span class="metric-label" id="metric-receive-label">P2P B/W · Receive</span>
@@ -136,7 +137,7 @@
             <p class="metric-description">Sum of recent source interval-average receive rates for this run. Send and receive count opposite endpoints separately. Transport overhead and HTTP management traffic are excluded.</p>
           </div>
         </article>
-        <article class="metric-card accent-amber metric-card--status" data-metric="bandwidth">
+        <article class="metric-card metric-card--status" data-metric="bandwidth" data-metric-group="bandwidth">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-bandwidth-details" aria-labelledby="metric-bandwidth-label bandwidthQualityMetric">
             <span class="metric-category">Bandwidth<span class="metric-index" aria-hidden="true">08</span></span>
             <span class="metric-label" id="metric-bandwidth-label">B/W measurement</span>
@@ -151,7 +152,7 @@
             <p class="metric-description">Only sessions that reported bandwidth can be counted. Missing final samples leave an unknown tail; absent Peers are not included in these counts.</p>
           </div>
         </article>
-        <article class="metric-card accent-violet" data-metric="starting">
+        <article class="metric-card" data-metric="starting" data-metric-group="observation">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-starting-details" aria-labelledby="metric-starting-label initialReachMetric">
             <span class="metric-category">Observation<span class="metric-index" aria-hidden="true">09</span></span>
             <span class="metric-label" id="metric-starting-label">Known starting-session delivery</span>
@@ -164,7 +165,7 @@
             <p class="metric-description">On-time delivery bounds among receiver sessions proved alive when publication began, including sessions that departed before the deadline.</p>
           </div>
         </article>
-        <article class="metric-card accent-green" data-metric="coverage">
+        <article class="metric-card" data-metric="coverage" data-metric-group="observation">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-coverage-details" aria-labelledby="metric-coverage-label coverageMetric">
             <span class="metric-category">Observation<span class="metric-index" aria-hidden="true">10</span></span>
             <span class="metric-label" id="metric-coverage-label">Continuous-session coverage</span>
@@ -177,7 +178,7 @@
             <p class="metric-description">Lower and upper bounds for the share of known starting sessions that remained subscribed through the deadline.</p>
           </div>
         </article>
-        <article class="metric-card accent-amber" data-metric="observation">
+        <article class="metric-card" data-metric="observation" data-metric-group="observation">
           <button class="metric-toggle" type="button" aria-expanded="false" aria-controls="metric-observation-details" aria-labelledby="metric-observation-label observationSummaryMetric">
             <span class="metric-category">Observation<span class="metric-index" aria-hidden="true">11</span></span>
             <span class="metric-label" id="metric-observation-label">Observation quality</span>
@@ -335,9 +336,9 @@
       <a class="secondary-button" id="downloadAllResultImages" hidden>Download all PNG + CSV (ZIP)</a>
       <details id="researchTools" hidden>
         <summary>Message images, repeated runs and v2 comparisons</summary>
-        <div class="research-controls"><label>Message <select id="researchMessage"></select></label><button type="button" id="drawResearchMessage">Message images</button><button type="button" id="drawResearchOverview">Result overview images</button></div>
+        <div class="research-controls"><label>Message <select id="researchMessage"></select></label><button class="secondary-button" type="button" id="drawResearchMessage">Message images</button><button class="secondary-button" type="button" id="drawResearchOverview">Result overview images</button></div>
         <p class="dialog-help">Load results, select runs, and edit series/case labels. Identical series and case labels form repeats. Use separate series for baseline and treatment. i/f/p and D parameters are optional and required only by their models. A matched lazy-off baseline is required for lazy contribution estimates.</p>
-        <button type="button" id="loadResearchRuns">Load saved results</button>
+        <button class="secondary-button" type="button" id="loadResearchRuns">Load saved results</button>
         <div class="research-table-wrap"><table><thead><tr><th>Select</th><th>Result</th><th>Series</th><th>Case</th><th>Parameters</th></tr></thead><tbody id="researchRuns"></tbody></table></div>
         <div class="research-controls">
           <label>Metric <select id="researchMetric"></select></label><label>X axis <select id="researchX"></select></label><label>Scatter color <select id="researchColor"></select></label>
@@ -345,14 +346,22 @@
           <label>Filter p (%) <input id="researchP" type="number" min="0" max="100" placeholder="All"></label><label>FRT, DRC, reach weights <input id="researchWeights" value="0.25,0.25,0.5"></label>
           <label>Degree predictions (Dlow,D,Dhigh per line) <textarea id="researchPredictions" rows="2" placeholder="4,8,12"></textarea></label>
         </div>
-        <button type="button" id="drawResearchCompare">Analyze selected results and generate comparison images</button>
+        <button class="secondary-button" type="button" id="drawResearchCompare">Analyze selected results and generate comparison images</button>
         <p class="dialog-help">Selected analyses continue on the server after closing. PNGs and CSVs are prepared from saved analyses when this view is open. Undefined values, missing evidence and rank-deficient fits appear as N/A.</p>
-        <div class="research-controls"><label>Import v2 JSON / JSONL / CSV or v3 analysis JSON (32 MiB/file) <input id="researchFiles" type="file" accept=".json,.jsonl,.csv" multiple></label><button type="button" id="drawImportedCurves">Imported curve overlays</button><button type="button" id="clearResearchImports">Clear imports</button></div>
+        <div class="research-controls"><label>Import v2 JSON / JSONL / CSV or v3 analysis JSON (32 MiB/file) <input id="researchFiles" type="file" accept=".json,.jsonl,.csv" multiple></label><button class="secondary-button" type="button" id="drawImportedCurves">Imported curve overlays</button><button class="secondary-button" type="button" id="clearResearchImports">Clear imports</button></div>
         <p class="dialog-help">For v2 x_case/y/yerr JSON, select its Metric before importing. Imported values retain their original analysis definitions. Use files with the same units for curve overlays.</p>
-        <button type="button" id="drawV2Reference">v2 fixed historical / ER reference images</button>
+        <button class="secondary-button" type="button" id="drawV2Reference">v2 fixed historical / ER reference images</button>
       </details>
       <details id="batchAnalysisSummary" class="batch-analysis-summary" hidden></details>
-      <div class="result-images-grid" id="resultImagesGrid"></div>
+      <fieldset class="result-image-protocols" id="resultImageProtocols" hidden>
+        <legend>Graph protocol</legend>
+        <label><input type="radio" name="resultImageProtocol" value="gossipsub" checked> GossipSub</label>
+        <label><input type="radio" name="resultImageProtocol" value="kademlia"> Kad</label>
+        <label><input type="radio" name="resultImageProtocol" value="transport"> Transport</label>
+        <span>Applies to topology graph metrics. The ZIP includes all three protocols.</span>
+      </fieldset>
+      <p class="dialog-help">Select an image name to expand its preview and PNG / CSV downloads.</p>
+      <div class="result-images-list" id="resultImagesGrid"></div>
     </div>
   </dialog>
 

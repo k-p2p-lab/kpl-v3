@@ -633,6 +633,16 @@
     return `${phase} · ${mb(job.processedBytes)} / ${mb(job.totalBytes)} MiB read`;
   }
 
+  function groupCharts(charts) {
+    const groups = new Map();
+    for (const chart of charts) {
+      const id = chart.groupId || chart.id;
+      if (!groups.has(id)) groups.set(id, { id, title: chart.groupTitle || chart.title, charts: [] });
+      groups.get(id).charts.push(chart);
+    }
+    return [...groups.values()];
+  }
+
   function createUI({
     api,
     document: doc = root.document,
@@ -650,6 +660,9 @@
       currentData = null,
       objectURLs = [];
     let researchTools = null;
+    let imageGroups = [], imageAssets = new Map(), selectedProtocol = "gossipsub", imageFailure = "";
+    const protocolControls = $("resultImageProtocols");
+    const imageList = $("resultImagesGrid");
     function status(message, error = false) {
       $("resultImagesStatus").textContent = message;
       $("resultImagesStatus").classList.toggle("error", error);
@@ -658,7 +671,11 @@
     }
     // Detach the browser only: the accepted server job continues after closing.
     function clearImages() {
-      $("resultImagesGrid").innerHTML = "";
+      imageList.innerHTML = "";
+      imageGroups = [];
+      imageAssets.clear();
+      imageFailure = "";
+      protocolControls.hidden = true;
       for (const url of objectURLs) root.URL.revokeObjectURL(url);
       objectURLs = [];
       if ($("downloadAllResultImages"))
@@ -676,51 +693,90 @@
       objectURLs.push(url);
       return url;
     }
+    function selectedChart(group) {
+      return group.charts.find(chart => !chart.protocol || chart.protocol === selectedProtocol);
+    }
+    function updateImage(details) {
+      const group = imageGroups[Number(details.dataset.imageIndex)];
+      if (!group) return;
+      const body = details.querySelector(".result-image-body");
+      if (!details.open) {
+        body.innerHTML = "";
+        delete body.dataset.imageAsset;
+        return;
+      }
+      const chart = selectedChart(group), asset = chart && imageAssets.get(chart.id);
+      if (!asset) {
+        delete body.dataset.imageAsset;
+        const message = !chart ? "No image is available for this protocol."
+          : imageFailure ? "This image could not be prepared. Use Retry to try again."
+          : `Preparing ${chart.title}…`;
+        body.innerHTML = `<p class="result-image-placeholder">${escape(message)}</p>`;
+        return;
+      }
+      if (body.dataset.imageAsset === chart.id) return;
+      body.innerHTML = `<figure><a href="${asset.pngURL}" download="${escape(asset.filename)}.png" aria-label="${escape(`Download ${chart.title} as PNG`)}"><img src="${asset.pngURL}" alt="${escape(chart.title)}" loading="lazy"></a><figcaption><span>${escape(chart.title)}</span><a href="${asset.pngURL}" download="${escape(asset.filename)}.png">PNG ↓</a>${asset.csvURL ? `<a href="${asset.csvURL}" download="${escape(asset.filename)}.csv">CSV ↓</a>` : ""}</figcaption></figure>`;
+      body.dataset.imageAsset = chart.id;
+    }
+    function showImageList(charts) {
+      imageGroups = groupCharts(charts);
+      protocolControls.hidden = !charts.some(chart => chart.protocol);
+      for (const input of protocolControls.querySelectorAll('input[name="resultImageProtocol"]')) input.checked = input.value === selectedProtocol;
+      imageList.innerHTML = imageGroups.map((group, index) => `<details class="result-image" data-image-group="${escape(group.id)}" data-image-index="${index}">
+        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg><span>${escape(group.title)}</span></summary>
+        <div class="result-image-body"></div>
+      </details>`).join("");
+    }
+    // Native toggle does not bubble. Only attach images for expanded entries;
+    // changing protocols updates their bodies without replacing the disclosures.
+    imageList.addEventListener("toggle", event => {
+      if (event.target.matches("details[data-image-index]")) updateImage(event.target);
+    }, true);
+    protocolControls.addEventListener("change", event => {
+      const input = event.target;
+      if (input.name !== "resultImageProtocol" || !input.checked || !["gossipsub", "kademlia", "transport"].includes(input.value)) return;
+      selectedProtocol = input.value;
+      for (const details of imageList.querySelectorAll("details[open]")) {
+        if (imageGroups[Number(details.dataset.imageIndex)]?.charts.some(chart => chart.protocol)) updateImage(details);
+      }
+    });
     async function prepareImages(charts, id, view, requestRevision, extra) {
       const bundle = [];
-      for (const [index, chart] of charts.entries()) {
-        if (view.signal.aborted) throw new DOMException("Closed", "AbortError");
-        status(
-          `Preparing PNG ${index + 1} / ${charts.length} · ${chart.title}`,
-        );
-        const svg = chartSVG(chart),
-          png = await renderImage(svg, view.signal);
-        if (revision !== requestRevision) return;
-        if (!png.startsWith("data:image/png;base64,"))
-          throw new Error("Unable to create a PNG image.");
-        const filename = `${id}-${chart.id}`;
-        const csv = files?.chartCSV(chart),
-          csvURL = csv
-            ? blobURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
-            : null;
-        $("resultImagesGrid").insertAdjacentHTML(
-          "beforeend",
-          `<figure class="result-image"><a href="${png}" download="${escape(filename)}.png" aria-label="${escape(`Download ${chart.title} as PNG`)}"><img src="${png}" alt="${escape(chart.title)}" loading="lazy"></a><figcaption><span>${escape(chart.title)}</span><a href="${png}" download="${escape(filename)}.png">PNG ↓</a>${csvURL ? `<a href="${csvURL}" download="${escape(filename)}.csv">CSV ↓</a>` : ""}</figcaption></figure>`,
-        );
-        if (files) {
-          const bytes = Uint8Array.from(root.atob(png.split(",")[1]), (c) =>
-            c.charCodeAt(0),
-          );
-          bundle.push(
-            { name: `${filename}.png`, data: bytes },
-            { name: `${filename}.csv`, data: csv },
-          );
+      showImageList(charts);
+      try {
+        for (const [index, chart] of charts.entries()) {
+          if (view.signal.aborted) throw new DOMException("Closed", "AbortError");
+          status(`Preparing PNG ${index + 1} / ${charts.length} · ${chart.title}`);
+          const png = await renderImage(chartSVG(chart), view.signal);
+          if (revision !== requestRevision) return;
+          if (!png.startsWith("data:image/png;base64,")) throw new Error("Unable to create a PNG image.");
+          const filename = `${id}-${chart.id}`;
+          const bytes = Uint8Array.from(root.atob(png.split(",")[1]), c => c.charCodeAt(0));
+          const pngURL = png; // Keep previews compatible with the dashboard data: image policy.
+          const csv = files?.chartCSV(chart);
+          const csvURL = csv ? blobURL(new Blob([csv], { type: "text/csv;charset=utf-8" })) : null;
+          imageAssets.set(chart.id, { filename, pngURL, csvURL });
+          for (const details of imageList.querySelectorAll("details[open]")) {
+            if (selectedChart(imageGroups[Number(details.dataset.imageIndex)])?.id === chart.id) updateImage(details);
+          }
+          if (files) bundle.push({ name: `${filename}.png`, data: bytes }, { name: `${filename}.csv`, data: csv });
         }
+        if (files && bundle.length && $("downloadAllResultImages")) {
+          if (extra?.summary) bundle.push({ name: `${id}-summary.csv`, data: batch.summaryCSV(extra.summary) });
+          bundle.push({ name: `${id}-chart-definitions.json`, data: JSON.stringify({ charts, ...(extra || {}) }) });
+          const link = $("downloadAllResultImages");
+          link.href = blobURL(files.zip(bundle));
+          link.download = `${id}-images.zip`;
+          link.hidden = false;
+        }
+        status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.`);
+      } catch (error) {
+        if (revision === requestRevision) {
+          imageFailure = error.message;
+          for (const details of imageList.querySelectorAll("details[open]")) updateImage(details);
+        }
+        throw error;
       }
-      if (files && bundle.length && $("downloadAllResultImages")) {
-        if (extra?.summary) bundle.push({ name: `${id}-summary.csv`, data: batch.summaryCSV(extra.summary) });
-        bundle.push({
-          name: `${id}-chart-definitions.json`,
-          data: JSON.stringify({ charts, ...(extra || {}) }),
-        });
-        const link = $("downloadAllResultImages");
-        link.href = blobURL(files.zip(bundle));
-        link.download = `${id}-images.zip`;
-        link.hidden = false;
-      }
-      status(
-        `${charts.length} images ready. Download PNG, CSV or the complete ZIP. N/A images indicate missing evidence or undefined statistics.`,
-      );
     }
     async function renderTools(charts, id, extra) {
       revision++;
@@ -785,6 +841,7 @@
     }
     async function open(id, { refresh = false, retry = false, isBatch = false } = {}) {
       if (!id || (currentID === id && currentBatch === isBatch && controller)) return;
+      if (!dialog.open || currentID !== id || currentBatch !== isBatch) selectedProtocol = "gossipsub";
       cancel();
       currentID = id;
       currentBatch = isBatch;
@@ -923,6 +980,7 @@
   let ui;
   const exported = {
     buildCharts,
+    groupCharts,
     chartSVG,
     metricValue,
     trafficPoints,

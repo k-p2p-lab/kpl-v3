@@ -106,7 +106,7 @@ curl --fail --output run-results.zip \
 | `analysis-job.json` | 분석 요청 후 실행 파일 옆에 저장하는 현재 시도·상태·진행률·원본 경계 |
 | `analysis-result.json` | 완료 서버 분석. 메인 지표, 연구 메시지·모집단·근거, 계산된 그래프·대역폭 시계열, 분포와 적합 결과 |
 | `analysis-summary.json` | 완료 비교용 경량 응답. 메시지별 경로와 원본 시계열을 제외하고 집계·분포·적합·메시지 수 유지 |
-| PNG / 차트 CSV / 차트 정의 JSON | 브라우저가 선택한 개요·메시지·비교 화면에서 생성. 개별 또는 **Download all PNG + CSV (ZIP)**으로 다운로드 |
+| PNG / 차트 CSV / 차트 정의 JSON | 브라우저가 개요·메시지·비교 화면에서 생성. 제목을 펼쳐 개별 다운로드하며, **Download all PNG + CSV (ZIP)**에는 화면의 프로토콜 선택·제목 펼침 여부와 관계없이 모든 그래프 프로토콜의 PNG·CSV·차트 정의를 포함 |
 | 가져온 v2 파일 / 비교 선택 | 브라우저 화면에서 유지하며 Controller에 업로드하거나 서버 비교 작업으로 저장하지 않음 |
 
 위 서버 분석 파일 세 개는 **Download results** ZIP에 포함되지 않습니다. 계산 JSON은 분석 다운로드 endpoint로, 그림은 차트 다운로드로 각각 보존하십시오. 비교 ZIP은 생성한 차트이며 재분석에 필요한 전체 원본 기록이나 가져온 파일의 묶음이 아닙니다. 원본과 선택한 Series/Case·파라미터·소프트웨어 revision을 함께 남기십시오.

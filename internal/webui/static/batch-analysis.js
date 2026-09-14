@@ -86,7 +86,7 @@
       if (/bandwidth|throughput/.test(base.id)) note += " Measured libp2p stream traffic, excluding IP/TCP framing, retransmissions and management traffic.";
       if (/eager|origin|messages-.*count/.test(base.id)) note += " Eager/lazy paths are GRAFT/IHAVE/IWANT metadata estimates; unclassified evidence remains unknown.";
       const series = names.map(name => ({ name, points: average(copies.map(c => c.series.find(s => s.name === name)?.points || []), mode) }));
-      return { ...base, title: `${base.title} · run mean`, source, note, series };
+      return { ...base, ...(base.groupTitle ? { groupTitle: `${base.groupTitle} · run mean` } : {}), title: `${base.title} · run mean`, source, note, series };
     });
     for (const kind of ["time", "hop"]) {
       const parent = charts.find(c => c.id === `mean-receivers-${kind}`);

@@ -99,3 +99,38 @@ test('summary CSV preserves missing values, run counts and escaped metric names'
   assert.deepEqual(rows[1].slice(2), ['20', '', '1']);
   assert.equal(rows[2][0], 'research.name"test');
 });
+
+test('batch graph variants preserve protocol groups and average only the same layer', () => {
+  const a = run('a', '2026-09-13T00:00:00Z', 10);
+  const b = run('b', '2026-09-13T01:00:00Z', 20);
+  const c = run('c', '2026-09-13T02:00:00Z', 30);
+  const observation = (source, degrees) => ({
+    at: source.result.startedAt,
+    groups: [{ group: '', layers: Object.entries(degrees).map(([protocol, averageDegree]) => ({ protocol, nodes: 10, averageDegree })) }],
+  });
+  a.observations = [observation(a, { gossipsub: 2, kademlia: 20, transport: 100 })];
+  b.observations = [observation(b, { gossipsub: 6, kademlia: 40, transport: 300 })];
+  c.observations = [observation(c, { gossipsub: 10 })];
+  const charts = batch.build(data([a, b, c]), images.buildCharts);
+  for (const [protocol, label, mean, count, error] of [
+    ['gossipsub', 'GossipSub', 6, 3, 4],
+    ['kademlia', 'Kad', 30, 2, Math.sqrt(200)],
+    ['transport', 'Transport', 200, 2, Math.sqrt(20000)],
+  ]) {
+    const chart = charts.find(chart => chart.id === 'graph-average_degree-' + protocol);
+    assert.equal(chart.protocol, protocol);
+    assert.equal(chart.groupId, 'graph-average_degree');
+    assert.equal(chart.groupTitle, 'Mean degree · run mean');
+    assert.equal(chart.title, 'Mean degree · ' + label + ' · run mean');
+    assert.equal(chart.series.length, 1);
+    assert.equal(chart.series[0].name, protocol + ' · all peers');
+    const point = chart.series[0].points[0];
+    assert.equal(point.x, 0);
+    approx(point.y, mean);
+    assert.equal(point.n, count, 'unobserved layers must not contribute zero-valued runs');
+    approx(point.error, error);
+    const exported = files.csvRows(files.chartCSV(chart));
+    assert.equal(exported[1][exported[0].indexOf('series')], protocol + ' · all peers');
+  }
+  assert.equal(new Set(charts.map(chart => chart.id)).size, charts.length);
+});

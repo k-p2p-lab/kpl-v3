@@ -41,6 +41,7 @@ function fixture(api, renderImage = async () => png, options = {}) {
         hidden: id === "resultImagesAuth",
         listeners: {},
         classList: { toggle() {} },
+        querySelectorAll() { return []; },
         setAttribute() {},
         removeAttribute() {},
         insertAdjacentHTML(position, html) {
@@ -100,7 +101,7 @@ test("one result produces fixed images and does not invent absent bandwidth or s
     ["latency-cdf", "latency-distribution", "message-activity"],
   );
   assert.match(
-    images.chartSVG(charts.find((c) => c.id === "graph-diameter")),
+    images.chartSVG(charts.find((c) => c.id === "graph-diameter-gossipsub")),
     /No eligible observations/,
   );
   assert.equal(new Set(charts.map((c) => c.id)).size, charts.length);
@@ -118,7 +119,7 @@ test("one result produces fixed images and does not invent absent bandwidth or s
   );
 });
 
-test("optional images preserve control units and separate groups without a filter UI", () => {
+test("optional images preserve control units and separate experiment groups", () => {
   const data = sample();
   data.metrics.gossipsubControl = [
     {
@@ -234,8 +235,8 @@ test("a new result starts once, polls byte progress, and downloads the completed
   assert.equal(element("resultImagesDialog").open, true);
   assert.equal(element("resultImagesName").textContent, "Example <run>");
   assert.equal(
-    (element("resultImagesGrid").innerHTML.match(/<figure/g) || []).length,
-    images.buildCharts(sample()).length,
+    (element("resultImagesGrid").innerHTML.match(/<details/g) || []).length,
+    images.groupCharts(images.buildCharts(sample())).length,
   );
   assert.match(
     element("downloadResultAnalysis").href,
@@ -264,11 +265,9 @@ test("closing detaches from server analysis and reopening completed work does no
   resolveStatus(job("one", "running"));
   await first;
   await second;
-  assert.match(element("resultImagesGrid").innerHTML, /two-latency-cdf.png/);
-  assert.doesNotMatch(
-    element("resultImagesGrid").innerHTML,
-    /one-latency-cdf.png/,
-  );
+  assert.match(element("resultImagesGrid").innerHTML, /data-image-group="latency-cdf"/);
+  assert.equal(element("downloadAllResultImages").download, "two-images.zip");
+  assert.match(element("downloadResultAnalysis").href, /two\/result\?jobId=two-job$/);
   assert.ok(calls.every((call) => !call.options.method));
   ui.remove("two");
   assert.equal(element("resultImagesDialog").open, false);
@@ -310,7 +309,7 @@ test("status failures reconnect without resubmitting jobs; saved failures requir
     /Unreadable event log/,
   );
   element("retryResultImages").listeners.click();
-  await settle(() => element("resultImagesGrid").innerHTML);
+  await settle(() => /images ready/.test(element("resultImagesStatus").textContent));
   assert.equal(posts, 1);
   let calls = 0;
   const transient = fixture(async (url, options) => {
@@ -321,7 +320,7 @@ test("status failures reconnect without resubmitting jobs; saved failures requir
   });
   await transient.ui.open("run");
   transient.element("retryResultImages").listeners.click();
-  await settle(() => transient.element("resultImagesGrid").innerHTML);
+  await settle(() => /images ready/.test(transient.element("resultImagesStatus").textContent));
 });
 
 test("explicit refresh requests a new snapshot and authentication failures accept a token", async () => {
@@ -337,7 +336,7 @@ test("explicit refresh requests a new snapshot and authentication failures accep
       ([url, method]) => url.endsWith("?refresh=1") && method === "POST",
     ),
   );
-  await settle(() => refresh.element("resultImagesGrid").innerHTML);
+  await settle(() => /images ready/.test(refresh.element("resultImagesStatus").textContent));
   let saved = "",
     started = false;
   const auth = fixture(
@@ -360,7 +359,7 @@ test("explicit refresh requests a new snapshot and authentication failures accep
   assert.equal(auth.element("resultImagesAuth").hidden, false);
   auth.element("resultImagesToken").value = "test-token";
   auth.element("retryResultImages").listeners.click();
-  await settle(() => auth.element("resultImagesGrid").innerHTML);
+  await settle(() => /images ready/.test(auth.element("resultImagesStatus").textContent));
   assert.equal(saved, "test-token");
 });
 
@@ -409,4 +408,81 @@ test('batch and individual analyses use separate jobs even when batch ID equals 
   assert.equal(element('downloadResultAnalysis').href, '/api/v1/batch-analysis-jobs/run/result?jobId=batch-job');
   assert.match(element('downloadAllResultImages').download, /batch-mean-images.zip$/);
   assert.equal(calls.filter(call => call.method === 'POST').length, 0);
+});
+
+
+test("image families keep one closed title per graph metric without losing any protocol", async () => {
+  const charts = images.buildCharts(sample());
+  const groups = images.groupCharts(charts);
+  const graphGroups = groups.filter(group => group.id.startsWith("graph-"));
+  assert.equal(graphGroups.length, 14);
+  for (const group of graphGroups) {
+    assert.deepEqual(group.charts.map(chart => chart.protocol), ["gossipsub", "kademlia", "transport"]);
+    assert.equal(new Set(group.charts.map(chart => chart.id)).size, 3);
+  }
+  assert.equal(groups.length, charts.length - 28);
+  const { ui, element } = fixture(completedAPI);
+  await ui.open("run");
+  const markup = element("resultImagesGrid").innerHTML;
+  assert.equal((markup.match(/<details /g) || []).length, groups.length);
+  assert.doesNotMatch(markup, /<img|<figure|<details[^>]*\bopen(?:[\s=>])/);
+  assert.equal(element("resultImageProtocols").hidden, false);
+  element("resultImagesDialog").close();
+  assert.equal(element("resultImageProtocols").hidden, true);
+});
+
+test("the complete image ZIP contains separately named PNG and CSV files for all protocols", async () => {
+  const { ui, element } = fixture(completedAPI);
+  await ui.open("run");
+  const bytes = Buffer.from(await (await fetch(element("downloadAllResultImages").href)).arrayBuffer());
+  const entries = new Map();
+  let offset = 0;
+  while (bytes.readUInt32LE(offset) === 0x04034b50) {
+    const size = bytes.readUInt32LE(offset + 18), nameLength = bytes.readUInt16LE(offset + 26), extraLength = bytes.readUInt16LE(offset + 28);
+    const name = bytes.toString("utf8", offset + 30, offset + 30 + nameLength);
+    const start = offset + 30 + nameLength + extraLength;
+    entries.set(name, bytes.subarray(start, start + size));
+    offset = start + size;
+  }
+  for (const protocol of ["gossipsub", "kademlia", "transport"]) {
+    for (const extension of ["png", "csv"]) assert.ok(entries.has(`run-graph-diameter-${protocol}.${extension}`));
+  }
+  assert.equal(entries.has("run-graph-diameter.png"), false);
+  assert.ok(entries.has("run-latency-cdf.png"));
+  const definitions = JSON.parse(entries.get("run-chart-definitions.json").toString());
+  const diameter = definitions.charts.filter(chart => chart.groupId === "graph-diameter");
+  assert.equal(diameter.length, 3);
+  for (const chart of diameter) assert.ok(chart.series.every(series => series.name.startsWith(chart.protocol + " · ")));
+  element("resultImagesDialog").close();
+});
+
+
+test("opening an image uses a CSP-compatible preview and protocol switching keeps its disclosure open", async () => {
+  const { ui, element } = fixture(completedAPI);
+  await ui.open("run");
+  const groups = images.groupCharts(images.buildCharts(sample()));
+  const body = { innerHTML: "", dataset: {} };
+  const details = {
+    dataset: { imageIndex: String(groups.findIndex(group => group.id === "graph-diameter")) },
+    open: true,
+    matches: () => true,
+    querySelector: () => body,
+  };
+  const grid = element("resultImagesGrid");
+  grid.querySelectorAll = () => details.open ? [details] : [];
+  grid.listeners.toggle({ target: details });
+  assert.match(body.innerHTML, /<img src="data:image\/png;base64,/);
+  assert.match(body.innerHTML, /run-graph-diameter-gossipsub.png/);
+  for (const protocol of ["kademlia", "transport", "gossipsub"]) {
+    element("resultImageProtocols").listeners.change({ target: { name: "resultImageProtocol", checked: true, value: protocol } });
+    assert.equal(details.open, true);
+    assert.match(body.innerHTML, new RegExp(`run-graph-diameter-${protocol}\\.png`));
+    assert.match(body.innerHTML, new RegExp(`run-graph-diameter-${protocol}\\.csv`));
+    assert.match(body.innerHTML, /<img src="data:image\/png;base64,/);
+    assert.doesNotMatch(body.innerHTML, /<img src="blob:/);
+  }
+  details.open = false;
+  grid.listeners.toggle({ target: details });
+  assert.equal(body.innerHTML, "");
+  element("resultImagesDialog").close();
 });

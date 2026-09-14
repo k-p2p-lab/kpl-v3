@@ -2,7 +2,9 @@
 
 [English](visualization.md) | 한국어
 
-**Saved results → Images**에서 백그라운드 분석을 시작합니다. 서버가 로그 읽기·그래프 지표·전파 경로·분포 적합·저장 단계를 처리하고, 완료 데이터를 브라우저가 흰 배경의 가로 1,600px PNG로 만듭니다. **PNG ↓**, **CSV ↓**, **Download all PNG + CSV (ZIP)**으로 개별 이미지·차트 좌표·전체 묶음을 다운로드합니다. ZIP에는 축·범례·정의를 포함한 차트 JSON도 있습니다. **Download analysis JSON**은 서버에 저장된 전체 분석입니다.
+**Saved results → Images**에서 백그라운드 분석을 시작합니다. 서버가 로그 읽기·그래프 지표·전파 경로·분포 적합·저장 단계를 처리하고, 완료 데이터를 브라우저가 흰 배경의 가로 1,600px PNG로 만듭니다. **Graph images**는 기본으로 접힌 차트 제목 목록이며, 제목을 펼치면 이미지와 **PNG ↓ / CSV ↓** 링크를 표시합니다. **Download analysis JSON**은 서버에 저장된 전체 분석입니다.
+
+**Graph protocol**에서 **GossipSub**(기본값), **Kad**, **Transport**를 선택하면 그래프 지표별 제목 한 행에서 해당 프로토콜의 별도 이미지를 확인합니다. 같은 창에서 프로토콜을 전환해도 펼친 제목은 유지합니다. 공통 지연·전파·대역폭 차트는 바뀌지 않습니다. **Download all PNG + CSV (ZIP)**에는 선택한 프로토콜이나 제목의 펼침 여부와 관계없이 세 프로토콜의 별도 PNG·CSV와 차트 정의를 모두 포함합니다.
 
 창이나 브라우저를 닫아도 접수한 서버 분석은 계속됩니다. 같은 실행의 중복 요청은 기존 작업을 재사용하며, 최대 32개의 대기·실행 작업을 접수하며 한 번에 하나씩 계산합니다. 읽기 100% 이후에도 그래프 계산과 저장이 남을 수 있습니다. 완료 데이터는 Controller 재시작 후에도 보존됩니다. 진행 중 재시작한 작업은 `interrupted`가 되며 **Retry**로 다시 시작합니다. 네트워크 요청만 실패한 경우 Retry는 기존 작업에 연결합니다. PNG 변환과 비교 수식 계산은 창을 열었을 때 브라우저에서 수행합니다.
 
@@ -11,8 +13,8 @@
 ## 결과별 이미지
 
 - 기존 v3 지연 CDF·히스토그램, 메시지 활동, Peer 점수, lifecycle.
-- GossipSub·transport·Kademlia의 노드 수, 평균 차수, v2의 비잎 분모 차수, 직경·평균 최단 경로, clustering, betweenness·PageRank·degree·closeness·eigenvector 중심성, assortativity, modularity, 연결된 노드 쌍의 비율.
-- 차수 확률·누적분포와 가중 Student-t 적합.
+- GossipSub·Kad·Transport별 노드 수, 평균 차수, v2의 비잎 분모 차수, 직경·평균 최단 경로, clustering, betweenness·PageRank·degree·closeness·eigenvector 중심성, assortativity, modularity, 연결된 노드 쌍의 비율을 별도 이미지로 표시.
+- 전체 그룹 GossipSub 차수 확률·누적분포와 가중 Student-t 적합. Graph protocol을 바꾸어도 이 차트의 GossipSub 입력은 유지.
 - 전파·중복 누적곡선, 선형·로그 시간 축과 복합 패널, hop 확률·누적분포, 메시지별 FRT·reachability·DRC, eager/lazy 추정과 미확인 경로.
 - IHAVE/IWANT 등의 RPC 수, control entry 수, message-ID 참조 수, GRAFT/PRUNE 전이와 reciprocal 논리 간선 수.
 - 전체·프로토콜별 송수신 kbit/s와 누적 KiB. 대역폭은 libp2p 스트림 사용량이며 회선 용량, IP/TCP 헤더·재전송·관리 API 트래픽을 포함하지 않습니다.

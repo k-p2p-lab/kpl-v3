@@ -2,14 +2,17 @@
 
 English | [Korean](visualization.kr.md)
 
-Choose **Saved results → Images** to submit background analysis. The server reads logs, calculates graph and propagation metrics, fits distributions, and saves the result. The browser prepares white-background, 1,600px PNGs. Use **PNG ↓**, **CSV ↓**, or **Download all PNG + CSV (ZIP)**. The ZIP includes chart definitions; **Download analysis JSON** downloads the full server artifact.
+Choose **Saved results → Images** to submit background analysis. The server reads logs, calculates graph and propagation metrics, fits distributions, and saves the result. The browser renders white-background, 1,600px PNGs. **Graph images** starts with a collapsed list of chart titles; expand a title to see its image and **PNG ↓ / CSV ↓** links. **Download analysis JSON** downloads the full server artifact.
+
+**Graph protocol** selects **GossipSub** (the default), **Kad**, or **Transport** for the graph metric images, keeping one title per metric. Each protocol has a separate image; switching within the same dialog preserves expanded titles. Common latency, propagation and bandwidth charts remain unchanged. **Download all PNG + CSV (ZIP)** includes all three protocols' separate PNGs, CSVs and chart definitions, regardless of the selected protocol or collapsed titles.
 
 Accepted server jobs continue after closing the window/browser. At most 32 queued/running jobs are admitted, with one computation at a time. Completed artifacts survive Controller restart; interrupted jobs require Retry. Reopening a completed analysis reuses it. **Analyze latest snapshot** captures later logs. An outdated analysis version is regenerated on opening. Regeneration cannot recreate missing source evidence. Configured API tokens are required to start/retry/refresh jobs. PNG conversion and cross-run calculations happen in the browser while the view is open.
 
 ## Available images
 
 - Existing v3 latency CDF/histogram, message activity, scores and peer lifecycle.
-- GossipSub/transport/Kademlia node counts, degree, non-leaf denominator degree, diameter, shortest paths, clustering, five centralities, assortativity, modularity, connected-pair fraction, degree PDF/CDF and weighted Student-t fit.
+- Separate GossipSub, Kad and Transport graph metric images: node counts, degree, non-leaf denominator degree, diameter, shortest paths, clustering, five centralities, assortativity, modularity and connected-pair fraction.
+- All-group GossipSub degree PDF/CDF and weighted Student-t fit; these retain their GossipSub input when Graph protocol changes.
 - Propagation/duplicate cumulative curves, linear/log time, combined panels, hop distributions, per-message FRT/reachability/DRC and estimated eager/lazy and unclassified paths.
 - Control RPCs, entries, message-ID references, mesh transitions and reciprocal logical edges.
 - Total and per-protocol sent/received stream throughput and cumulative bytes. These measure libp2p stream use, not link capacity, IP/TCP framing, retransmissions or management traffic.

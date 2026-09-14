@@ -197,27 +197,33 @@
         "connected_pair_fraction",
         "average_degree_excluding_leaves",
       ].includes(key);
-      const series = ["gossipsub", "transport", "kademlia"].flatMap(
-        (protocol) =>
-          (globalOnly ? [""] : groups).map((group) => ({
-            name: `${protocol} · ${group || "all peers"}`,
-            points: graphPoints(a, protocol, group, key),
-          })),
-      );
-      const populated = series.filter((s) => s.points.some((p) => finite(p.y)));
-      add(
-        `graph-${key}`,
-        labels[key],
-        "Elapsed time (s)",
-        labels[key],
-        populated.length ? populated : [series[0]],
-        {
-          note:
-            key === "average_degree_excluding_leaves"
-              ? "v2 definition retained: sum of ALL degrees / count of nodes with degree > 1. Zero denominator is N/A."
-              : "Fresh, undirected unique-neighbor graph. Includes isolates. Unreachable/self pairs excluded from distances; see connected pair fraction. Missing historical edges yield N/A; no topology is invented.",
-        },
-      );
+      for (const [protocol, protocolLabel] of [
+        ["gossipsub", "GossipSub"],
+        ["kademlia", "Kad"],
+        ["transport", "Transport"],
+      ]) {
+        const series = (globalOnly ? [""] : groups).map((group) => ({
+          name: `${protocol} · ${group || "all peers"}`,
+          points: graphPoints(a, protocol, group, key),
+        }));
+        const populated = series.filter((s) => s.points.some((p) => finite(p.y)));
+        add(
+          `graph-${key}-${protocol}`,
+          `${labels[key]} · ${protocolLabel}`,
+          "Elapsed time (s)",
+          labels[key],
+          populated.length ? populated : [series[0]],
+          {
+            protocol,
+            groupId: `graph-${key}`,
+            groupTitle: labels[key],
+            note:
+              key === "average_degree_excluding_leaves"
+                ? "v2 definition retained: sum of ALL degrees / count of nodes with degree > 1. Zero denominator is N/A."
+                : "Fresh, undirected unique-neighbor graph. Includes isolates. Unreachable/self pairs excluded from distances; see connected pair fraction. Missing historical edges yield N/A; no topology is invented.",
+          },
+        );
+      }
     }
     add(
       "degree-probability",

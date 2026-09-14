@@ -416,9 +416,32 @@ func (s *state) inventoryLocked() model.Snapshot {
 	sort.Slice(result.Agents, func(i, j int) bool { return result.Agents[i].ID < result.Agents[j].ID })
 	sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].ID < result.Nodes[j].ID })
 	sort.Slice(result.Experiments, func(i, j int) bool {
-		return result.Experiments[i].StartedAt.After(result.Experiments[j].StartedAt)
+		return experimentBefore(result.Experiments[i], result.Experiments[j])
 	})
 	return result
+}
+
+func experimentBefore(a, b model.Experiment) bool {
+	// Preserve newest-started-first for metric selection. Queued repetitions
+	// share a zero start time, so use a complete tie-break order rather than
+	// exposing the map's iteration order in every dashboard refresh.
+	if !a.StartedAt.Equal(b.StartedAt) {
+		return a.StartedAt.After(b.StartedAt)
+	}
+	aGroup, bGroup := a.BatchID, b.BatchID
+	if aGroup == "" {
+		aGroup = a.ID
+	}
+	if bGroup == "" {
+		bGroup = b.ID
+	}
+	if aGroup != bGroup {
+		return aGroup < bGroup
+	}
+	if a.Iteration != b.Iteration {
+		return a.Iteration < b.Iteration
+	}
+	return a.ID < b.ID
 }
 
 func (s *state) snapshot() model.Snapshot {

@@ -110,6 +110,7 @@ h1 { font-size: 1.1rem; letter-spacing: -0.025em; }
 .secondary-button { color: var(--text); border-color: var(--line); background: transparent; }
 .danger-button { color: #210b09; background: var(--red); }
 .icon-button { flex: 0 0 auto; width: 2.625rem; height: 2.625rem; min-width: 2.625rem; padding: 0; line-height: 1; color: var(--muted); border-color: var(--line); background: transparent; font-size: 1.5rem; }
+.icon-button svg { display: block; flex: 0 0 auto; width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(57, 214, 208, 0.32); outline-offset: 2px; }
 
 main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw, 2.5rem) 3rem; }

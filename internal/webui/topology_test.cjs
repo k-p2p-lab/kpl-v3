@@ -88,7 +88,10 @@ test('metric rendering stays consistent from idle through a run and back to meas
   for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight', 'renderTopology']) {
     api[name] = () => {};
   }
-  const render = (metrics) => api.render({generatedAt:'2026-09-07T00:00:00Z', metrics});
+  const render = (metrics) => api.render({
+    generatedAt:'2026-09-07T00:00:00Z', metrics,
+    experiments: metrics?.runId ? [{id:metrics.runId, state:'running'}] : [],
+  });
   const text = (id) => elements.get(`#${id}`).textContent;
   const assertWaiting = () => {
     assert.equal(text('reachLabel'), 'Continuous-session delivery');
@@ -119,6 +122,63 @@ test('metric rendering stays consistent from idle through a run and back to meas
   render({runId:'run-two'});
   assertWaiting();
   assert.equal(text('eventTotalsMetric'), 'Published: 0 · Delivered: 0');
+});
+
+test('the carousel resets finished runs without changing snapshots or cluster counts', () => {
+  const elements = new Map();
+  const api = context({$: selector => {
+    if (!elements.has(selector)) elements.set(selector, {textContent:''});
+    return elements.get(selector);
+  }});
+  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight', 'renderTopology']) api[name] = () => {};
+  const snapshot = {
+    generatedAt:'2026-09-17T00:00:00Z',
+    agents:[{id:'a', state:'online', capacity:10, activeNodes:2}],
+    nodes:[peer('one'), peer('two')],
+  };
+  const texts = () => Object.fromEntries([...elements].map(([id, element]) => [id, element.textContent]));
+  api.render(snapshot);
+  const initial = texts();
+  const metrics = {
+    runId:'run-one', definition:'session-window-v1', published:5, delivered:8, duplicates:3,
+    deliveryRatioAvailable:true, reachability:0.8, deliveryRatioUpperBound:0.9,
+    expectedDeliveries:10, eligibleDeliveries:8, unknownDeliveries:1,
+    deliveryWindows:['10s'], finalizedPublications:4, pendingPublications:1,
+    latencySamples:8, p95LatencyMs:25, averageLatencyMs:20,
+    duplicateSamples:8, averageDuplicates:0.375, eligibleDuplicates:3,
+    initialDeliveryRatioAvailable:true, initialDeliveryRatio:0.7, initialDeliveryRatioUpperBound:0.8,
+    initialExpectedDeliveries:12, initialEligibleDeliveries:8, initialUnknownDeliveries:1,
+    stableCoverageAvailable:true, stableCoverage:0.8, stableCoverageUpperBound:0.9,
+    departedPairs:1, continuityUnknownPairs:2, publicationAvailabilityUnknownPairs:3,
+    missedDeliveries:1, lateDeliveries:2,
+    bandwidth:{sessions:2, finalizedSessions:0, sentBytes:2048, receivedBytes:1024,
+      rejectedSamples:3, latestAt:snapshot.generatedAt,
+      currentRates:{available:true, sentBitsPerSecond:8000, receivedBitsPerSecond:16000, reportingSessions:1, staleSessions:1}},
+  };
+  const queued = {id:'run-two', batchId:'batch', state:'queued', iteration:2, repetitions:2};
+  const running = {id:'run-one', batchId:'batch', state:'running', iteration:1, repetitions:2};
+  for (const runState of ['completed', 'failed', 'canceled', 'interrupted', 'queued']) {
+    api.render({...snapshot, metrics, experiments:[queued, running]});
+    assert.equal(texts()['#latencyMetric'], '25 ms');
+    assert.equal(texts()['#bandwidthSendMetric'], '8 kbit/s');
+    assert.match(texts()['#messageMetricsScope'], /Run 1 of 2/);
+    const finished = {...snapshot, metrics, experiments:[queued, {...running, state:runState}]};
+    const before = JSON.stringify(finished);
+    api.render(finished);
+    assert.deepEqual(texts(), initial, `${runState} must reset all run metric fields`);
+    api.render(finished);
+    assert.deepEqual(texts(), initial, 'later snapshots must not restore finished metrics');
+    assert.equal(JSON.stringify(finished), before, 'saved metrics and experiment states must remain intact');
+  }
+  api.render({...snapshot, metrics, experiments:[]});
+  assert.deepEqual(texts(), initial, 'unmatched final metrics must not remain after a run is removed');
+  api.render({...snapshot, metrics:{...metrics, runId:'run-two', p95LatencyMs:12},
+    experiments:[{...running, state:'completed'}, {...queued, state:'running'}]});
+  assert.equal(texts()['#latencyMetric'], '12 ms');
+  assert.match(texts()['#messageMetricsScope'], /run-two · Run 2 of 2/);
+  assert.equal(texts()['#agentMetric'], '1 / 1');
+  assert.equal(texts()['#peerMetric'], '2');
+  assert.equal(texts()['#capacityMetric'], 'Available slots: 8');
 });
 
 test('source sizes show original bytes for terminal, live and unreadable metadata', () => {

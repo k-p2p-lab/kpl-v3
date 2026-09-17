@@ -33,6 +33,8 @@ The Dashboard header links to Prometheus and Grafana in new tabs. It preserves t
 
 **Online Agents** and **Ready Peers** describe the whole cluster; message and bandwidth cards follow the run shown by **Run metrics**. **Observation quality** shows receipt, continuity and start unknown counts separately as `Receipt / Continuity / Start`; these overlapping categories are not summed. Expand it for the full labels and outcome counts.
 
+When a run finishes, fails or is canceled, its carousel measurements reset to the initial N/A/zero values. All cards remain available; the next running run supplies new values. Cluster counts stay live, and final measurements remain in **Saved results**.
+
 **Available slots** totals the free Peer capacity reported by online Agents; offline Agents contribute no available slots. Capacity is an admission count, not a CPU or memory reservation. See [Peer placement and capacity](swarm.md#distribution-and-capacity) before increasing it.
 
 **Saved results → Images** submits server background analysis and provides overview, message and repeated-run charts as PNG/CSV/ZIP. It uses saved records independently of Prometheus retention. See [result images](visualization.md) for operation and [experiment metrics](experiment-metrics.md#saved-result-research-metrics) for definitions.

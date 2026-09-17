@@ -33,6 +33,8 @@ Swarm은 Prometheus/Grafana 포트를 control 노드에 게시합니다. 각 Age
 
 **Online Agents**와 **Ready Peers**는 전체 클러스터, 메시지·대역폭 카드는 **Run metrics**에 표시된 실행을 대상으로 합니다. **Observation quality**의 대표 값은 `Receipt / Continuity / Start` 순서의 각 unknown 수이며, 서로 겹칠 수 있는 범주를 합산하지 않습니다. 펼치면 전체 레이블과 outcome 수를 확인할 수 있습니다.
 
+Run이 완료·실패·취소되면 해당 실험의 캐러셀 수치는 초기 N/A·0으로 돌아갑니다. 카드는 그대로 유지하며 다음 run이 시작되면 새 수치를 표시합니다. 클러스터 수치는 실시간 상태를 유지하고 최종 측정값은 **Saved results**에서 확인합니다.
+
 **Available slots**는 online Agent가 보고한 여유 Peer 수를 합산하며 offline Agent는 포함하지 않습니다. Capacity는 CPU·메모리 예약이 아닌 생성 허용 개수입니다. 값을 늘리기 전 [Peer 배치와 capacity](swarm.kr.md#분배와-용량)를 확인하십시오.
 
 **Saved results → Images**에서 서버 백그라운드 분석을 접수하고 개요·메시지·반복 비교 그림을 PNG/CSV/ZIP으로 다운로드합니다. 저장 기록을 사용하며 Prometheus 보존과 독립적입니다. 조작 방법은 [결과 이미지](visualization.kr.md), 계산 정의는 [실험 지표](experiment-metrics.kr.md#저장-결과-연구-지표)를 참고하십시오.

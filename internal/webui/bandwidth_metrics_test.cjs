@@ -37,13 +37,13 @@ test('partial coverage is visible and actual main rendering clears bandwidth on 
  for(const name of ['rememberAgents','renderRuns','renderAgents','renderEvents','syncDetailPanelHeight','renderTopology'])sandbox[name]=()=>{};
  sandbox.filterTopologyEdges=()=>[];
  const bw=sample({rejectedSamples:3,currentRates:{available:true,sentBitsPerSecond:8000,receivedBitsPerSecond:16000,reportingSessions:1,staleSessions:1}});
- sandbox.render({generatedAt:'2026-09-09T00:00:00Z',metrics:{runId:'one',definition:'dispatch-cohort-v1',bandwidth:bw}});
+ sandbox.render({generatedAt:'2026-09-09T00:00:00Z',experiments:[{id:'one',state:'running'}],metrics:{runId:'one',definition:'dispatch-cohort-v1',bandwidth:bw}});
  assert.equal(elements.get('#bandwidthSendMetric').textContent,'8 kbit/s');
  assert.equal(elements.get('#bandwidthQualityMetric').textContent,'Partial');
  assert.match(elements.get('#bandwidthSessionsMetric').textContent,/1 \/ 2 active sessions fresh/);
  assert.equal(elements.get('#bandwidthRejectedMetric').textContent,'Rejected samples: 3');
  assert.match(elements.get('#messageMetricsScope').textContent,/one/);
- sandbox.render({generatedAt:'2026-09-09T00:00:01Z',metrics:{runId:'two'}});
+ sandbox.render({generatedAt:'2026-09-09T00:00:01Z',experiments:[{id:'two',state:'running'}],metrics:{runId:'two'}});
  assert.equal(elements.get('#bandwidthSendMetric').textContent,'N/A');
  assert.equal(elements.get('#bandwidthSendTotal').textContent,'Total sent: N/A');
  assert.equal(elements.get('#bandwidthQualityMetric').textContent,'N/A');

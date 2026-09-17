@@ -419,9 +419,10 @@ function render(snapshot) {
   const agents = snapshot.agents || [];
   const nodes = snapshot.nodes || [];
   const edges = snapshot.edges || [];
-  const metrics = snapshot.metrics || {};
+  const metricRun = (snapshot.experiments || []).find((run) => run.id === snapshot.metrics?.runId);
+  // Snapshots retain final summaries; the carousel shows only a running run.
+  const metrics = metricRun?.state === "running" ? snapshot.metrics : {};
   const measurement = sessionMetrics(metrics);
-  const metricRun = (snapshot.experiments || []).find((run) => run.id === metrics.runId);
   const metricIteration = metricRun?.repetitions > 1 ? ` · Run ${formatNumber(metricRun.iteration)} of ${formatNumber(metricRun.repetitions)}` : "";
   setText($("#messageMetricsScope"), metrics.runId
     ? `Run metrics: ${metricRun?.name ? `${metricRun.name} · ` : ""}${metrics.runId}${metricIteration}`

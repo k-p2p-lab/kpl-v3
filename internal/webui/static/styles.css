@@ -114,6 +114,9 @@ h1 { font-size: 1.1rem; letter-spacing: -0.025em; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(57, 214, 208, 0.32); outline-offset: 2px; }
 
 main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw, 2.5rem) 3rem; }
+.site-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem 1.5rem; width: min(1600px, 100%); margin: 0 auto; padding: 1rem clamp(1rem, 3vw, 2.5rem) 1.5rem; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 0.75rem; }
+.site-footer a { padding-block: 0.4rem; color: var(--cyan); text-decoration: none; text-underline-offset: 0.2em; overflow-wrap: anywhere; }
+.site-footer a:hover { color: #62e4df; text-decoration: underline; }
 .metrics-section { min-width: 0; }
 .metrics-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.7rem; }
 .metrics-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.3rem 0.85rem; min-width: 0; }

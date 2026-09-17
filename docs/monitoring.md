@@ -85,6 +85,8 @@ After a restart, a saved run that still says `running` or `queued` is displayed 
 
 Explicit ZIP size requests (`HEAD`) and list inspections do not block deletion. Actual ZIP downloads (`GET`) protect their captured result until the request finishes. The delete request has a 30-second browser timeout; on timeout the Controller may still finish, so refresh or retry the same result. A slow follow-up list refresh does not keep the dialog controls disabled.
 
+The series header's **Delete group** confirms the saved-run count and deletes the entire batch through `DELETE /api/v1/result-batches/{batchId}`. Unlike individual-source deletion, this also removes the separate `batch-analyses/{batchId}` mean files and cancels pending analyses. All members are checked for activity/downloads before deletion starts. A storage error can leave partial progress; refresh and retry after resolving the error. Existing Prometheus/Grafana history remains.
+
 The existing public GET policy also applies to the saved-result list and downloads. API clients can use:
 
 ```bash

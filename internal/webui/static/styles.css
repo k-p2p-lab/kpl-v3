@@ -530,6 +530,8 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .saved-batch[open] > summary .saved-batch-hide { display: inline; }
 .saved-batch > .table-wrap { border-top: 1px solid var(--line-soft); border-radius: 0 0 .65rem .65rem; }
 .batch-images-button { width: 13rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.saved-batch-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.batch-delete-button { color: var(--red); white-space: nowrap; }
 .batch-analysis-summary { margin: 1rem 0; }
 .batch-analysis-summary summary { cursor: pointer; color: var(--cyan); }
 .batch-analysis-summary .table-wrap { max-height: 24rem; overflow: auto; }
@@ -538,5 +540,6 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
   .saved-batch > summary { flex-wrap: wrap; gap: .65rem; padding: .85rem; }
   .saved-batch-heading { flex-basis: calc(100% - 2rem); }
   .saved-batch-disclosure { margin-left: 1.75rem; }
-  .saved-batch .batch-images-button { width: auto; max-width: 100%; margin-left: auto; font-size: .72rem; }
+  .saved-batch-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; flex: 1 1 100%; min-width: 0; }
+  .saved-batch-actions .secondary-button { width: auto; min-width: 0; max-width: 100%; padding: .55rem .65rem; font-size: .72rem; }
 }

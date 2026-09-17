@@ -334,10 +334,20 @@ func (s *Server) deleteSavedResult(id string) error {
 	defer s.analysisJobMu.Unlock()
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	return s.deleteSavedResultLocked(id)
+}
+
+// Caller holds cancelMu, analysisJobMu, and state.persistMu in that order.
+func (s *Server) resultDeletionBusyLocked(id string) bool {
 	s.state.mu.RLock()
 	experiment := s.state.experiments[id]
 	s.state.mu.RUnlock()
-	if experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || s.resultDownloads[id] > 0 {
+	return experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || s.resultDownloads[id] > 0
+}
+
+// Caller holds the same locks as resultDeletionBusyLocked.
+func (s *Server) deleteSavedResultLocked(id string) error {
+	if s.resultDeletionBusyLocked(id) {
 		return errResultBusy
 	}
 	runs, err := s.openResultRuns()

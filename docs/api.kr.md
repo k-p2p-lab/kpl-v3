@@ -27,6 +27,7 @@ Controller는 아래 공개 및 운영 엔드포인트를 제공합니다. `KPL_
 | `GET` / `PUT` / `DELETE` | `/api/v1/scenarios/{id}` | 저장 시나리오 하나를 불러오기, 갱신 또는 삭제 |
 | `GET` | `/api/v1/results` | 이전 Controller 실행에서 저장한 실험을 포함하는 결과 목록 |
 | `DELETE` | `/api/v1/results/{id}` | 비활성 저장 결과 삭제. 진행 중 배치·다운로드 보호 |
+| `DELETE` | `/api/v1/result-batches/{batchId}` | 그룹의 모든 저장 run과 평균 분석 삭제. 전체 구성원의 활성 상태·다운로드를 먼저 검사 |
 | `GET` | `/api/v1/experiments/{id}/analysis` | 저장 이벤트·관측치를 분석한 그래프 데이터와 집계 JSON |
 | `GET` / `POST` | `/api/v1/analysis-jobs/{id}` | 백그라운드 분석 상태 조회 / 접수. 중복 요청 재사용, `?refresh=1`로 새 snapshot 분석 |
 | `GET` / `HEAD` | `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` | 서버에 보관된 완료 분석 JSON 다운로드. 작업 미완료·다른 attempt는 `409` |
@@ -71,6 +72,8 @@ typed 대역폭 표본을 포함한 원시 이벤트는 `<data-dir>/runs/<run-id
 `GET /api/v1/results`의 `sourceBytes`는 마지막 조회 시점에 저장된 시나리오·실험 메타데이터·이벤트·관측 원본 파일의 압축 전 바이트 합계입니다. 실행·대기 중 결과에도 제공하며 로그 본문을 읽거나 ZIP을 생성하지 않습니다. 분석 캐시와 생성 이미지는 제외합니다. 안전하게 파일 크기를 조회할 수 없을 때만 생략합니다. 화면은 이 값을 사용하며 자동 ZIP 크기 측정을 요청하지 않습니다.
 
 `DELETE /api/v1/results/{id}`는 삭제 성공 시 `204`, 결과가 없으면 `404`, 실행·배치가 활성 상태이거나 실제 `GET` 다운로드가 결과를 사용 중이면 `409`를 반환합니다. 직접 요청한 `HEAD` 크기 계산과 목록 조회는 다운로드 충돌로 처리하지 않습니다.
+
+`DELETE /api/v1/result-batches/{batchId}`는 설정된 bearer token과 정확한 배치 ID를 사용합니다. 파일을 삭제하기 전에 전체 구성원을 검사하며 실행·정리 중인 run이나 구성원의 ZIP 다운로드가 있으면 `409`를 반환합니다. 실패·취소 run을 포함한 모든 저장 구성원, 개별 분석, 별도 통합 평균을 제거합니다. 성공 시 `200`과 `{"deletedIds":["run-id", "..."]}`를 반환하며 그룹이 없으면 `404`입니다. 원본 없이 남은 통합 평균도 제거할 수 있습니다. 저장 장치 오류는 `500`이며 일부 삭제가 끝났을 수 있으므로 목록을 갱신하고 저장 오류를 해결한 뒤 재시도하십시오. 브라우저는 요청에 30초 제한 시간을 적용하며 그 이후에도 Controller에서 완료될 수 있습니다.
 
 ## 백그라운드 분석
 

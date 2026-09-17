@@ -914,12 +914,16 @@ function savedResultBatch(batch) {
   const excluded = batch.runs.length - batch.completed;
   const missing = Math.max(0, batch.expected - batch.runs.length);
   const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
+  const locked = batch.runs.some(resultLocked);
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
       <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span></span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
-      <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || batch.completed < 2 ? "disabled" : ""}>${label}</button>
+      <span class="saved-batch-actions">
+        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
+        <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
+      </span>
     </summary>
     ${savedResultTable(batch.runs, `batch:${batch.id}`, `Runs in ${batch.name} · ${batch.id}`)}
   </details>`;
@@ -949,7 +953,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-batch-images", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1015,17 +1019,22 @@ function savedResultRow(run) {
   </tr>`;
 }
 
-function requestResultDeletion(id) {
+function requestResultDeletion(id, isBatch = false) {
   if (state.deletingResultId) return;
-  const run = (state.savedResults || []).find((result) => result.id === id);
-  if (!run || resultLocked(run)) return;
-  state.pendingDelete = run;
+  const run = isBatch ? savedResultBatches(state.savedResults || []).find(batch => batch.id === id)
+    : (state.savedResults || []).find((result) => result.id === id);
+  if (!run || (isBatch ? run.runs.some(resultLocked) : resultLocked(run))) return;
+  state.pendingDelete = isBatch ? { ...run, isBatch: true } : run;
+  $("#deleteResultHeading").textContent = isBatch ? "Delete result group?" : "Delete saved result?";
   $("#deleteResultName").textContent = run.name || run.id;
-  $("#deleteResultID").textContent = run.id;
+  $("#deleteResultID").textContent = isBatch ? `Batch ${run.id} · ${run.runs.length} saved runs` : run.id;
+  $("#deleteResultHelp").textContent = isBatch
+    ? `Delete all ${run.runs.length} saved runs in this group, including their scenarios, metadata, logs, individual analyses, and the group mean analysis. This cannot be undone. Previously collected Prometheus and Grafana time series remain.`
+    : "Delete this run's saved scenario, metadata, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.";
   $("#deleteApiToken").value = token();
   $("#deleteResultError").textContent = "";
   $("#confirmDeleteResult").disabled = false;
-  $("#confirmDeleteResult").textContent = "Delete result";
+  $("#confirmDeleteResult").textContent = isBatch ? "Delete group" : "Delete result";
   $("#cancelDeleteResult").disabled = false;
   $("#deleteResultDialog").showModal();
 }
@@ -1033,8 +1042,9 @@ function requestResultDeletion(id) {
 async function confirmResultDeletion() {
   const run = state.pendingDelete;
   if (!run || state.deletingResultId) return;
-  const latest = (state.savedResults || []).find((result) => result.id === run.id) || run;
-  if (resultLocked(latest)) {
+  const latest = run.isBatch ? (state.savedResults || []).filter(result => result.batchId === run.id)
+    : [(state.savedResults || []).find((result) => result.id === run.id) || run];
+  if (latest.some(resultLocked) || (run.isBatch && run.runs.some(resultLocked))) {
     $("#deleteResultError").textContent = "This run or its batch is active. Stop it before deleting its saved result.";
     return;
   }
@@ -1049,28 +1059,36 @@ async function confirmResultDeletion() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
+    let deletedIDs = run.isBatch ? [] : [run.id];
     try {
-      await api(`/api/v1/results/${encodeURIComponent(run.id)}`, { method: "DELETE", signal: controller.signal });
+      const response = await api(`/api/v1/${run.isBatch ? "result-batches" : "results"}/${encodeURIComponent(run.id)}`, { method: "DELETE", signal: controller.signal });
+      if (run.isBatch) {
+        if (!Array.isArray(response?.deletedIds) || response.deletedIds.some(id => typeof id !== "string" || !id)) throw new Error("Unexpected group deletion response. Refresh the list to check.");
+        deletedIDs = response.deletedIds;
+      }
     } catch (error) {
       if (error.status !== 404) throw error;
     }
-    state.deletedResultIDs.add(run.id);
-    globalThis.KPLResultImages?.remove(run.id);
-    state.savedResults = (state.savedResults || []).filter((result) => result.id !== run.id);
+    for (const id of deletedIDs) {
+      state.deletedResultIDs.add(id);
+      globalThis.KPLResultImages?.remove(id);
+    }
+    if (run.isBatch) globalThis.KPLResultImages?.remove(run.id);
+    state.savedResults = (state.savedResults || []).filter((result) => !state.deletedResultIDs.has(result.id));
     state.pendingDelete = null;
     $("#deleteResultDialog").close();
-    showToast(`Deleted saved result: ${run.name || run.id}.`);
+    showToast(`Deleted ${run.isBatch ? "result group" : "saved result"}: ${run.name || run.id}.`);
   } catch (error) {
     $("#deleteResultError").textContent = error.name === "AbortError"
-      ? "Deletion timed out; it may still finish on the Controller. Refresh the list to check, or retry deleting this result."
+      ? "Deletion timed out; it may still finish on the Controller. Refresh the list to check, or retry the deletion."
       : error.status === 409
       ? "This result is active, belongs to an active batch, or is being downloaded. Wait for it to finish, then try again."
-      : `Could not delete the saved result: ${error.message}`;
+      : `Could not delete the ${run.isBatch ? "result group" : "saved result"}: ${error.message}`;
   } finally {
     clearTimeout(timeout);
     state.deletingResultId = null;
     $("#confirmDeleteResult").disabled = false;
-    $("#confirmDeleteResult").textContent = "Delete result";
+    $("#confirmDeleteResult").textContent = run.isBatch ? "Delete group" : "Delete result";
     $("#cancelDeleteResult").disabled = false;
     renderResultViews();
     // A slow list refresh must not keep the deletion dialog locked.
@@ -1575,6 +1593,15 @@ $("#scenarioForm").addEventListener("submit", (event) => event.preventDefault())
 for (const close of document.querySelectorAll("[data-scenario-close]")) close.addEventListener("click", closeScenarioEditor);
 
 document.addEventListener("click", async (event) => {
+  const deleteBatchButton = event.target.closest("[data-delete-batch]");
+  if (deleteBatchButton) {
+    event.preventDefault();
+    if (!deleteBatchButton.disabled) {
+      rememberResultDialogFocus("#deleteResultDialog", deleteBatchButton);
+      requestResultDeletion(deleteBatchButton.dataset.deleteBatch, true);
+    }
+    return;
+  }
   const batchImagesButton = event.target.closest("[data-batch-images]");
   if (batchImagesButton) {
     event.preventDefault(); // Analyze without toggling the surrounding summary.

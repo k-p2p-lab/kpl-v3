@@ -27,6 +27,7 @@ The Controller exposes the following public and operational endpoints. When `KPL
 | `GET` / `PUT` / `DELETE` | `/api/v1/scenarios/{id}` | Load, update, or delete one saved scenario |
 | `GET` | `/api/v1/results` | Saved experiment results, including runs from previous Controller sessions |
 | `DELETE` | `/api/v1/results/{id}` | Delete an inactive saved result; active batches and downloads are protected |
+| `DELETE` | `/api/v1/result-batches/{batchId}` | Delete all saved runs in one group and its mean analysis; preflight all members for activity/downloads |
 | `GET` | `/api/v1/experiments/{id}/analysis` | Chart distributions, timelines and metrics from saved events and observations |
 | `GET` / `POST` | `/api/v1/analysis-jobs/{id}` | Inspect / submit background analysis. Duplicate requests reuse work; `?refresh=1` requests a new snapshot |
 | `GET` / `HEAD` | `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` | Download persisted analysis JSON. Unfinished or mismatched attempts return `409` |
@@ -71,6 +72,8 @@ Use **Download results** in the Dashboard to export a run as ZIP. **Saved result
 `GET /api/v1/results` returns `sourceBytes`, the total uncompressed bytes of saved scenario, experiment metadata, event and observation source files at the last inspection, including running and queued results. It requires no log-content reads or ZIP generation and excludes analysis caches and generated images. The field is omitted only when source file sizes cannot be read safely. The dashboard uses this value without automatic ZIP size requests.
 
 `DELETE /api/v1/results/{id}` returns `204` on deletion, `404` if the result is absent, and `409` while the run/batch is active or an actual `GET` download holds it. Explicit `HEAD` size calculations and list reads do not cause a download conflict.
+
+`DELETE /api/v1/result-batches/{batchId}` uses the configured bearer token and exact batch ID. It checks every member before deleting any files, returns `409` if a run is active/finalizing or a ZIP download holds a member, and removes all saved member runs (including failed/canceled runs), their individual analyses, and the separate batch mean. Success returns `200` with `{"deletedIds":["run-id", "..."]}`; an absent group returns `404`. An orphan batch mean can also be removed. Storage failures return `500` and may leave a partially deleted group; refresh the list and resolve the storage error before retrying. The browser uses a 30-second request timeout; the Controller may finish after that timeout.
 
 ## Background analysis
 

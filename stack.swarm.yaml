@@ -88,6 +88,20 @@ services:
 
   grafana:
     image: grafana/grafana:13.2.1
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        # Existing volumes retain the original admin account (ID 1).
+        # Apply the configured password before each server start.
+        if [ -s "${GF_PATHS_DATA}/grafana.db" ]; then
+          : "${GF_SECURITY_ADMIN_PASSWORD:?Grafana administrator password is required}"
+          printf '%s\n' "${GF_SECURITY_ADMIN_PASSWORD}" |
+            grafana cli --homepath "${GF_PATHS_HOME}" \
+              --config "${GF_PATHS_CONFIG}" \
+              --configOverrides "cfg:default.paths.data=${GF_PATHS_DATA}" \
+              admin reset-admin-password --user-id 1 --password-from-stdin
+        fi
+        exec /run.sh
     environment:
       GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER:-admin}"
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}"

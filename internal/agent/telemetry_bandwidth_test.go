@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/controller"
 	"github.com/k-p2p-lab/v3/internal/model"
 )
 
@@ -34,7 +33,7 @@ func TestBandwidthTelemetrySurvivesAgentRetryAndControllerRestart(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	core := controller.New(controller.ServerConfig{DataDir: dir}, nil)
+	core := authenticatedTestController(dir)
 	handler := core.Handler(context.Background())
 	var mu sync.Mutex
 	var bodies [][]byte
@@ -58,7 +57,7 @@ func TestBandwidthTelemetrySurvivesAgentRetryAndControllerRestart(t *testing.T) 
 		handler.ServeHTTP(w, r)
 	}))
 	defer endpoint.Close()
-	agent := &Server{config: Config{ID: "agent", ControllerURL: endpoint.URL}, client: endpoint.Client(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	agent := &Server{config: Config{ID: "agent", ControllerURL: endpoint.URL, Token: controllerTestToken}, client: endpoint.Client(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	original := model.TraceEvent{RunID: "run", NodeID: "peer", AgentID: "untrusted-agent", SessionID: "session", Sequence: 1, Type: "bandwidth", Timestamp: now, Bandwidth: &model.BandwidthSample{ElapsedNS: int64(5 * time.Second), ReceivedBytes: 1024, SentBytes: 2048, Final: true, Protocols: []model.BandwidthProtocol{{Protocol: "/meshsub/1.2.0", ReceivedBytes: 1024, SentBytes: 2048}}}}
 	body, _ := json.Marshal(model.EventBatch{Events: []model.TraceEvent{original}})
 	admit := func() {
@@ -105,9 +104,10 @@ func TestBandwidthTelemetrySurvivesAgentRetryAndControllerRestart(t *testing.T) 
 	if !bytes.Contains(metrics.Body.Bytes(), []byte("kpl_p2p_stream_bytes_total{")) {
 		t.Fatal("HTTP collector omitted accepted bandwidth")
 	}
-	restarted := controller.New(controller.ServerConfig{DataDir: dir}, nil)
+	restarted := authenticatedTestController(dir)
 	response := httptest.NewRecorder()
-	restarted.Handler(context.Background()).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/experiments/run/analysis", nil))
+	restartedHandler := restarted.Handler(context.Background())
+	restartedHandler.ServeHTTP(response, controllerReadRequest(t, restartedHandler, "/api/v1/experiments/run/analysis"))
 	if response.Code != http.StatusOK {
 		t.Fatalf("restart analysis: %d %s", response.Code, response.Body)
 	}

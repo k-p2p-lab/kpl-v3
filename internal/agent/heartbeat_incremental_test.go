@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/controller"
 	"github.com/k-p2p-lab/v3/internal/model"
 )
 
@@ -32,7 +31,7 @@ func TestPeriodicHeartbeatAcknowledgesAndChunksTerminalHistory(t *testing.T) {
 	// Cleanup failures must remain in every report with diagnostic data.
 	s.processes["failed"] = &process{exited: true, cleanupErr: errors.New("daemon unavailable"), node: model.Node{ID: "failed", RunID: "history", State: model.NodeFailed, Error: "daemon unavailable", Metadata: map[string]string{"diagnostic": "retained"}}}
 	s.processes["live"] = &process{node: model.Node{ID: "live", RunID: "history", State: model.NodeReady}}
-	controllerServer := controller.New(controller.ServerConfig{DataDir: t.TempDir()}, nil)
+	controllerServer := authenticatedTestController(t.TempDir())
 	handler := controllerServer.Handler(context.Background())
 	var sent []model.AgentHeartbeat
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +50,7 @@ func TestPeriodicHeartbeatAcknowledgesAndChunksTerminalHistory(t *testing.T) {
 		handler.ServeHTTP(w, r)
 	}))
 	defer endpoint.Close()
+	s.config.Token = controllerTestToken
 	s.client, s.config.ControllerURL = endpoint.Client(), endpoint.URL
 	if err := s.register(context.Background()); err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestPeriodicHeartbeatAcknowledgesAndChunksTerminalHistory(t *testing.T) {
 	if count != 1502 {
 		t.Fatalf("first synchronization omitted nodes: %d", count)
 	}
-	response, err := endpoint.Client().Get(endpoint.URL + "/api/v1/nodes")
+	response, err := endpoint.Client().Do(controllerReadRequest(t, handler, endpoint.URL+"/api/v1/nodes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestPeriodicHeartbeatAcknowledgesAndChunksTerminalHistory(t *testing.T) {
 		t.Fatalf("acknowledgment allowed a terminal node ID to be reused: %v", err)
 	}
 	// The same Agent instance re-registers against a new Controller process.
-	controllerServer = controller.New(controller.ServerConfig{DataDir: t.TempDir()}, nil)
+	controllerServer = authenticatedTestController(t.TempDir())
 	handler = controllerServer.Handler(context.Background())
 	sent = nil
 	if err := s.register(context.Background()); err != nil {

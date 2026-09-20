@@ -31,9 +31,10 @@ run init KPL_IMAGE=registry.example:5000/team/kpl:v3 KPL_AGENT_CAPACITY=40 KPL_M
 for line in KPL_IMAGE=registry.example:5000/team/kpl:v3 KPL_CONTROL_NODE_ID=manager1 KPL_AGENT_CAPACITY=40 KPL_AGENT_METRICS_PORT=9091 KPL_MIN_AGENTS=2 KPL_PEER_SUBNET=10.11.0.0/24; do
     grep -Fxq "$line" "$config_path"
 done
-grep -Eq '^KPL_API_TOKEN=[a-f0-9]{64}$' "$config_path"
+grep -Fxq 'KPL_USER=admin' "$config_path"
+grep -Eq '^KPL_PASSWORD=[a-f0-9]{64}$' "$config_path"
 grep -Eq '^GRAFANA_ADMIN_PASSWORD=[a-f0-9]{64}$' "$config_path"
-token=$(sed -n 's/^KPL_API_TOKEN=//p' "$config_path")
+token=$(sed -n 's/^KPL_PASSWORD=//p' "$config_path")
 password=$(sed -n 's/^GRAFANA_ADMIN_PASSWORD=//p' "$config_path")
 [ "$token" != "$password" ]
 if grep -Fq "$token" "$scratch/output" || grep -Fq "$password" "$scratch/output"; then exit 1; fi
@@ -45,33 +46,33 @@ cmp "$config_path" "$scratch/original"
 
 # Configuration display hides secrets; the explicitly requested credential command reveals them.
 run config
-grep -Fxq 'KPL_API_TOKEN=[redacted]' "$scratch/output"
+grep -Fxq 'KPL_PASSWORD=[redacted]' "$scratch/output"
 grep -Fxq 'GRAFANA_ADMIN_PASSWORD=[redacted]' "$scratch/output"
 if grep -Fq "$token" "$scratch/output" || grep -Fq "$password" "$scratch/output"; then exit 1; fi
 run credentials
-grep -Fxq "KPL_API_TOKEN=$token" "$scratch/output"
+grep -Fxq "KPL_PASSWORD=$token" "$scratch/output"
 grep -Fxq "GRAFANA_ADMIN_PASSWORD=$password" "$scratch/output"
 [ "$(wc -l < "$KPL_CONFIG_TEST_CALLS")" -eq "$calls" ]
 
 # Saved changes preserve unrelated file values despite conflicting exported values.
-export KPL_IMAGE=registry.example/team/kpl:environment KPL_AGENT_CAPACITY=999 KPL_API_TOKEN=environment-token
+export KPL_IMAGE=registry.example/team/kpl:environment KPL_AGENT_CAPACITY=999 KPL_PASSWORD=environment-token
 run configure KPL_IMAGE=registry.example/team/kpl:updated KPL_PEER_SUBNET= KPL_AGENT_METRICS_PORT=19091
 grep -Fxq 'KPL_IMAGE=registry.example/team/kpl:updated' "$config_path"
 grep -Fxq 'KPL_PEER_SUBNET=' "$config_path"
 grep -Fxq 'KPL_AGENT_CAPACITY=40' "$config_path"
 grep -Fxq 'KPL_AGENT_METRICS_PORT=19091' "$config_path"
-grep -Fxq "KPL_API_TOKEN=$token" "$config_path"
+grep -Fxq "KPL_PASSWORD=$token" "$config_path"
 grep -Fxq "GRAFANA_ADMIN_PASSWORD=$password" "$config_path"
 [ "$(stat -c '%a' "$config_path")" = 600 ]
 run config
 grep -Fxq 'KPL_IMAGE=registry.example/team/kpl:environment' "$scratch/output"
 run credentials
-grep -Fxq 'KPL_API_TOKEN=environment-token' "$scratch/output"
-unset KPL_IMAGE KPL_AGENT_CAPACITY KPL_API_TOKEN
+grep -Fxq 'KPL_PASSWORD=environment-token' "$scratch/output"
+unset KPL_IMAGE KPL_AGENT_CAPACITY KPL_PASSWORD
 
 # A malformed edit is transactional: file contents, mode, and Docker calls stay unchanged.
 cp "$config_path" "$scratch/original"
-for setting in UNKNOWN=value KPL_IMAGE=registry.example/kpl KPL_IMAGE=https://registry.example/kpl:v3 KPL_AGENT_CAPACITY=0 KPL_AGENT_METRICS_PORT=0 KPL_AGENT_METRICS_PORT=09091 KPL_AGENT_METRICS_PORT=65536 KPL_IMAGE_BUILD_TIMEOUT=08 KPL_IMAGE_PUSH_TIMEOUT=-1 KPL_HTTP_PORT=65536 KPL_STACK_NAME=Bad KPL_CONTROL_NODE_ID=bad/id KPL_API_TOKEN=; do
+for setting in UNKNOWN=value KPL_IMAGE=registry.example/kpl KPL_IMAGE=https://registry.example/kpl:v3 KPL_AGENT_CAPACITY=0 KPL_AGENT_METRICS_PORT=0 KPL_AGENT_METRICS_PORT=09091 KPL_AGENT_METRICS_PORT=65536 KPL_IMAGE_BUILD_TIMEOUT=08 KPL_IMAGE_PUSH_TIMEOUT=-1 KPL_HTTP_PORT=65536 KPL_STACK_NAME=Bad KPL_CONTROL_NODE_ID=bad/id KPL_PASSWORD=; do
     reject configure KPL_AGENT_CAPACITY=50 "$setting"
     cmp "$config_path" "$scratch/original"
 done
@@ -84,9 +85,9 @@ reject configure KPL_AGENT_METRICS_PORT=18080 KPL_HTTP_PORT=18080
 grep -q 'KPL_AGENT_METRICS_PORT conflicts with KPL_HTTP_PORT' "$scratch/output"
 cmp "$config_path" "$scratch/original"
 reject configure KPL_HTTP_PORT=8000 KPL_HTTP_PORT=8001
-reject configure 'KPL_API_TOKEN GRAFANA_ADMIN_USER=must-not-be-exported'
+reject configure 'KPL_PASSWORD GRAFANA_ADMIN_USER=must-not-be-exported'
 if grep -q 'must-not-be-exported' "$scratch/output"; then exit 1; fi
-reject configure 'KPL_API_TOKEN=line1
+reject configure 'KPL_PASSWORD=line1
 line2'
 reject configure
 reject config --all
@@ -113,9 +114,9 @@ grep -Fxq 'KPL_PEER_SUBNET=10.11.0.0/16' "$config_path"
 
 # Literal shell syntax and enclosing quotes survive write/load without evaluation.
 literal='$(touch "$KPL_CONFIG_TEST_MARKER")'
-run configure "KPL_API_TOKEN=$literal" "GRAFANA_ADMIN_PASSWORD='quoted password'"
+run configure "KPL_PASSWORD=$literal" "GRAFANA_ADMIN_PASSWORD='quoted password'"
 run credentials
-grep -Fxq "KPL_API_TOKEN=$literal" "$scratch/output"
+grep -Fxq "KPL_PASSWORD=$literal" "$scratch/output"
 grep -Fxq "GRAFANA_ADMIN_PASSWORD='quoted password'" "$scratch/output"
 [ ! -e "$KPL_CONFIG_TEST_MARKER" ]
 run config
@@ -137,12 +138,12 @@ reject init KPL_IMAGE=missing-tag
 [ "$(wc -l < "$KPL_CONFIG_TEST_CALLS")" -eq "$calls" ]
 
 # Inherited trailing newlines must be rejected rather than silently truncated.
-export KPL_API_TOKEN='trailing-newline
+export KPL_PASSWORD='trailing-newline
 '
 reject init
 [ ! -e "$config_path" ]
 [ "$(wc -l < "$KPL_CONFIG_TEST_CALLS")" -eq "$calls" ]
-unset KPL_API_TOKEN
+unset KPL_PASSWORD
 
 # Initialization rejects every Agent metrics port collision before consulting
 # Docker or creating a configuration file.
@@ -154,6 +155,25 @@ for conflicting_port in 8080 9090 3000 2377 7946; do
     [ ! -e "$config_path" ]
     [ "$(wc -l < "$KPL_CONFIG_TEST_CALLS")" -eq "$calls_before" ]
 done
+
+
+# Old token files migrate transactionally without reusing their secret.
+config_path="$scratch/legacy.env"
+printf '%s\n' 'KPL_API_TOKEN=retired-secret' 'KPL_IMAGE=registry.example/kpl:legacy' 'KPL_AGENT_CAPACITY=37' 'GRAFANA_ADMIN_PASSWORD=grafana-kept' > "$config_path"
+run configure KPL_USER=operator
+if grep -q '^KPL_API_TOKEN=' "$config_path"; then exit 1; fi
+grep -Fxq 'KPL_USER=operator' "$config_path"
+grep -Eq '^KPL_PASSWORD=[a-f0-9]{64}$' "$config_path"
+grep -Fxq 'GRAFANA_ADMIN_PASSWORD=grafana-kept' "$config_path"
+grep -Fxq 'KPL_AGENT_CAPACITY=37' "$config_path"
+[ "$(stat -c '%a' "$config_path")" = 600 ]
+migrated_password=$(sed -n 's/^KPL_PASSWORD=//p' "$config_path")
+if grep -Fq "$migrated_password" "$scratch/output" || grep -Fq retired-secret "$scratch/output"; then exit 1; fi
+run configure KPL_AGENT_CAPACITY=38
+grep -Fxq "KPL_PASSWORD=$migrated_password" "$config_path"
+reject configure KPL_API_TOKEN=retired-secret
+run config
+grep -Fxq 'KPL_PASSWORD=[redacted]' "$scratch/output"
 
 # Explicit initialization settings can come from the environment as before runtime commands.
 config_path="$scratch/environment.env"

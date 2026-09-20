@@ -14,6 +14,9 @@ import (
 func TestFetchBootstrapSendsRunNamespace(t *testing.T) {
 	const runID = "run with/+reserved?characters"
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer internal-test-key" {
+			t.Error("bootstrap request omitted internal authentication")
+		}
 		if r.URL.Path != "/api/v1/bootstrap" {
 			t.Errorf("bootstrap path = %q", r.URL.Path)
 		}
@@ -28,6 +31,7 @@ func TestFetchBootstrapSendsRunNamespace(t *testing.T) {
 	t.Cleanup(registry.Close)
 
 	server := &Server{config: model.PeerProcessConfig{
+		Token:         "internal-test-key",
 		Node:          model.Node{RunID: runID},
 		ControllerURL: registry.URL,
 	}}

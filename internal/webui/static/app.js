@@ -9,7 +9,7 @@ const state = {
   scenarioDeletingId: null, pendingScenarioDeleteId: null, scenarioLoadVersion: 0, scenarioSubmitting: false, scenarioEditorVersion: 0,
   agentNumbers: loadAgentNumbers(),
   pendingStops: new Set(), deletedResultIDs: new Set(),
-  pendingDelete: null, deletingResultId: null, apiToken: null,
+  pendingDelete: null, deletingResultId: null, loginRedirecting: false,
   detailPanelObserver: null,
   topology: {
     layout: {},
@@ -290,22 +290,32 @@ function relativeTime(value) {
   return new Date(value).toLocaleString("en-US", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function token() {
-  if (state.apiToken !== null) return state.apiToken;
-  try { return localStorage.getItem("kpl-api-token") || ""; }
-  catch { return ""; }
+function redirectToLogin() {
+  if (state.loginRedirecting) return;
+  state.loginRedirecting = true;
+  state.stream?.close();
+  clearTimeout(state.reconnectTimer);
+  globalThis.location.replace("/login");
 }
 
-function saveToken(value) {
-  state.apiToken = value.trim();
-  try { localStorage.setItem("kpl-api-token", state.apiToken); }
-  catch { /* Keep credentials for this page when browser storage is unavailable. */ }
+async function logout() {
+  const button = $("#logout");
+  button.disabled = true;
+  try {
+    await api("/api/v1/auth/logout", { method: "POST" });
+    redirectToLogin();
+  } catch (error) {
+    if (error.status !== 401) showToast(error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  if (token()) headers.set("Authorization", `Bearer ${token()}`);
-  const response = await fetch(path, { ...options, headers });
+  if (!["GET", "HEAD"].includes((options.method || "GET").toUpperCase())) headers.set("X-KPL-Request", "dashboard");
+  const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
+  if (response.status === 401) redirectToLogin();
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
     const failure = new Error(error.error || response.statusText);
@@ -368,12 +378,14 @@ function connectStream() {
     scheduleSnapshotRender(JSON.parse(event.data));
     setConnection("live", "Live");
   });
-  stream.onerror = () => {
+  stream.onerror = async () => {
     if (state.stream !== stream) return;
     setConnection("offline", "Reconnecting");
     stream.close();
     clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = setTimeout(connectStream, 2000);
+    try { await api("/api/v1/auth/session"); }
+    catch (error) { if (error.status === 401) return; }
+    if (state.stream === stream && !state.loginRedirecting) state.reconnectTimer = setTimeout(connectStream, 2000);
   };
 }
 
@@ -463,6 +475,63 @@ function render(snapshot) {
   renderTopology(nodes, edges);
 }
 
+function formatEstimateRemaining(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "Estimating…";
+  if (seconds < 60) return "Less than 1 min remaining";
+  const minutes = Math.ceil(seconds / 60);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor(minutes % 1440 / 60);
+  const rest = minutes % 60;
+  return `About ${[days ? `${days}d` : "", hours ? `${hours}h` : "", rest ? `${rest}m` : ""].filter(Boolean).join(" ")} remaining`;
+}
+
+function estimateFinishMarkup(value) {
+  const formatted = formatResultTime(value);
+  return formatted === "—" ? "Estimating…" : `<time datetime="${escapeHTML(value)}">${escapeHTML(formatted)}</time>`;
+}
+
+function estimateBasisLabel(timing) {
+  return timing?.basis === "observed-runs"
+    ? `Based on ${formatNumber(timing.observedRuns)} completed ${timing.observedRuns === 1 ? "run" : "runs"}`
+    : "Scenario estimate";
+}
+
+function runTimingMarkup(run, stopping) {
+  if (!isPendingRun(run)) return "";
+  const timing = run.timing;
+  const remaining = stopping ? "Stopping…" : timing?.overdue ? "Taking longer than estimated" : formatEstimateRemaining(timing?.remainingSeconds);
+  return `<div class="run-timing${timing?.overdue ? " overdue" : ""}" title="Estimates update as phases finish. Readiness timeouts are initial allowances; node startup, available capacity and cleanup can change the finish time.">
+    <div><span>Est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.estimatedFinishAt)}</strong></div>
+    <small>${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small>
+  </div>`;
+}
+
+function renderBatchEstimates(runs) {
+  const groups = new Map();
+  for (const run of runs) {
+    if (!run.batchId || !(run.repetitions > 1)) continue;
+    if (!groups.has(run.batchId)) groups.set(run.batchId, []);
+    groups.get(run.batchId).push(run);
+  }
+  const summaries = [];
+  for (const [id, members] of groups) {
+    const pending = members.filter(isPendingRun);
+    if (!pending.length) continue;
+    const run = pending.find(member => member.state === "running") || pending[0];
+    const timing = pending.find(member => member.timing?.batchEstimatedFinishAt)?.timing;
+    const stopping = state.pendingStops.has(id);
+    const completed = members.filter(member => member.state === "completed").length;
+    const remaining = stopping ? "Stopping…" : timing?.batchOverdue ? "Delayed run · estimate may extend" : formatEstimateRemaining(timing?.batchRemainingSeconds);
+    summaries.push(`<article class="run-batch-estimate${timing?.batchOverdue ? " overdue" : ""}" data-batch-estimate="${escapeHTML(id)}">
+      <div class="run-batch-estimate-heading"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span>${formatNumber(completed)} / ${formatNumber(run.repetitions)} completed</span></div>
+      <div class="run-timing"><div><span>Group est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.batchEstimatedFinishAt)}</strong></div>
+      <small>${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small></div>
+    </article>`);
+  }
+  setHTML($("#runBatchEstimates"), summaries.join(""));
+  $("#runBatchEstimates").hidden = summaries.length === 0;
+}
+
 function renderRuns(runs) {
   runs = runs.filter((run) => !state.deletedResultIDs?.has(run.id));
   const runStates = JSON.stringify(runs.map((run) => [run.id, run.state]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
@@ -472,6 +541,7 @@ function renderRuns(runs) {
   }
   state.runStates = runStates;
   setText($("#runCount"), runs.length);
+  renderBatchEstimates(runs);
   if (!runs.length) {
     setHTML($("#runList"), '<div class="empty-copy">No experiments yet.</div>');
     return;
@@ -486,6 +556,7 @@ function renderRuns(runs) {
       <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? "Waiting to start" : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
       ${run.repetitions > 1 ? `<div class="run-meta"><span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span></div>` : ""}
       <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
+      ${runTimingMarkup(run, stopping)}
       <div class="progress-track" aria-label="${progress}% complete"><i style="width:${Math.min(100, progress)}%"></i></div>
       ${run.error ? `<div class="run-meta"><span>${escapeHTML(run.error)}</span></div>` : ""}
       <div class="run-actions">${resultDownloadLink(run)}${sourceSize}</div>
@@ -646,7 +717,6 @@ function renderSavedScenarios() {
   $("#saveScenarioCopy").disabled = busy;
   $("#scenarioName").disabled = busy;
   $("#scenarioText").disabled = busy;
-  $("#apiToken").disabled = busy;
   $("#runRepetitions").disabled = busy;
   $("#runScenario").disabled = busy;
   $("#runScenario").textContent = state.scenarioSubmitting ? "Submitting…" : "Run";
@@ -682,7 +752,6 @@ function renderSavedScenarios() {
 
 async function refreshSavedScenarios() {
   if (scenarioOperationBusy()) return;
-  saveToken($("#apiToken").value);
   state.scenariosLoading = true;
   state.scenariosError = "";
   state.scenarioActionError = "";
@@ -709,7 +778,6 @@ async function refreshSavedScenarios() {
 
 async function loadSavedScenario(id) {
   if (scenarioOperationBusy() || !(state.savedScenarios || []).some((item) => item.id === id)) return;
-  saveToken($("#apiToken").value);
   const version = ++state.scenarioLoadVersion;
   state.scenarioLoadingId = id;
   state.pendingScenarioDeleteId = null;
@@ -773,7 +841,6 @@ async function saveEditedScenario(asNew = false) {
     $("#scenarioText").focus();
     return;
   }
-  saveToken($("#apiToken").value);
   const updateID = !asNew && state.selectedScenarioId;
   state.scenarioSaving = true;
   state.pendingScenarioDeleteId = null;
@@ -824,7 +891,6 @@ async function confirmScenarioDeletion(id) {
   const index = state.savedScenarios.indexOf(item);
   const focusAfterDelete = state.savedScenarios[index + 1]?.id || state.savedScenarios[index - 1]?.id;
   let deleted = false;
-  saveToken($("#apiToken").value);
   state.scenarioDeletingId = id;
   state.scenarioActionError = "";
   renderSavedScenarios();
@@ -1032,7 +1098,6 @@ function requestResultDeletion(id, isBatch = false) {
   $("#deleteResultHelp").textContent = isBatch
     ? `Delete all ${run.runs.length} saved runs in this group, including their scenarios, metadata, logs, individual analyses, and the group mean analysis. This cannot be undone. Previously collected Prometheus and Grafana time series remain.`
     : "Delete this run's saved scenario, metadata, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.";
-  $("#deleteApiToken").value = token();
   $("#deleteResultError").textContent = "";
   $("#confirmDeleteResult").disabled = false;
   $("#confirmDeleteResult").textContent = isBatch ? "Delete group" : "Delete result";
@@ -1050,8 +1115,6 @@ async function confirmResultDeletion() {
     return;
   }
   state.deletingResultId = run.id;
-  saveToken($("#deleteApiToken").value);
-  $("#apiToken").value = token();
   $("#deleteResultError").textContent = "";
   $("#confirmDeleteResult").disabled = true;
   $("#confirmDeleteResult").textContent = "Deleting…";
@@ -1531,7 +1594,6 @@ async function submitScenarioRun() {
     $("#runRepetitions").focus();
     return;
   }
-  saveToken($("#apiToken").value);
   const editorVersion = state.scenarioEditorVersion;
   state.scenarioSubmitting = true;
   state.pendingScenarioDeleteId = null;
@@ -1579,7 +1641,11 @@ function showToast(message) {
 }
 
 $("#scenarioText").value = defaultScenario;
-$("#apiToken").value = token();
+try { localStorage.removeItem("kpl-api-token"); } catch { /* Legacy credential cleanup. */ }
+$("#logout").addEventListener("click", logout);
+window.addEventListener("pageshow", event => {
+  if (event.persisted) void api("/api/v1/auth/session").catch(() => {});
+});
 $("#refreshResults").addEventListener("click", refreshSavedResults);
 $("#openScenario").addEventListener("click", openScenarioEditor);
 $("#refreshScenarios").addEventListener("click", refreshSavedScenarios);
@@ -1681,7 +1747,7 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
-globalThis.KPLResultImages?.init({ api, saveToken, onJob: job => {
+globalThis.KPLResultImages?.init({ api, onJob: job => {
   const run = (state.savedResults || []).find(run => run.id === job.runId);
   if (job.batchId) {
     for (const member of state.savedResults || []) if (member.batchId === job.batchId) member.batchAnalysis = job;

@@ -32,7 +32,7 @@ func TestDashboardRESTSnapshotExposesAgentsNetworkAndJobs(t *testing.T) {
 	}
 	server.state.mu.Unlock()
 
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
 	if recorder.Code != http.StatusOK {
@@ -66,7 +66,7 @@ func TestUIConfigExposesMonitoringPorts(t *testing.T) {
 		PrometheusPort: 19090,
 		GrafanaPort:    13000,
 	}, nil)
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil))
@@ -97,7 +97,7 @@ func TestUIConfigExposesMonitoringPorts(t *testing.T) {
 func TestUIConfigUsesDefaultMonitoringPorts(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	recorder := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil))
+	server.apiTestHandler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/ui-config", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("ui config status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -137,7 +137,7 @@ func TestPrometheusAgentTargetsExposeOnlyValidOnlineAgentMetricsEndpoints(t *tes
 	}
 	server.state.mu.Unlock()
 
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/prometheus/agent-targets", nil))
 	if recorder.Code != http.StatusOK {
@@ -198,7 +198,7 @@ func TestBootstrapRegistryRequiresRunAndReturnsOnlyReadyBootNodesFromThatRun(t *
 	}
 	server.state.mu.Unlock()
 
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	for _, target := range []string{"/api/v1/bootstrap", "/api/v1/bootstrap?runId=%20%20"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
@@ -259,7 +259,7 @@ func TestTopicDiscoveryRegistryFiltersAndPrioritizesCandidates(t *testing.T) {
 	addNode("no-address", "run-a", "online", model.NodeReady, "peer-no-address", "", "full", "subscribe", `["topic-a"]`, "true")
 	server.state.mu.Unlock()
 
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	for _, target := range []string{
 		"/api/v1/discovery",
 		"/api/v1/discovery?runId=run-a&topic=topic-a",

@@ -18,7 +18,7 @@ API는 `/api/v1/experiments`에 `application/json`으로 다음 본문을 POST�
 {"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
 ```
 
-응답은 첫 번째 실험이며 `/api/v1/snapshot`과 SSE에는 모든 회차가 나타납니다. 기존 YAML 원문 요청은 1회 실행을 유지합니다. 변경 요청에는 설정된 bearer token을 사용합니다.
+응답은 첫 번째 실험이며 `/api/v1/snapshot`과 SSE에는 모든 회차가 나타납니다. 기존 YAML 원문 요청은 1회 실행을 유지합니다. 조회·변경은 로그인 세션을 사용하며 변경 요청에는 `X-KPL-Request: dashboard`도 포함합니다.
 
 ## Churn 도달률: session-window-v1
 

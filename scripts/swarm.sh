@@ -478,7 +478,7 @@ case "$command_name" in
     deploy)
         : "${KPL_IMAGE:?Set KPL_IMAGE in .env.swarm or environment}"
         : "${KPL_CONTROL_NODE_ID:?Set KPL_CONTROL_NODE_ID}"
-        : "${KPL_API_TOKEN:?Set KPL_API_TOKEN}"
+        : "${KPL_USER:?Set KPL_USER}" "${KPL_PASSWORD:?Set KPL_PASSWORD}"
         : "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}"
         sh "$root/scripts/check-swarm.sh" --config-only
         # Published endpoints must also be usable by browsers outside the overlay.

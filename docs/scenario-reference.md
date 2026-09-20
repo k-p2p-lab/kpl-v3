@@ -147,12 +147,12 @@ Peers with network conditions require Linux `NET_ADMIN` and host-kernel `sch_net
 
 [`examples/network-conditions.yaml`](../examples/network-conditions.yaml) creates two bootstrap nodes and four constrained workers, waits for initialization, publishes sample messages, and stops all nodes. Run it from the dashboard or submit it with:
 
-Replace `control-node:8080` with the Controller address printed by `sh scripts/swarm.sh access` and export the token printed by `sh scripts/swarm.sh credentials` as `KPL_API_TOKEN`.
+Replace `control-node:8080` with the Controller address printed by `access`. First follow [API authentication](api.md#authentication) to create `KPL_COOKIE_JAR`.
 
 ```bash
 curl -X POST http://control-node:8080/api/v1/experiments \
   -H 'Content-Type: application/yaml' \
-  -H "Authorization: Bearer ${KPL_API_TOKEN:?Set KPL_API_TOKEN}" \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
   --data-binary @examples/network-conditions.yaml
 ```
 

@@ -648,7 +648,6 @@
     document: doc = root.document,
     renderImage = (svg, signal) => toPNG(svg, doc, signal),
     onJob = () => {},
-    saveToken = () => {},
     pollInterval = 2000,
   }) {
     const $ = (id) => doc.querySelector(`#${id}`);
@@ -888,8 +887,6 @@
             ].includes(job.state)
           )
             throw new Error("Unexpected analysis job response.");
-          $("resultImagesAuth").hidden = true;
-          $("resultImagesToken").value = "";
           onJob(job);
           $("resultImagesDate").textContent =
             `Requested ${timeLabel(job.createdAt)} · Snapshot ${timeLabel(job.snapshotAt)}`;
@@ -946,7 +943,6 @@
               : error.message,
             true,
           );
-          if (error.status === 401) $("resultImagesAuth").hidden = false;
         }
       } finally {
         if (revision === requestRevision) {
@@ -958,8 +954,6 @@
     $("closeResultImages").addEventListener("click", () => dialog.close());
     dialog.addEventListener("close", cancel);
     $("retryResultImages").addEventListener("click", () => {
-      if (!$("resultImagesAuth").hidden)
-        saveToken($("resultImagesToken").value);
       void open(currentID, { retry: true, isBatch: currentBatch });
     });
     $("refreshResultImages").addEventListener("click", () => {

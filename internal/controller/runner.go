@@ -20,11 +20,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/k-p2p-lab/v3/internal/auth"
 	"github.com/k-p2p-lab/v3/internal/model"
 	"github.com/k-p2p-lab/v3/internal/scenario"
 )
 
 type ServerConfig struct {
+	User           string
+	Password       string
 	Listen         string
 	DataDir        string
 	Token          string
@@ -34,6 +37,7 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	auth                   *browserAuth
 	config                 ServerConfig
 	state                  *state
 	client                 *http.Client
@@ -65,6 +69,9 @@ type Server struct {
 }
 
 func New(config ServerConfig, logger *slog.Logger) *Server {
+	if config.User != "" && config.Password != "" {
+		config.Token = auth.InternalToken(config.User, config.Password)
+	}
 	if config.Listen == "" {
 		config.Listen = ":8080"
 	}
@@ -81,6 +88,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	return &Server{
+		auth:                   newBrowserAuth(),
 		config:                 config,
 		state:                  newState(config.DataDir),
 		client:                 &http.Client{Timeout: 10 * time.Second},
@@ -151,6 +159,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 			runErr = err
 			break
 		}
+		s.state.recordPhaseTiming(experiment.ID, index, false, time.Now().UTC())
 		s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 			current.Phase = index + 1
 			current.PhaseName = phase.Name
@@ -158,6 +167,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		phaseSeed := rng.Int63()
 		phaseGeneration := generation
 		execute := func(executionCtx context.Context) error {
+			defer func() { s.state.recordPhaseTiming(experiment.ID, index, true, time.Now().UTC()) }()
 			phaseRNG := rand.New(rand.NewSource(phaseSeed))
 			for repetition := 0; repetition < phase.Repeat; repetition++ {
 				if err := executionCtx.Err(); err != nil {

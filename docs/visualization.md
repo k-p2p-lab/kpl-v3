@@ -6,7 +6,7 @@ Choose **Saved results → Images** to submit background analysis. The server re
 
 **Graph protocol** selects **GossipSub** (the default), **Kad**, or **Transport** for the graph metric images, keeping one title per metric. Each protocol has a separate image; switching within the same dialog preserves expanded titles. Common latency, propagation and bandwidth charts remain unchanged. **Download all PNG + CSV (ZIP)** includes all three protocols' separate PNGs, CSVs and chart definitions, regardless of the selected protocol or collapsed titles.
 
-Accepted server jobs continue after closing the window/browser. At most 32 queued/running jobs are admitted, with one computation at a time. Completed artifacts survive Controller restart; interrupted jobs require Retry. Reopening a completed analysis reuses it. **Analyze latest snapshot** captures later logs. An outdated analysis version is regenerated on opening. Regeneration cannot recreate missing source evidence. Configured API tokens are required to start/retry/refresh jobs. PNG conversion and cross-run calculations happen in the browser while the view is open.
+Accepted server jobs continue after closing the window/browser. At most 32 queued/running jobs are admitted, with one computation at a time. Completed artifacts survive Controller restart; interrupted jobs require Retry. Reopening a completed analysis reuses it. **Analyze latest snapshot** captures later logs. An outdated analysis version is regenerated on opening. Regeneration cannot recreate missing source evidence. Starting, retrying and refreshing jobs reuse the dashboard login session. PNG conversion and cross-run calculations happen in the browser while the view is open.
 
 ## Available images
 

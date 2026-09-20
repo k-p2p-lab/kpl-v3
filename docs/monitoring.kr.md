@@ -17,7 +17,7 @@ Grafana는 최초 실행 시 SQLite 데이터베이스를 초기화하므로 디
 | Prometheus 쿼리/수집 상태 | http://control-node:9090 |
 | Controller 지표 원문 | http://control-node:8080/metrics |
 
-Swarm stack은 Grafana 익명 접속을 비활성화하고 `GRAFANA_ADMIN_PASSWORD`를 필수로 요구합니다. 설정 helper가 manager 설정에 자격 증명을 저장하며 `sh scripts/swarm.sh credentials`로 설정된 로그인 정보를 확인할 수 있습니다. 이미 생성된 Grafana 데이터 볼륨의 비밀번호는 환경 변수만 바꾸어도 갱신되지 않습니다.
+Swarm stack은 Grafana 익명 접속을 비활성화하고 `GRAFANA_ADMIN_PASSWORD`를 필수로 요구합니다. 설정 helper가 manager 설정에 자격 증명을 저장하며 `sh scripts/swarm.sh credentials`로 설정된 로그인 정보를 확인할 수 있습니다. 이 stack은 시작할 때 원래 Grafana 관리자 비밀번호를 설정값으로 동기화하며 기존 사용자명과 데이터는 유지합니다.
 
 Swarm은 Prometheus/Grafana 포트를 control 노드에 게시합니다. 각 Agent의 전용 metrics listener도 해당 노드의 `KPL_AGENT_METRICS_PORT`(기본 `9091`)로 게시합니다. `scripts/swarm.sh configure`로 `PROMETHEUS_PORT`, `GRAFANA_PORT` 또는 Agent metrics 포트를 변경한 뒤 다시 배포해 적용하십시오.
 
@@ -83,17 +83,17 @@ Controller 시작 후 첫 HEAD나 원본 파일·상태 변경 뒤에는 캡처�
 
 재시작 후 저장 상태가 `running` 또는 `queued`인 실험은 `interrupted`로 표시하며 ZIP 원본 메타데이터는 변경하지 않습니다. 이는 표시 상태이며 실제 Peer 종료를 증명하지 않습니다. 실시간 상태·카운터를 복원하거나 실행을 자동 재개하지 않지만 ZIP 지표는 보존된 로그에서 재계산합니다. 메타데이터를 읽을 수 없는 항목은 `unreadable`로 표시하므로 로그·저장 파일을 확인하십시오.
 
-**Saved results → Delete**는 확인 후 선택한 run의 시나리오·메타데이터·이벤트와 실시간 지표 인덱스를 영구 삭제합니다. 실행·대기 중 실험, 활성 배치 구성원, 다운로드 중 결과는 보호합니다. API는 설정된 bearer token을 사용하는 `DELETE /api/v1/results/{id}`입니다. Peer를 종료하지 않으며 기존 Prometheus/Grafana 시계열은 유지합니다. 삭제 표식은 지연 telemetry의 결과 재생성을 막으므로 백업·이전 때 Controller 데이터와 함께 보존하십시오. ZIP 원본 복사는 스트리밍하며 지표 재구성에는 고유 이벤트 ID·메시지/수신 쌍에 비례한 메모리가 필요합니다. 상태 코드와 다운로드 header는 [REST API 가이드](api.kr.md)를 참고하십시오.
+**Saved results → Delete**는 확인 후 선택한 run의 시나리오·메타데이터·이벤트와 실시간 지표 인덱스를 영구 삭제합니다. 실행·대기 중 실험, 활성 배치 구성원, 다운로드 중 결과는 보호합니다. API는 로그인 세션을 사용하는 `DELETE /api/v1/results/{id}`입니다. Peer를 종료하지 않으며 기존 Prometheus/Grafana 시계열은 유지합니다. 삭제 표식은 지연 telemetry의 결과 재생성을 막으므로 백업·이전 때 Controller 데이터와 함께 보존하십시오. ZIP 원본 복사는 스트리밍하며 지표 재구성에는 고유 이벤트 ID·메시지/수신 쌍에 비례한 메모리가 필요합니다. 상태 코드와 다운로드 header는 [REST API 가이드](api.kr.md)를 참고하십시오.
 
 직접 요청한 ZIP 크기 조회(`HEAD`)와 목록 조회는 삭제를 막지 않습니다. 실제 ZIP 다운로드(`GET`)는 요청이 끝날 때까지 결과를 보호합니다. 삭제 요청은 브라우저에서 30초 제한 시간을 적용하며, 시간 초과 후에도 Controller에서 완료될 수 있으므로 목록을 갱신하거나 같은 결과의 삭제를 재시도할 수 있습니다. 후속 목록 갱신이 느려도 삭제창 버튼은 다시 사용할 수 있습니다.
 
 시리즈 헤더의 **Delete group**은 저장된 run 수를 확인한 뒤 `DELETE /api/v1/result-batches/{batchId}`로 배치 전체를 삭제합니다. 개별 원본 삭제와 달리 별도 `batch-analyses/{batchId}` 평균 파일까지 제거하며 진행 중인 분석도 취소합니다. 삭제 전 모든 구성원의 활성 상태·다운로드를 검사합니다. 저장 장치 오류로 일부만 삭제됐을 수 있으므로 오류를 해결한 뒤 목록을 갱신하고 재시도하십시오. 기존 Prometheus/Grafana 시계열은 유지합니다.
 
-저장 결과 목록과 다운로드에도 기존 공개 GET 정책이 적용됩니다. API에서는 다음과 같이 사용할 수 있습니다.
+저장 결과 목록과 다운로드에도 로그인이 필요합니다. [API 로그인](api.kr.md#인증) 후 쿠키 파일을 재사용하십시오.
 
 ```bash
-curl --fail http://control-node:8080/api/v1/results
-curl --fail --output run-results.zip \
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" http://control-node:8080/api/v1/results
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" --output run-results.zip \
   http://control-node:8080/api/v1/experiments/RUN_ID/download
 ```
 

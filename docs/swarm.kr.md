@@ -43,7 +43,7 @@ sh scripts/swarm.sh login
 sh scripts/swarm.sh publish
 ```
 
-이미지 참조를 실제 registry와 repository로 바꾸십시오. `init`은 전달한 설정을 검증하고 현재 manager를 기본 control 노드로 선택하며, 기존 파일을 덮어쓰지 않고 비공개 `.env.swarm`을 만듭니다. API와 Grafana 자격 증명을 각각 생성합니다. 이미 설정이 있으면 `configure KEY=VALUE...`로 변경합니다. `config`는 비밀 값을 가린 유효 설정을 표시합니다.
+이미지 참조를 실제 registry와 repository로 바꾸십시오. `init`은 전달한 설정을 검증하고 현재 manager를 기본 control 노드로 선택하며, 기존 파일을 덮어쓰지 않고 비공개 `.env.swarm`을 만듭니다. 대시보드와 Grafana 자격 증명을 각각 생성합니다. 이미 설정이 있으면 `configure KEY=VALUE...`로 변경합니다. `config`는 비밀 값을 가린 유효 설정을 표시합니다.
 
 `login`은 `KPL_IMAGE`에서 registry를 추론해 helper와 같은 계정으로 대화형 로그인을 실행합니다. `publish`는 이 저장소를 빌드하고 설정한 이미지 태그로 push합니다. 해당 이미지가 이미 게시되어 있다면 `publish`는 생략합니다. 기본 빌드는 native 플랫폼을 대상으로 하며, 아키텍처가 혼합되어 있다면 해당 빌드가 가능한 기존 Buildx builder에서 manager를 포함한 모든 대상 아키텍처를 게시하십시오.
 
@@ -68,7 +68,7 @@ sh scripts/swarm.sh credentials
 
 `access`가 출력한 Controller URL을 여십시오. Controller, Prometheus, Grafana 포트는 명령을 실행하는 manager와 다를 수 있는 지정된 **control 노드**에 게시됩니다. 같은 명령은 선택된 각 Agent 노드의 host-mode metrics URL도 표시합니다. 브라우저에서 Agent 링크를 열려면 운영자 기기의 신뢰 관리망에서 각 Agent 노드로 직접 접근할 수 있어야 합니다. control 노드에 접근할 수 있는 기기에서 대시보드의 **Online Agents가 2 이상**이 될 때까지 기다리십시오. **Agent status**에서는 `online` 행만 확인합니다. **Peers**는 점유량 / 용량이며, 용량에서 점유량을 뺀 여유 슬롯의 합계가 **6 이상**이어야 합니다. 요약의 **Available slots**에는 offline Agent도 포함될 수 있으므로 이 조건은 표로 확인하십시오. Swarm task가 실행 중이라는 사실만으로 등록까지 확인되지는 않습니다. 시작에 문제가 있으면 `sh scripts/swarm.sh logs agent` 또는 `sh scripts/swarm.sh logs controller`를 확인하십시오.
 
-`credentials`는 설정된 API 토큰과 Grafana 로그인 정보를 명시적으로 평문 출력합니다. API 토큰은 Controller에, 별도 Grafana 계정과 비밀번호는 `access`의 Grafana URL에 사용합니다. 기존 Grafana volume은 관리자 비밀번호를 보존하므로 설정 변경만으로 그 비밀번호가 초기화되지는 않습니다.
+`credentials`는 대시보드의 `KPL_USER`·`KPL_PASSWORD`와 별도 Grafana 계정을 평문으로 표시합니다. Controller에서는 **Log in**으로 로그인하십시오. Grafana의 기존 사용자명은 유지하며 시작할 때 원래 관리자 비밀번호를 설정값으로 동기화합니다.
 
 ### 3. 분산 smoke 실험 실행
 
@@ -77,7 +77,7 @@ sh scripts/swarm.sh credentials
 sh scripts/swarm.sh scenario
 ```
 
-대시보드에서 **Run experiment**를 누르고 **YAML scenario** 전체를 출력된 YAML로 교체한 다음 API 토큰을 입력하고 **Run**을 누르십시오. 웹 폼의 기본 시나리오는 다른 smoke 실험이며 Swarm 예제를 자동으로 불러오지 않습니다.
+대시보드에서 **Run experiment**를 누르고 **YAML scenario** 전체를 출력된 YAML로 교체한 다음 **Run**을 누르십시오. 웹 폼의 기본 시나리오는 다른 smoke 실험이며 Swarm 예제를 자동으로 불러오지 않습니다.
 
 예제는 boot Peer 한 개와 worker 다섯 개를 만듭니다. worker에는 25ms 지연, 2ms jitter, 0.5% loss를 적용합니다. readiness 확인과 20초 대기 후 `payloadSize: 4096`으로 메시지 50개를 발행하고, 수집을 위해 1분 기다린 뒤 `stop-all`을 실행합니다. 용량이 같고 다른 부하가 없는 Agent들에서는 balanced 배치가 Peer를 분산합니다. 서로 다른 Agent에 Peer가 나타나고 publish/deliver 이벤트가 기록되는지 확인하십시오. readiness는 프로세스 초기화 완료 기준이며 GossipSub mesh 수렴을 보장하지 않습니다. 전달 수는 실제 조건에 따라 달라집니다.
 
@@ -195,13 +195,20 @@ Makefile은 `NODES`를 그대로 전달하므로 `make swarm-add-node NODES='--w
 
 노드가 offline이거나 task 실패·비정상 종료·task 이력 부재로 정리를 확인할 수 없으면 중단합니다. **보존된 과거 실패 task 이력도 자동 철거를 막습니다.** 이후 task가 복구되었더라도 잔존 Peer를 수동 점검해야 합니다. 한 번도 시작하지 않은 서비스도 이력이 없으면 수동 확인이 필요합니다. 이미 수행한 정지·배치 제외·label 변경은 자동 복구하지 않으므로 오류에 나온 task와 노드를 점검한 뒤 재시도하십시오. 다시 Agent를 실행하려는 경우 `add-node`가 남은 제외 조건도 해제합니다. 실험·Prometheus·Grafana의 **데이터 volume과 외부 Peer network는 보존**합니다.
 
-## API 토큰
+## 대시보드 로그인
 
-`KPL_API_TOKEN`은 실험 실행·중지, Peer 생성·삭제·발행, 등록·heartbeat·telemetry에 사용하는 공통 Bearer 토큰입니다. Swarm join token이나 Docker manager 권한, Grafana 비밀번호와는 별개입니다. Swarm 배포에서는 필수이며 Controller와 모든 Agent에 같은 값을 전달합니다. Agent가 Peer 설정에도 자동으로 넣으므로 Peer별 설정은 필요 없습니다. 사용자·역할별 권한 분리는 없습니다.
+`KPL_USER`·`KPL_PASSWORD`가 `KPL_API_TOKEN`을 대체합니다. `init`의 기본 사용자명은 `admin`이며 대시보드와 Grafana 비밀번호를 각각 생성합니다. `credentials`는 두 로그인 정보를 명시적으로 표시하고 `config`는 비밀번호를 가립니다. Controller의 **Log in** 화면에서 한 번 로그인하면 실험 실행·중지, 시나리오 저장, 결과 삭제, 분석·다운로드는 세션을 재사용합니다. **Log out**으로 종료하며 세션은 12시간 뒤 만료됩니다. Controller 재시작 후에는 다시 로그인합니다. 별도 API token 입력란은 없습니다.
 
-`sh scripts/swarm.sh credentials`로 유효 `KPL_API_TOKEN`을 확인하고 Controller 화면의 **Run experiment → API token**에 실제 배포에 적용한 값을 입력하십시오. 설정을 변경했다면 다시 배포해야 서비스가 새 토큰을 사용합니다. **Run** 버튼을 누르면 브라우저의 해당 origin `localStorage`에 저장되어 이후 실행·중지 요청에 사용됩니다. REST 요청에는 `Authorization: Bearer <token>` 헤더를 붙입니다. 토큰은 만료되거나 자동 교체되지 않습니다.
+기존 토큰 설정은 volume을 다시 만들지 않고 전환합니다.
 
-토큰을 설정해도 대시보드, 상태·이벤트·SSE·metrics 등 GET 조회는 공개입니다. Controller는 GET/HEAD, Agent와 Peer는 GET을 인증 검사에서 제외합니다. 토큰은 Swarm 서비스 환경변수와 Peer의 `0600` 설정 JSON에 저장되며, HTTP 전송 자체를 암호화하지는 않습니다.
+```sh
+sh scripts/swarm.sh configure KPL_USER=admin
+sh scripts/swarm.sh credentials
+```
+
+전환 시 폐기된 토큰 항목을 제거하고 다른 설정을 보존하며, `KPL_PASSWORD`가 없을 때만 새 비밀번호를 생성합니다. 이전 토큰을 비밀번호로 재사용하지 않습니다. 직접 지정하려면 `configure KPL_USER=... KPL_PASSWORD=...`를 사용하십시오. 배포 시 환경변수 우선순위는 유지됩니다. 실험과 잔존 Peer를 정리한 뒤 새 이미지를 publish하고 Controller·Agent를 함께 deploy하십시오. 내부 서비스 키는 로그인 설정에서 자동 생성하므로 브라우저에 입력할 필요가 없습니다.
+
+대시보드 데이터, SSE, 검증·분석·다운로드에는 모두 로그인이 필요합니다. 모니터링용 health/시각, Prometheus metrics·target discovery만 공개로 유지합니다. 내부 등록·telemetry와 Peer discovery에는 서비스 키를 사용하며 Peer 설정 JSON 권한은 `0600`입니다. Grafana는 별도 계정입니다. HTTP는 암호화되지 않으므로 신뢰 관리망 또는 HTTPS proxy를 사용하십시오. 세션 쿠키를 사용하는 curl 예제는 [API 인증](api.kr.md#인증)을 참고하십시오.
 
 ## 이전 v3 stack에서 전환
 
@@ -257,7 +264,7 @@ Prometheus는 5초마다 Controller의 HTTP service-discovery endpoint에 등록
 
 Go process 지표는 Controller·Agent 자체만 나타내며 Peer 전체의 자원 사용량이 아닙니다. 호스트 모니터링 또는 별도 container exporter로 Peer 부하를 확인하십시오. 전체 노드 상태 보고·Controller 저장/집계·중앙 HTTP 수집, Docker CLI의 생성/삭제 비용도 확장 한계입니다. 종료된 노드 기록과 실행별 Prometheus series가 유지되므로 긴 churn 실험은 메모리와 수집 지연을 함께 측정해야 합니다.
 
-이 stack은 host mode로 control 노드의 8080·9090·3000과 선택된 모든 Agent 노드의 `KPL_AGENT_METRICS_PORT`(기본 9091)를 게시합니다. Agent metrics 포트는 모든 대상 노드에서 비어 있어야 하며 같은 노드를 공유하는 별도 stack에는 서로 다른 포트를 지정해야 합니다. 또한 `KPL_HTTP_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT` 및 Swarm TCP 포트 2377·7946과 달라야 하며 config helper와 배포 사전검사가 이러한 충돌을 거부합니다. control 노드와, 직접 브라우저 접근이 필요한 경우 운영자의 신뢰 관리망에서 이 포트를 허용하십시오. metrics endpoint는 읽기 전용이지만 인증되지 않으므로 신뢰하지 않는 출발지는 차단해야 합니다. Agent control API 8090과 Peer 포트는 내부에 유지하며 게시하지 않습니다. control 노드 포트는 관리망 방화벽이나 인증 reverse proxy로 접근을 제한하십시오. `KPL_API_TOKEN`은 변경 API만 보호하고 GET 조회는 보호하지 않습니다. Grafana 익명 접속은 이 stack에서 비활성화했습니다. [Swarm host mode 게시](https://docs.docker.com/engine/swarm/services/#publish-ports)
+이 stack은 host mode로 control 노드의 8080·9090·3000과 선택된 모든 Agent 노드의 `KPL_AGENT_METRICS_PORT`(기본 9091)를 게시합니다. Agent metrics 포트는 모든 대상 노드에서 비어 있어야 하며 같은 노드를 공유하는 별도 stack에는 서로 다른 포트를 지정해야 합니다. 또한 `KPL_HTTP_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT` 및 Swarm TCP 포트 2377·7946과 달라야 하며 config helper와 배포 사전검사가 이러한 충돌을 거부합니다. control 노드와, 직접 브라우저 접근이 필요한 경우 운영자의 신뢰 관리망에서 이 포트를 허용하십시오. metrics endpoint는 읽기 전용이지만 인증되지 않으므로 신뢰하지 않는 출발지는 차단해야 합니다. Agent control API 8090과 Peer 포트는 내부에 유지하며 게시하지 않습니다. control 노드 포트는 관리망 방화벽이나 인증 reverse proxy로 접근을 제한하십시오. 대시보드 조회·변경은 로그인으로 보호하며 모니터링 endpoint는 공개로 유지합니다. Grafana 익명 접속은 이 stack에서 비활성화했습니다. [Swarm host mode 게시](https://docs.docker.com/engine/swarm/services/#publish-ports)
 
 모니터링 설정은 Swarm configs로 전달하므로 모든 서버에 저장소를 복사할 필요가 없습니다. Swarm config는 immutable이므로 설정 파일 변경 시 `stack.swarm.yaml`의 config key와 해당 참조를 함께 버전명으로 바꾸어 새 config를 배포하십시오. 데이터 volume은 같은 control Node ID에서 유지됩니다.
 

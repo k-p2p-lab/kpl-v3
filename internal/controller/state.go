@@ -28,6 +28,7 @@ type state struct {
 	agentSnapshots  map[string]time.Time
 	nodeReportTimes map[string]time.Time
 	experiments     map[string]model.Experiment
+	runTimings      map[string]*runTiming
 	events          []model.TraceEvent
 	watchers        map[chan struct{}]struct{}
 	dataDir         string
@@ -43,6 +44,7 @@ func newState(dataDir string) *state {
 		agentSnapshots:  make(map[string]time.Time),
 		nodeReportTimes: make(map[string]time.Time),
 		experiments:     make(map[string]model.Experiment),
+		runTimings:      make(map[string]*runTiming),
 		watchers:        make(map[chan struct{}]struct{}),
 		dataDir:         dataDir,
 		runMetrics:      make(map[string]*runMetricAccumulator),
@@ -412,6 +414,7 @@ func (s *state) inventoryLocked() model.Snapshot {
 	for _, experiment := range s.experiments {
 		result.Experiments = append(result.Experiments, experiment)
 	}
+	s.estimateRunFinishesLocked(result.Experiments, result.GeneratedAt)
 	result.Events = append([]model.TraceEvent(nil), s.events...)
 	sort.Slice(result.Agents, func(i, j int) bool { return result.Agents[i].ID < result.Agents[j].ID })
 	sort.Slice(result.Nodes, func(i, j int) bool { return result.Nodes[i].ID < result.Nodes[j].ID })

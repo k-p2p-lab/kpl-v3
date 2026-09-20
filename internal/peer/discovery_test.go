@@ -79,6 +79,9 @@ func TestFetchDiscoveryPeersEncodesRegistryQuery(t *testing.T) {
 	nodes[0].NodeID = "candidate"
 	nodes[0].Subscribed = true
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer internal-test-key" {
+			t.Error("discovery request omitted internal authentication")
+		}
 		if r.URL.Path != "/api/v1/discovery" || r.URL.Query().Get("runId") != "run with spaces" ||
 			r.URL.Query().Get("topic") != "topic/a b" || r.URL.Query().Get("requesterNodeId") != "requester" {
 			t.Errorf("unexpected discovery request: %s", r.URL.String())
@@ -89,6 +92,7 @@ func TestFetchDiscoveryPeersEncodesRegistryQuery(t *testing.T) {
 
 	server := &Server{config: model.PeerProcessConfig{
 		ControllerURL: registry.URL,
+		Token:         "internal-test-key",
 		Node:          model.Node{ID: "requester", RunID: "run with spaces"},
 	}}
 	got, err := server.fetchDiscoveryPeers(context.Background(), "topic/a b")

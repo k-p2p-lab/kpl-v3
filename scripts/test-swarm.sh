@@ -259,7 +259,7 @@ case "$1 ${2:-}" in
     'network create') event network-create; printf 'network1\n' ;;
     'stack config')
         printf '%s\n%s\n' "${KPL_CONTROLLER_METRICS_URL:-}" "${KPL_PROMETHEUS_EXTERNAL_URL:-}" > "$s/config-public-urls"
-        printf '%s' "${KPL_API_TOKEN:-}" > "$s/config-token"
+        printf '%s' "${KPL_PASSWORD:-}" > "$s/config-password"
         printf '%s\n' "${KPL_IMAGE:-}" >> "$s/config-images" ;;
     'stack deploy')
         printf '%s\n%s\n' "${KPL_CONTROLLER_METRICS_URL:-}" "${KPL_PROMETHEUS_EXTERNAL_URL:-}" > "$s/deploy-public-urls"
@@ -286,7 +286,7 @@ reset_case() {
     : > "$KPL_TEST_STATE/timeouts"
     export KPL_STACK_NAME=lab KPL_PEER_NETWORK=lab-peers KPL_CONTROL_NODE_ID=control1
     export KPL_IMAGE=registry.example/kpl@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-    export KPL_API_TOKEN=private-test-token GRAFANA_ADMIN_PASSWORD=private-test-password
+    export KPL_USER=admin KPL_PASSWORD=private-dashboard-password GRAFANA_ADMIN_PASSWORD=private-test-password
     export KPL_DOCKER_TIMEOUT=3 KPL_CONTROLLER_STOP_TIMEOUT=3 KPL_AGENT_STOP_TIMEOUT=3
     export KPL_TEST_REPO_ROOT=$root
     unset KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
@@ -559,19 +559,19 @@ for command in check deploy; do
 done
 
 reset_case
-unset KPL_API_TOKEN
+unset KPL_PASSWORD
 literal='$(touch "'"$scratch"'/executed")'
-printf 'KPL_API_TOKEN=%s\n' "$literal" > "$scratch/literal.env"
+printf 'KPL_PASSWORD=%s\n' "$literal" > "$scratch/literal.env"
 sh "$root/scripts/swarm.sh" --env-file "$scratch/literal.env" deploy > "$KPL_TEST_STATE/output" 2>&1
 [ ! -e "$scratch/executed" ]
-[ "$(cat "$KPL_TEST_STATE/config-token")" = "$literal" ]
+[ "$(cat "$KPL_TEST_STATE/config-password")" = "$literal" ]
 if grep -Fq "$literal" "$KPL_TEST_STATE/output"; then exit 1; fi
 # Explicit environment values must win over config values without evaluating
 # either source. This also exercises a config file with no trailing newline.
-printf 'KPL_API_TOKEN=from-file' > "$scratch/override.env"
-export KPL_API_TOKEN=from-environment
+printf 'KPL_PASSWORD=from-file' > "$scratch/override.env"
+export KPL_PASSWORD=from-environment
 sh "$root/scripts/swarm.sh" --env-file "$scratch/override.env" deploy > "$KPL_TEST_STATE/output" 2>&1
-[ "$(cat "$KPL_TEST_STATE/config-token")" = from-environment ]
+[ "$(cat "$KPL_TEST_STATE/config-password")" = from-environment ]
 
 reset_case
 if sh "$root/scripts/swarm.sh" --env-file "$scratch/missing.env" remove > "$KPL_TEST_STATE/output" 2>&1; then exit 1; fi
@@ -743,14 +743,14 @@ for port in 18080 19090 13000; do grep -Fq "http://10.20.0.7:$port" "$KPL_TEST_S
 grep -Fq 'Agent metrics (worker1): http://10.20.0.11:19091/metrics' "$KPL_TEST_STATE/output"
 grep -Fq 'Agent metrics (worker2): http://[fd00::12]:19091/metrics' "$KPL_TEST_STATE/output"
 grep -Fq 'firewall rules' "$KPL_TEST_STATE/output"
-if grep -Fq "$KPL_API_TOKEN" "$KPL_TEST_STATE/output" || grep -Fq "$GRAFANA_ADMIN_PASSWORD" "$KPL_TEST_STATE/output"; then exit 1; fi
+if grep -Fq "$KPL_PASSWORD" "$KPL_TEST_STATE/output" || grep -Fq "$GRAFANA_ADMIN_PASSWORD" "$KPL_TEST_STATE/output"; then exit 1; fi
 if grep -q '^service ls' "$KPL_TEST_STATE/calls"; then exit 1; fi
 no_mutation
 
 reset_case
 run config
-grep -q 'KPL_API_TOKEN' "$KPL_TEST_STATE/output"
-if grep -Fq "$KPL_API_TOKEN" "$KPL_TEST_STATE/output" || grep -Fq "$GRAFANA_ADMIN_PASSWORD" "$KPL_TEST_STATE/output"; then exit 1; fi
+grep -q 'KPL_PASSWORD' "$KPL_TEST_STATE/output"
+if grep -Fq "$KPL_PASSWORD" "$KPL_TEST_STATE/output" || grep -Fq "$GRAFANA_ADMIN_PASSWORD" "$KPL_TEST_STATE/output"; then exit 1; fi
 [ ! -s "$KPL_TEST_STATE/calls" ]
 no_mutation
 
@@ -859,7 +859,7 @@ publish_project=$scratch/leaky-project
 mkdir -p "$publish_project/scripts"
 cp "$root/scripts/swarm.sh" "$root/scripts/swarm-config.sh" "$root/scripts/check-swarm.sh" "$publish_project/scripts/"
 cp "$root/Dockerfile" "$root/.dockerignore" "$publish_project/"
-printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_API_TOKEN=context-secret\n' > "$publish_project/private.conf"
+printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_PASSWORD=context-secret\n' > "$publish_project/private.conf"
 export KPL_TEST_REPO_ROOT=$publish_project
 if sh "$publish_project/scripts/swarm.sh" --env-file "$publish_project/private.conf" publish > "$KPL_TEST_STATE/output" 2>&1; then exit 1; fi
 no_mutation
@@ -878,7 +878,7 @@ no_mutation
 # must not hide a rule that includes the config again in the build context.
 reset_case
 export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_REPO_ROOT=$publish_project
-printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_API_TOKEN=dummy-negated-config\n' > "$publish_project/.env.swarm"
+printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_PASSWORD=dummy-negated-config\n' > "$publish_project/.env.swarm"
 printf '.env.*\n  !.env.swarm\n' > "$publish_project/.dockerignore"
 if sh "$publish_project/scripts/swarm.sh" --env-file "$publish_project/.env.swarm" publish > "$KPL_TEST_STATE/output" 2>&1; then exit 1; fi
 no_mutation
@@ -889,7 +889,7 @@ cp "$root/.dockerignore" "$publish_project/.dockerignore"
 # .env exclusion therefore cannot prove that this build excludes credentials.
 reset_case
 export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_REPO_ROOT=$publish_project
-printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_API_TOKEN=dummy-ignored-config\n' > "$publish_project/.env.swarm"
+printf 'KPL_IMAGE=registry.example/kpl:v3\nKPL_PASSWORD=dummy-ignored-config\n' > "$publish_project/.env.swarm"
 printf '# This override does not exclude configuration files.\n' > "$publish_project/Dockerfile.dockerignore"
 if sh "$publish_project/scripts/swarm.sh" --env-file "$publish_project/.env.swarm" publish > "$KPL_TEST_STATE/output" 2>&1; then exit 1; fi
 no_mutation
@@ -958,9 +958,9 @@ for arguments in 'nodes --all' 'login unexpected' 'publish --platforms' 'publish
 done
 
 reset_case
-(unset KPL_IMAGE KPL_API_TOKEN GRAFANA_ADMIN_PASSWORD; sh "$root/scripts/swarm.sh" --env-file "$scratch/generated.env" init) > "$KPL_TEST_STATE/output" 2>&1
+(unset KPL_IMAGE KPL_PASSWORD GRAFANA_ADMIN_PASSWORD; sh "$root/scripts/swarm.sh" --env-file "$scratch/generated.env" init) > "$KPL_TEST_STATE/output" 2>&1
 [ "$(stat -c '%a' "$scratch/generated.env")" = 600 ]
-grep -Eq '^KPL_API_TOKEN=[a-f0-9]{64}$' "$scratch/generated.env"
+grep -Eq '^KPL_PASSWORD=[a-f0-9]{64}$' "$scratch/generated.env"
 grep -Eq '^GRAFANA_ADMIN_PASSWORD=[a-f0-9]{64}$' "$scratch/generated.env"
 grep -Fxq 'KPL_IMAGE=registry.example.com/kpl-v3:v3' "$scratch/generated.env"
 grep -Fxq 'KPL_IMAGE_PULL_TIMEOUT=300' "$scratch/generated.env"

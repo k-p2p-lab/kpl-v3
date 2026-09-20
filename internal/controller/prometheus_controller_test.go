@@ -20,7 +20,7 @@ func TestPrometheusControllerTargetsUseAdvertisedEndpoint(t *testing.T) {
 	} {
 		t.Run(tc.url, func(t *testing.T) {
 			server := New(ServerConfig{DataDir: t.TempDir(), Token: "test-token", MetricsURL: tc.url}, nil)
-			handler := server.Handler(context.Background())
+			handler := server.apiTestHandler(context.Background())
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/prometheus/controller-targets", nil))
 			if recorder.Code != http.StatusOK || recorder.Header().Get("Cache-Control") != "no-store" {
@@ -55,7 +55,7 @@ func TestControllerRejectsInvalidMetricsURLBeforeListening(t *testing.T) {
 		"http://control.example/metrics?token=secret", "http://control.example/metrics#fragment",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			server := New(ServerConfig{DataDir: t.TempDir(), MetricsURL: raw}, nil)
+			server := New(ServerConfig{DataDir: t.TempDir(), MetricsURL: raw, User: "admin", Password: "secret"}, nil)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			if err := server.Run(ctx); err == nil || !strings.Contains(err.Error(), "Controller metrics URL must be") {

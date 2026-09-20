@@ -26,6 +26,7 @@
       <span class="connection-state" id="connectionState"><i></i> Connecting</span>
       <time id="updatedAt">—</time>
       <button class="primary-button" id="openScenario" type="button">Run experiment</button>
+      <button class="secondary-button" id="logout" type="button">Log out</button>
     </div>
   </header>
 
@@ -257,6 +258,7 @@
           <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-experiments-body" data-panel-toggle="experiments"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-experiments-body">
+          <div class="run-batch-estimates" id="runBatchEstimates" aria-label="Group finish estimates" hidden></div>
           <div class="run-list" id="runList">
             <div class="empty-copy">No experiments yet.</div>
           </div>
@@ -336,7 +338,6 @@
       <p class="dialog-help">Analysis continues on the server when you close this window or browser. Return to Saved results to check progress and download completed images.</p>
       <div class="result-images-feedback"><p id="resultImagesStatus" role="status" aria-live="polite"></p><button class="secondary-button" id="retryResultImages" type="button" hidden>Retry</button></div>
       <progress id="resultImagesProgress" max="100" aria-label="Log reading progress" hidden></progress>
-      <div id="resultImagesAuth" hidden><label for="resultImagesToken">API token to start analysis</label><input id="resultImagesToken" type="password" autocomplete="off" placeholder="Enter token, then Retry"></div>
       <div class="result-images-actions"><a class="secondary-button" id="downloadResultAnalysis" hidden>Download analysis JSON</a><button class="secondary-button" id="refreshResultImages" type="button" hidden>Analyze latest snapshot</button></div>
       <a class="secondary-button" id="downloadAllResultImages" hidden>Download all PNG + CSV (ZIP)</a>
       <details id="researchTools" hidden>
@@ -419,8 +420,6 @@
           </div>
         </section>
       </div>
-      <label for="apiToken">API token <small>Required only when the Controller has a token configured</small></label>
-      <input id="apiToken" type="password" autocomplete="off" placeholder="Optional">
       <footer>
         <span id="scenarioError" role="alert"></span>
         <button class="secondary-button" type="button" data-scenario-close>Cancel</button>
@@ -437,8 +436,6 @@
       <p class="delete-result-name" id="deleteResultName"></p>
       <p class="result-id" id="deleteResultID"></p>
       <p class="dialog-help" id="deleteResultHelp">Delete this run's saved scenario, metadata, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.</p>
-      <label for="deleteApiToken">API token</label>
-      <input id="deleteApiToken" type="password" autocomplete="off" placeholder="Required when the Controller has a token configured">
       <p class="dialog-error" id="deleteResultError" role="alert"></p>
       <footer>
         <button class="secondary-button" id="cancelDeleteResult" value="cancel" type="submit">Cancel</button>

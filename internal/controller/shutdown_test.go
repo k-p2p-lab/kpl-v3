@@ -53,7 +53,9 @@ func TestControllerShutdownWaitsForCleanupAndFinalState(t *testing.T) {
 	}
 	// Hold an SSE request open; BaseContext cancellation must drain it too.
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://" + listener.Addr().String() + "/api/v1/stream")
+	streamRequest, _ := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/api/v1/stream", nil)
+	authenticateRequest(t, server, streamRequest)
+	response, err := client.Do(streamRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestControllerShutdownCancelsIncompleteScenarioUpload(t *testing.T) {
 	}
 	defer connection.Close()
 	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
-	_, err = fmt.Fprint(connection, "POST /api/v1/experiments HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n")
+	_, err = fmt.Fprintf(connection, "POST /api/v1/experiments HTTP/1.1\r\nHost: localhost\r\nCookie: %s\r\nX-KPL-Request: dashboard\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", loginCookie(t, server).String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +136,7 @@ func TestControllerRejectsInvalidDataDirectoryBeforeListening(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	server := New(ServerConfig{Listen: "127.0.0.1:0", DataDir: path}, nil)
+	server := New(ServerConfig{Listen: "127.0.0.1:0", DataDir: path, User: "admin", Password: "secret"}, nil)
 	if err := server.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "data directory") {
 		t.Fatalf("Run accepted an unusable data directory: %v", err)
 	}

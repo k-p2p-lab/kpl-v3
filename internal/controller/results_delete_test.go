@@ -15,7 +15,7 @@ import (
 )
 
 func TestResultDeleteRequiresAuthenticationAndRejectsDownloadLease(t *testing.T) {
-	server := New(ServerConfig{DataDir: t.TempDir(), Token: "secret"}, nil)
+	server := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "secret"}, nil)
 	experiment, _ := resultFixture(t, server, "run-delete", "completed", time.Now().UTC())
 	if response := resultRequest(server, http.MethodDelete, "/api/v1/results/"+experiment.ID); response.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated delete status=%d", response.Code)
@@ -30,9 +30,9 @@ func TestResultDeleteRequiresAuthenticationAndRejectsDownloadLease(t *testing.T)
 	defer snapshot.close()
 	request := func() *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodDelete, "/api/v1/results/"+experiment.ID, nil)
-		r.Header.Set("Authorization", "Bearer secret")
+		authenticateRequest(t, server, r)
 		response := httptest.NewRecorder()
-		server.Handler(context.Background()).ServeHTTP(response, r)
+		server.apiTestHandler(context.Background()).ServeHTTP(response, r)
 		return response
 	}
 	if response := request(); response.Code != http.StatusConflict {

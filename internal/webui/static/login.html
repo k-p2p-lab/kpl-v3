@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in · K-P2PLab</title>
+  <link rel="icon" type="image/jpeg" href="/kpl-logo.jpg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/login.css">
+  <script src="/login.js" defer></script>
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="loginHeading">
+      <div class="login-brand"><img src="/kpl-logo.jpg" alt="" width="52" height="52"><span>K-P2PLab<small>Experiment dashboard</small></span></div>
+      <h1 id="loginHeading">Welcome back</h1>
+      <p class="login-intro">Log in to manage experiments and explore results.</p>
+      <form id="loginForm">
+        <label for="loginUser">Username</label>
+        <input id="loginUser" name="username" autocomplete="username" required maxlength="256" autofocus>
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required maxlength="4096">
+        <p id="loginError" class="login-error" role="alert" aria-live="polite"></p>
+        <button id="loginSubmit" class="primary-button" type="submit">Log in</button>
+      </form>
+    </section>
+    <footer class="login-footer"><a href="https://github.com/k-p2p-lab/v3" target="_blank" rel="noopener noreferrer">github.com/k-p2p-lab/v3</a></footer>
+  </main>
+</body>
+</html>

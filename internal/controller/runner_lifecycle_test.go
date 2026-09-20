@@ -432,8 +432,9 @@ phases:
 	waitForLifecycleNodeCount(t, controller, experiment.ID, 1)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/experiments/"+experiment.ID+"/stop", nil)
+	authenticateRequest(t, controller, request)
 	response := httptest.NewRecorder()
-	controller.Handler(context.Background()).ServeHTTP(response, request)
+	controller.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("stop API status=%d body=%s, want %d", response.Code, response.Body.String(), http.StatusAccepted)
 	}
@@ -690,7 +691,7 @@ func (a *lifecycleTestAgent) nodeCount() int {
 func newLifecycleTestController(t *testing.T) *Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := New(ServerConfig{DataDir: t.TempDir()}, logger)
+	server := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "secret"}, logger)
 	t.Cleanup(func() {
 		server.cancelMu.Lock()
 		server.shuttingDown = true

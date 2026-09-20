@@ -132,7 +132,7 @@ func TestBatchAnalysisRequestCancellationAndDuplicateAdmission(t *testing.T) {
 	batchFixture(t, s, "batch", "two", "completed", 2, 2, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	handler := s.Handler(ctx)
+	handler := s.apiTestHandler(ctx)
 	s.analysisSlots <- struct{}{}
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/batch-analysis-jobs/batch", nil).WithContext(reqCtx)
@@ -200,7 +200,7 @@ func TestBatchAnalysisHandlesMoreThanIndividualQueueLimit(t *testing.T) {
 	}
 }
 func TestBatchAnalysisAuthShutdownAndInterruption(t *testing.T) {
-	s := New(ServerConfig{DataDir: t.TempDir(), Token: "secret"}, nil)
+	s := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "secret"}, nil)
 	batchFixture(t, s, "batch", "one", "completed", 1, 2, 0)
 	batchFixture(t, s, "batch", "two", "completed", 2, 2, 0)
 	if response := resultRequest(s, http.MethodPost, "/api/v1/batch-analysis-jobs/batch"); response.Code != 401 {

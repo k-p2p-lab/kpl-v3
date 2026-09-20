@@ -38,7 +38,7 @@ function fixture(api, renderImage = async () => png, options = {}) {
         innerHTML: "",
         textContent: "",
         open: false,
-        hidden: id === "resultImagesAuth",
+        hidden: false,
         listeners: {},
         classList: { toggle() {} },
         querySelectorAll() { return []; },
@@ -323,7 +323,7 @@ test("status failures reconnect without resubmitting jobs; saved failures requir
   await settle(() => /images ready/.test(transient.element("resultImagesStatus").textContent));
 });
 
-test("explicit refresh requests a new snapshot and authentication failures accept a token", async () => {
+test("explicit refresh requests a new snapshot and authentication failures do not request another credential", async () => {
   const methods = [];
   const refresh = fixture(async (url, options) => {
     methods.push([url, options.method]);
@@ -337,30 +337,13 @@ test("explicit refresh requests a new snapshot and authentication failures accep
     ),
   );
   await settle(() => /images ready/.test(refresh.element("resultImagesStatus").textContent));
-  let saved = "",
-    started = false;
-  const auth = fixture(
-    async (url, options) => {
-      if (url.includes("/result?")) return artifact("run");
-      if (options.method === "POST") {
-        if (!saved)
-          throw Object.assign(Error("valid bearer token required"), {
-            status: 401,
-          });
-        started = true;
-        return job();
-      }
-      return job("run", started ? "completed" : "idle");
-    },
-    undefined,
-    { saveToken: (value) => (saved = value) },
-  );
+  const auth = fixture(async () => {
+    throw Object.assign(Error("login required"), {status:401});
+  });
   await auth.ui.open("run");
-  assert.equal(auth.element("resultImagesAuth").hidden, false);
-  auth.element("resultImagesToken").value = "test-token";
-  auth.element("retryResultImages").listeners.click();
-  await settle(() => /images ready/.test(auth.element("resultImagesStatus").textContent));
-  assert.equal(saved, "test-token");
+  assert.match(auth.element("resultImagesStatus").textContent, /login required/);
+  const markup = fs.readFileSync(require("node:path").join(__dirname, "static/index.html"), "utf8");
+  assert.doesNotMatch(markup, /resultImagesToken|deleteApiToken|id="apiToken"/);
 });
 
 test("corrupt artifacts and PNG errors stay retryable without discarding saved analysis access", async () => {

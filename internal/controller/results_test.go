@@ -40,7 +40,7 @@ func resultFixture(t *testing.T, server *Server, id, state string, started time.
 
 func resultRequest(server *Server, method, path string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
+	server.apiTestHandler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
 	return recorder
 }
 
@@ -470,7 +470,7 @@ func TestCanceledResultDownloadStopsWithoutWritingAnErrorResponse(t *testing.T) 
 	ctx, cancel := context.WithCancel(request.Context())
 	cancel()
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request.WithContext(ctx))
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request.WithContext(ctx))
 	if response.Body.Len() != 0 || response.Header().Get("Content-Type") != "" {
 		t.Fatalf("canceled download wrote a response: headers=%v body=%s", response.Header(), response.Body)
 	}

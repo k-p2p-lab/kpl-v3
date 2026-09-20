@@ -29,7 +29,7 @@ func TestResultDeletionDuringArchiveMeasurement(t *testing.T) {
 			go func() {
 				response := httptest.NewRecorder()
 				request := httptest.NewRequest(method, "/api/v1/experiments/"+experiment.ID+"/download", nil).WithContext(ctx)
-				server.Handler(context.Background()).ServeHTTP(response, request)
+				server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 				done <- response
 			}()
 			defer func() {

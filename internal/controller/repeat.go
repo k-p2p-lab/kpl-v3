@@ -79,6 +79,13 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 	if err := s.reserveRepeatedResults(experiments, raw); err != nil {
 		return model.Experiment{}, err
 	}
+	plan := newTimingPlan(spec)
+	s.state.mu.Lock()
+	for _, experiment := range experiments {
+		s.state.runTimings[experiment.ID] = &runTiming{plan: plan, phases: make([]phaseTiming, len(spec.Phases))}
+	}
+	s.state.estimateRunFinishesLocked(experiments, time.Now().UTC())
+	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
 	batch := &repeatBatch{cancel: cancel, repetitions: repetitions}
 	if s.repeatBatches == nil {
@@ -152,6 +159,11 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 			delete(s.cancels, experiment.ID)
 		}
 		s.cancelMu.Unlock()
+		s.state.mu.Lock()
+		for _, experiment := range experiments {
+			delete(s.state.runTimings, experiment.ID)
+		}
+		s.state.mu.Unlock()
 	}()
 	for index, experiment := range experiments {
 		if err := ctx.Err(); err != nil {

@@ -17,7 +17,7 @@ import (
 
 func TestEventBatchRejectsTrailingJSONBeforePersistence(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	for _, suffix := range []string{` {}`, ` garbage`, strings.Repeat(" ", 10<<20)} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(`{"events":[{"runId":"invalid-body","eventId":"must-not-persist"}]}`+suffix)))
@@ -58,7 +58,7 @@ func TestEventBatchRejectsUnboundedCanonicalEventBeforePersistence(t *testing.T)
 	// the archive reader's 16 MiB limit. The earlier valid event must not commit.
 	body := `{"events":[{"runId":"oversize","eventId":"valid-prefix"},{"runId":"oversize","fields":{"padding":"` + strings.Repeat("<", 3<<20) + `"}}]}`
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(body)))
+	server.apiTestHandler(context.Background()).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(body)))
 	if response.Code != 413 {
 		t.Errorf("unreadable event accepted: status=%d", response.Code)
 	}

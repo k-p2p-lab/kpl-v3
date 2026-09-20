@@ -41,6 +41,8 @@ func TestParsePort(t *testing.T) {
 }
 
 func TestRunAgentPassesMetricsEndpointFlagsToConfiguration(t *testing.T) {
+	t.Setenv("KPL_USER", "admin")
+	t.Setenv("KPL_PASSWORD", "test-password")
 	err := runAgent(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{
 		"--id", "agent", "--advertise-url", "http://agent:8090", "--controller-url", "http://controller:8080",
 		"--docker-image", "sha256:test", "--docker-network", "test-overlay", "--metrics-listen", ":9091", "--metrics-url", "http://worker.example:9091/wrong",

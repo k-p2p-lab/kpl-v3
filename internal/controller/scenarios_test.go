@@ -35,16 +35,16 @@ func scenarioAPIRequest(t *testing.T, server *Server, method, target string, bod
 	request := httptest.NewRequest(method, target, bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
 	if authenticated {
-		request.Header.Set("Authorization", "Bearer secret")
+		authenticateRequest(t, server, request)
 	}
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	return response
 }
 
 func TestSavedScenarioCRUDPersistsAcrossControllerRestart(t *testing.T) {
 	dataDir := t.TempDir()
-	server := New(ServerConfig{DataDir: dataDir, Token: "secret"}, nil)
+	server := New(ServerConfig{DataDir: dataDir, User: "admin", Password: "secret"}, nil)
 	originalYAML := validSavedScenarioYAML("original")
 	createBody := scenarioSubmission{Name: "  Baseline experiment  ", YAML: originalYAML}
 	if response := scenarioAPIRequest(t, server, http.MethodPost, "/api/v1/scenarios", createBody, false); response.Code != http.StatusUnauthorized {
@@ -63,8 +63,8 @@ func TestSavedScenarioCRUDPersistsAcrossControllerRestart(t *testing.T) {
 	}
 
 	// A fresh Controller has no in-memory dependency on the creating process.
-	restarted := New(ServerConfig{DataDir: dataDir, Token: "secret"}, nil)
-	response = scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios", nil, false)
+	restarted := New(ServerConfig{DataDir: dataDir, User: "admin", Password: "secret"}, nil)
+	response = scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios", nil, true)
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body)
 	}
@@ -88,7 +88,7 @@ func TestSavedScenarioCRUDPersistsAcrossControllerRestart(t *testing.T) {
 		t.Fatal("scenario list included YAML instead of lightweight metadata")
 	}
 
-	response = scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, false)
+	response = scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, true)
 	var loaded savedScenario
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &loaded) != nil || loaded != created {
 		t.Fatalf("load status=%d body=%s loaded=%+v", response.Code, response.Body, loaded)
@@ -113,7 +113,7 @@ func TestSavedScenarioCRUDPersistsAcrossControllerRestart(t *testing.T) {
 	if response := scenarioAPIRequest(t, restarted, http.MethodDelete, "/api/v1/scenarios/"+created.ID, nil, true); response.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", response.Code, response.Body)
 	}
-	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, false); response.Code != http.StatusNotFound {
+	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, true); response.Code != http.StatusNotFound {
 		t.Fatalf("deleted scenario status=%d body=%s", response.Code, response.Body)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "scenarios", created.ID+".json")); !os.IsNotExist(err) {
@@ -145,7 +145,7 @@ func TestSavedScenarioValidationAndMethods(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
-			server.Handler(context.Background()).ServeHTTP(response, request)
+			server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 			if response.Code != test.want {
 				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body, test.want)
 			}
@@ -153,7 +153,7 @@ func TestSavedScenarioValidationAndMethods(t *testing.T) {
 	}
 	oversized := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios", strings.NewReader(strings.Repeat(" ", scenarioJSONRequestBodyLimit+1)))
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, oversized)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, oversized)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized request status=%d body=%s", response.Code, response.Body)
 	}
@@ -163,7 +163,7 @@ func TestSavedScenarioValidationAndMethods(t *testing.T) {
 		}
 	}
 	for _, target := range []string{"/api/v1/scenarios/not-hex", "/api/v1/scenarios/" + strings.Repeat("a", 32) + "/extra", `/api/v1/scenarios/..%2Foutside`} {
-		if response := scenarioAPIRequest(t, server, http.MethodGet, target, nil, false); response.Code != http.StatusNotFound {
+		if response := scenarioAPIRequest(t, server, http.MethodGet, target, nil, true); response.Code != http.StatusNotFound {
 			t.Fatalf("unsafe target %q status=%d body=%s", target, response.Code, response.Body)
 		}
 	}
@@ -180,7 +180,7 @@ func TestSavedScenarioJSONEnvelopeAcceptsEscapedOneMiBAndRejectsLargerYAML(t *te
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios", bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("escaped 1 MiB scenario status=%d body=%s", response.Code, response.Body)
 	}
@@ -189,7 +189,7 @@ func TestSavedScenarioJSONEnvelopeAcceptsEscapedOneMiBAndRejectsLargerYAML(t *te
 		t.Fatal(err)
 	}
 	restarted := New(ServerConfig{DataDir: server.config.DataDir}, nil)
-	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, false); response.Code != http.StatusOK {
+	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios/"+created.ID, nil, true); response.Code != http.StatusOK {
 		t.Fatalf("stored escaped 1 MiB scenario status=%d body=%s", response.Code, response.Body)
 	}
 
@@ -197,7 +197,7 @@ func TestSavedScenarioJSONEnvelopeAcceptsEscapedOneMiBAndRejectsLargerYAML(t *te
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/scenarios", bytes.NewReader(tooLarge))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "cannot exceed") {
 		t.Fatalf("decoded YAML over limit status=%d body=%s", response.Code, response.Body)
 	}
@@ -210,7 +210,7 @@ func TestSavedScenarioRequestRejectsInvalidUTF8BeforeJSONDecode(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios", bytes.NewReader(raw))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "valid UTF-8") {
 		t.Fatalf("invalid UTF-8 status=%d body=%s", response.Code, response.Body)
 	}
@@ -236,7 +236,7 @@ func TestSavedScenarioSummaryCacheRevalidatesChangedRecords(t *testing.T) {
 		return err
 	}
 	list := func() *httptest.ResponseRecorder {
-		return scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, false)
+		return scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, true)
 	}
 	if response := list(); response.Code != http.StatusOK {
 		t.Fatalf("cold list status=%d body=%s", response.Code, response.Body)
@@ -289,7 +289,7 @@ func TestSavedScenarioSummaryCacheRevalidatesChangedRecords(t *testing.T) {
 		t.Fatalf("corrupted record was not revalidated: validations=%d", got)
 	}
 	restarted := New(ServerConfig{DataDir: dataDir}, nil)
-	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios", nil, false); response.Code != http.StatusInternalServerError {
+	if response := scenarioAPIRequest(t, restarted, http.MethodGet, "/api/v1/scenarios", nil, true); response.Code != http.StatusInternalServerError {
 		t.Fatalf("restart trusted corrupted record: status=%d body=%s", response.Code, response.Body)
 	}
 	if response := scenarioAPIRequest(t, restarted, http.MethodDelete, "/api/v1/scenarios/"+item.ID, nil, false); response.Code != http.StatusNoContent {
@@ -328,7 +328,7 @@ func TestConcurrentColdScenarioListsShareOneLargeYAMLValidation(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, false)
+			responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, true)
 		}()
 	}
 	close(start)
@@ -386,7 +386,7 @@ func TestScenarioSummaryFlightsSeparateChangedFileIdentities(t *testing.T) {
 		return err
 	}
 	responses := make(chan *httptest.ResponseRecorder, 2)
-	go func() { responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, false) }()
+	go func() { responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, true) }()
 	select {
 	case count := <-entered:
 		if count != 1 {
@@ -403,7 +403,7 @@ func TestScenarioSummaryFlightsSeparateChangedFileIdentities(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("replace status=%d body=%s", response.Code, response.Body)
 	}
-	go func() { responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, false) }()
+	go func() { responses <- scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, true) }()
 	select {
 	case count := <-entered:
 		if count != 2 {
@@ -426,7 +426,7 @@ func TestScenarioSummaryFlightsSeparateChangedFileIdentities(t *testing.T) {
 	if got := validations.Load(); got != 2 {
 		t.Fatalf("identity validations=%d, want 2", got)
 	}
-	if response := scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, false); response.Code != http.StatusOK {
+	if response := scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios", nil, true); response.Code != http.StatusOK {
 		t.Fatalf("cached new identity status=%d body=%s", response.Code, response.Body)
 	}
 	if got := validations.Load(); got != 2 {
@@ -522,7 +522,7 @@ func TestSavedScenarioDiskRecordRejectsInvalidUTF8BeforeJSONDecode(t *testing.T)
 		t.Fatal(err)
 	}
 	for _, current := range []*Server{server, New(ServerConfig{DataDir: dataDir}, nil)} {
-		response := scenarioAPIRequest(t, current, http.MethodGet, "/api/v1/scenarios/"+item.ID, nil, false)
+		response := scenarioAPIRequest(t, current, http.MethodGet, "/api/v1/scenarios/"+item.ID, nil, true)
 		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "cannot load") {
 			t.Fatalf("invalid UTF-8 record status=%d body=%s", response.Code, response.Body)
 		}
@@ -617,7 +617,7 @@ func TestConcurrentSavedScenarioUpdatesRemainAtomic(t *testing.T) {
 		}()
 	}
 	group.Wait()
-	response = scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios/"+item.ID, nil, false)
+	response = scenarioAPIRequest(t, server, http.MethodGet, "/api/v1/scenarios/"+item.ID, nil, true)
 	var loaded savedScenario
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &loaded) != nil {
 		t.Fatalf("load status=%d body=%s", response.Code, response.Body)

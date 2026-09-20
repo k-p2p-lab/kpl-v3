@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/k-p2p-lab/v3/internal/agent"
+	"github.com/k-p2p-lab/v3/internal/auth"
 	"github.com/k-p2p-lab/v3/internal/controller"
 	"github.com/k-p2p-lab/v3/internal/peer"
 	"github.com/k-p2p-lab/v3/internal/scenario"
@@ -58,7 +59,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
 	listen := flags.String("listen", ":8080", "HTTP listen address")
 	dataDir := flags.String("data-dir", "data", "experiment data directory")
-	token := flags.String("token", os.Getenv("KPL_API_TOKEN"), "optional shared API token")
+	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusPort := flags.String("prometheus-port", os.Getenv("PROMETHEUS_PORT"), "public Prometheus port advertised to the Dashboard (default 9090)")
 	grafanaPort := flags.String("grafana-port", os.Getenv("GRAFANA_PORT"), "public Grafana port advertised to the Dashboard (default 3000)")
@@ -76,7 +77,8 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	server := controller.New(controller.ServerConfig{
 		Listen:         *listen,
 		DataDir:        *dataDir,
-		Token:          *token,
+		User:           user,
+		Password:       password,
 		MetricsURL:     *metricsURL,
 		PrometheusPort: parsedPrometheusPort,
 		GrafanaPort:    parsedGrafanaPort,
@@ -107,7 +109,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	controllerURL := flags.String("controller-url", "", "controller URL on the Swarm peer overlay")
 	capacity := flags.Int("capacity", 100, "maximum active peers")
 	dataDir := flags.String("data-dir", "data-agent", "agent data directory")
-	token := flags.String("token", os.Getenv("KPL_API_TOKEN"), "optional shared API token")
+	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	labels := flags.String("labels", "", "comma-separated key=value labels")
 	dockerBinary := flags.String("docker-binary", "docker", "Docker CLI executable")
 	dockerImage := flags.String("docker-image", "", "peer image resolved from the running Swarm Agent task")
@@ -115,10 +117,13 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if err := auth.Validate(user, password); err != nil {
+		return err
+	}
 	server, err := agent.New(agent.Config{
 		ID: *id, Name: *name, Listen: *listen, AdvertiseURL: *advertiseURL,
 		MetricsListen: *metricsListen, MetricsURL: *metricsURL, SelfURL: *selfURL,
-		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir, Token: *token,
+		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir, Token: auth.InternalToken(user, password),
 		Labels:       parseLabels(*labels),
 		DockerBinary: *dockerBinary, DockerImage: *dockerImage, DockerNetwork: *dockerNetwork,
 	}, logger)

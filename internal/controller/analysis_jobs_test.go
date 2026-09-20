@@ -51,7 +51,7 @@ func TestAnalysisJobSurvivesRequestCancellationAndTwoMinuteWait(t *testing.T) {
 		resultFixture(t, s, "run", "completed", time.Unix(1, 0))
 		serverCtx, cancelServer := context.WithCancel(context.Background())
 		defer cancelServer()
-		handler := s.Handler(serverCtx)
+		handler := s.apiTestHandler(serverCtx)
 		s.analysisSlots <- struct{}{}
 		requestCtx, cancelRequest := context.WithCancel(context.Background())
 		response := httptest.NewRecorder()
@@ -86,7 +86,7 @@ func TestAnalysisJobSurvivesRequestCancellationAndTwoMinuteWait(t *testing.T) {
 func TestAnalysisJobArtifactPersistsAndIsReusedUntilExplicitRefresh(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	resultFixture(t, s, "run", "completed", time.Unix(1, 0))
-	handler := s.Handler(context.Background())
+	handler := s.apiTestHandler(context.Background())
 	response, first := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
 	if response.Code != 202 {
 		t.Fatalf("start: %s", response.Body)
@@ -113,7 +113,7 @@ func TestAnalysisJobArtifactPersistsAndIsReusedUntilExplicitRefresh(t *testing.T
 		t.Fatal(err)
 	}
 	restarted := New(s.config, nil)
-	handler = restarted.Handler(context.Background())
+	handler = restarted.apiTestHandler(context.Background())
 	_, loaded := jobRequest(t, handler, http.MethodGet, "/api/v1/analysis-jobs/run")
 	_, reused := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
 	if loaded.State != "completed" || loaded.ID != first.ID || reused.ID != first.ID {
@@ -163,7 +163,7 @@ func TestAnalysisJobsReportProgressAndDoNotResurrectDeletedResults(t *testing.T)
 		t.Fatalf("progress bytes=%d phases=%v", read, phases)
 	}
 	s.analysisSlots <- struct{}{}
-	handler := s.Handler(context.Background())
+	handler := s.apiTestHandler(context.Background())
 	response, _ := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
 	if response.Code != 202 {
 		t.Fatalf("start: %s", response.Body)
@@ -228,17 +228,24 @@ func TestAnalysisJobShutdownAndRestartExposeRetryableInterruption(t *testing.T) 
 	restarted.analysisWorkers.Wait()
 }
 
-func TestAnalysisJobMutationRequiresExistingAPIToken(t *testing.T) {
-	s := New(ServerConfig{DataDir: t.TempDir(), Token: "job-token"}, nil)
+func TestAnalysisJobRequiresLoginForReadsAndMutations(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "job-password"}, nil)
 	resultFixture(t, s, "run", "completed", time.Unix(1, 0))
-	handler := s.Handler(context.Background())
+	handler := s.apiTestHandler(context.Background())
 	response, _ := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
 	if response.Code != 401 {
-		t.Fatal("analysis start bypassed token authentication")
+		t.Fatal("analysis start bypassed session authentication")
 	}
-	response, job := jobRequest(t, handler, http.MethodGet, "/api/v1/analysis-jobs/run")
-	if response.Code != 200 || job.State != "idle" {
-		t.Fatal("status polling unexpectedly requires mutation permission")
+	response, _ = jobRequest(t, handler, http.MethodGet, "/api/v1/analysis-jobs/run")
+	if response.Code != http.StatusUnauthorized {
+		t.Fatal("analysis status bypassed session authentication")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/analysis-jobs/run", nil)
+	authenticateRequest(t, s, request)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authenticated polling: %d", response.Code)
 	}
 }
 

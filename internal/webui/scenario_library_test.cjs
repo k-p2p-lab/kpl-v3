@@ -49,7 +49,7 @@ function fixture(fetch) {
   const elements = new Map();
   for (const id of [
     'scenarioLibraryStatus', 'refreshScenarios', 'newScenario', 'saveScenario', 'saveScenarioCopy',
-    'scenarioLibraryError', 'scenarioEditingStatus', 'scenarioLibraryList', 'apiToken', 'scenarioName',
+    'scenarioLibraryError', 'scenarioEditingStatus', 'scenarioLibraryList', 'scenarioName',
     'scenarioText', 'scenarioError', 'runRepetitions', 'runScenario', 'scenarioDialog', 'toast',
     'validateScenario', 'scenarioValidation', 'scenarioValidationTitle', 'scenarioValidationMessage',
   ]) elements.set(`#${id}`, element());
@@ -85,7 +85,6 @@ function fixture(fetch) {
     scenarioValidating: false,
     scenarioValidation: null,
     scenarioValidationVersion: 0,
-    apiToken: null,
   };
   const storage = new Map();
   const viewport = { mobile: false };
@@ -329,7 +328,7 @@ test('submitting locks conflicting controls but allows closing and reopening the
   const run = api.submitScenarioRun();
   assert.equal(calls, 1);
   assert.equal(state.scenarioSubmitting, true);
-  for (const id of ['#scenarioName', '#scenarioText', '#apiToken', '#runRepetitions', '#runScenario', '#saveScenario', '#refreshScenarios', '#newScenario']) {
+  for (const id of ['#scenarioName', '#scenarioText', '#runRepetitions', '#runScenario', '#saveScenario', '#refreshScenarios', '#newScenario']) {
     assert.equal(elements.get(id).disabled, true, `${id} remained enabled`);
   }
   assert.ok(closes.every((button) => !button.disabled));

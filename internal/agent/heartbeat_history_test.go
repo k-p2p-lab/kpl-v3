@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/controller"
 	"github.com/k-p2p-lab/v3/internal/model"
 )
 
@@ -46,9 +45,10 @@ func TestChurnHeartbeatUpdatesStoppedPeersWithoutDashboard(t *testing.T) {
 	ready.ID, ready.RunID = "still-ready", "churn-run"
 	agent.processes[ready.ID] = &process{node: ready, apiURL: "http://peer:18000"}
 
-	controllerServer := controller.New(controller.ServerConfig{DataDir: t.TempDir()}, nil)
+	controllerServer := authenticatedTestController(t.TempDir())
 	controllerHTTP := httptest.NewServer(controllerServer.Handler(context.Background()))
 	defer controllerHTTP.Close()
+	agent.config.Token = controllerTestToken
 	agent.config.ControllerURL = controllerHTTP.URL
 	agent.client = controllerHTTP.Client()
 	if err := agent.register(context.Background()); err != nil {
@@ -65,7 +65,7 @@ func TestChurnHeartbeatUpdatesStoppedPeersWithoutDashboard(t *testing.T) {
 	if err := agent.heartbeat(context.Background()); err != nil {
 		t.Fatalf("termination snapshot rejected after churn: %v", err)
 	}
-	response, err := http.Get(controllerHTTP.URL + "/api/v1/snapshot")
+	response, err := controllerHTTP.Client().Do(controllerReadRequest(t, controllerServer.Handler(context.Background()), controllerHTTP.URL+"/api/v1/snapshot"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestChurnHeartbeatUpdatesStoppedPeersWithoutDashboard(t *testing.T) {
 }
 
 func TestOversizedHeartbeatCannotPartiallyUpdatePeerStates(t *testing.T) {
-	server := controller.New(controller.ServerConfig{DataDir: t.TempDir()}, nil)
+	server := authenticatedTestController(t.TempDir())
 	handler := server.Handler(context.Background())
 	request := func(path string, input any) *httptest.ResponseRecorder {
 		data, err := json.Marshal(input)
@@ -113,7 +113,9 @@ func TestOversizedHeartbeatCannotPartiallyUpdatePeerStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data)))
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
+		req.Header.Set("Authorization", "Bearer "+controllerTestToken)
+		handler.ServeHTTP(response, req)
 		return response
 	}
 	agent := model.Agent{ID: "agent", URL: "http://agent", Capacity: 2}
@@ -131,7 +133,7 @@ func TestOversizedHeartbeatCannotPartiallyUpdatePeerStates(t *testing.T) {
 		t.Fatalf("oversized heartbeat status=%d", got.Code)
 	}
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+	handler.ServeHTTP(response, controllerReadRequest(t, handler, "/api/v1/nodes"))
 	var nodes []model.Node
 	if err := json.NewDecoder(response.Body).Decode(&nodes); err != nil {
 		t.Fatal(err)

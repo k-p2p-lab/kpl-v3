@@ -291,6 +291,16 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 .topology-neighbors small { display: block; margin-top: 0.2rem; font-size: 0.7rem; }
 
 .run-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); align-items: start; gap: 0.55rem; max-height: 22rem; overflow: auto; padding: 0.65rem; }
+.run-batch-estimates { display: grid; gap: 0.55rem; padding: 0.65rem 0.65rem 0; max-height: 15rem; overflow: auto; }
+.run-batch-estimate { min-width: 0; padding: 0.8rem 0.85rem; border: 1px solid rgba(57, 214, 208, 0.2); border-radius: 0.65rem; background: rgba(57, 214, 208, 0.045); }
+.run-batch-estimate-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0.25rem 0.65rem; font-size: 0.75rem; }
+.run-batch-estimate-heading strong { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.run-batch-estimate-heading > span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.run-timing { display: grid; gap: 0.25rem; margin-top: 0.65rem; padding-top: 0.6rem; border-top: 1px solid var(--line-soft); font-size: 0.72rem; line-height: 1.5; color: var(--muted); font-variant-numeric: tabular-nums; }
+.run-timing > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.15rem 0.5rem; }
+.run-timing strong { color: var(--cyan); font-weight: 550; }
+.run-timing small { font-size: 0.68rem; overflow-wrap: anywhere; }
+.overdue .run-timing strong, .run-timing.overdue strong { color: var(--amber); }
 .run-item { padding: 0.85rem; border: 1px solid transparent; border-radius: 0.65rem; background: rgba(7, 16, 24, 0.46); }
 .run-item + .run-item { margin-top: 0; }
 .run-title { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }

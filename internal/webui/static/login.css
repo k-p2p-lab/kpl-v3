@@ -1,0 +1,16 @@
+.login-page { display: grid; place-items: center; min-height: 100svh; padding: 2rem 1rem; }
+.login-shell { width: min(100%, 27rem); padding: 0; margin: 0; }
+.login-card { padding: clamp(1.5rem, 5vw, 2.5rem); border: 1px solid var(--line); border-radius: 1.25rem; background: var(--surface); box-shadow: var(--shadow); }
+.login-brand { display: flex; align-items: center; gap: .9rem; margin-bottom: 2rem; font-size: 1.15rem; font-weight: 700; }
+.login-brand img { border-radius: .8rem; flex-shrink: 0; }
+.login-brand small { display: block; margin-top: .2rem; color: var(--muted); font-size: .8rem; font-weight: 400; }
+.login-card h1 { margin: 0 0 .5rem; font-size: 1.7rem; line-height: 1.2; }
+.login-intro { margin: 0 0 1.75rem; color: var(--muted); font-size: .9rem; }
+.login-card label { display: block; margin: 1rem 0 .45rem; font-size: .85rem; font-weight: 600; }
+.login-card input { display: block; width: 100%; min-height: 2.8rem; padding: .7rem .85rem; color: var(--text); background: var(--bg-soft); border: 1px solid var(--line); border-radius: .55rem; }
+.login-card input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.login-error { min-height: 2.7em; margin: .85rem 0; font-size: .85rem; color: var(--red); }
+.login-card button { width: 100%; min-height: 2.8rem; justify-content: center; }
+.login-footer { padding-top: 1.25rem; text-align: center; font-size: .8rem; }
+.login-footer a { color: var(--muted); text-decoration: none; }
+.login-footer a:hover { color: var(--text); }

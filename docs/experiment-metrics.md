@@ -18,7 +18,7 @@ API clients can POST `application/json` to `/api/v1/experiments`:
 {"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
 ```
 
-The response is the first experiment; `/api/v1/snapshot` and the SSE stream include all iterations. Existing raw YAML requests still start one experiment. Mutations use the configured bearer token.
+The response is the first experiment; `/api/v1/snapshot` and the SSE stream include all iterations. Existing raw YAML requests still start one experiment. Reads and mutations use the login session; mutation requests also include `X-KPL-Request: dashboard`.
 
 ## Delivery under churn: session-window-v1
 

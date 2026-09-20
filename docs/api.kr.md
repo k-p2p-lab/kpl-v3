@@ -2,12 +2,15 @@
 
 [English](api.md) | 한국어
 
-Controller는 아래 공개 및 운영 엔드포인트를 제공합니다. `KPL_API_TOKEN`을 설정했다면 변경 요청에 Bearer 토큰을 보내야 합니다.
+Controller의 대시보드와 운영 API는 로그인 세션으로 보호합니다. 아래 [인증](#인증)에서 공개 모니터링 경로와 내부 서비스 인증을 구분합니다.
 
 ## Controller endpoint
 
 | Method | Path | 설명 |
 |---|---|---|
+| `POST` | `/api/v1/auth/login` | JSON 계정으로 로그인하고 세션 쿠키 발급 |
+| `GET` | `/api/v1/auth/session` | 현재 사용자·세션 만료 시각 |
+| `POST` | `/api/v1/auth/logout` | 현재 세션과 SSE 연결 종료 |
 | `GET` | `/metrics` | Controller와 실험 metric의 Prometheus exposition |
 | `GET` | `/api/v1/health` | Controller 상태와 Peer 시계 측정에 쓰는 현재 UTC 시각 |
 | `GET` | `/api/v1/ui-config` | 대시보드 메뉴에 사용하는 Prometheus·Grafana 게시 포트 |
@@ -23,7 +26,7 @@ Controller는 아래 공개 및 운영 엔드포인트를 제공합니다. `KPL_
 | `GET` | `/api/v1/stream` | `peerScores`를 포함한 실시간 snapshot SSE |
 | `GET` | `/api/v1/experiments` | 실험 상태와 `activeJobs`, `completedJobs`, `failedJobs`, `canceledJobs` counter |
 | `GET` / `POST` | `/api/v1/scenarios` | 시나리오 요약 목록 조회 또는 검증한 `{name, yaml}` 저장 |
-| `POST` | `/api/v1/scenarios/validate` | 원본 YAML을 저장·실행 없이 검증. 공개 endpoint로 토큰 불필요 |
+| `POST` | `/api/v1/scenarios/validate` | 원본 YAML을 저장·실행 없이 검증. 로그인 필요 |
 | `GET` / `PUT` / `DELETE` | `/api/v1/scenarios/{id}` | 저장 시나리오 하나를 불러오기, 갱신 또는 삭제 |
 | `GET` | `/api/v1/results` | 이전 Controller 실행에서 저장한 실험을 포함하는 결과 목록 |
 | `DELETE` | `/api/v1/results/{id}` | 비활성 저장 결과 삭제. 진행 중 배치·다운로드 보호 |
@@ -46,20 +49,22 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 
 ## 실행 제출, 중지와 관측
 
-`POST /api/v1/scenarios/validate`는 원본 YAML 본문(`Content-Type: application/yaml`)을 최대 1 MiB까지 받습니다. 유효하면 `200`과 `{valid: true, name, phases}`를 반환합니다. 빈 입력, YAML 문법 오류, 알 수 없는 필드, 잘못된 설정, 여러 YAML 문서는 `400`과 `{error: "…"}`를 반환하며 파서가 제공하는 줄 번호를 보존합니다. 본문 한도 초과는 `413`입니다. 저장·실행과 같은 파서를 사용하지만 기록이나 job을 만들지 않고 토큰도 요구하지 않습니다. 설정 검증이며 Agent 용량이나 실행 시 연결성을 검사하지는 않습니다.
+`POST /api/v1/scenarios/validate`는 원본 YAML 본문(`Content-Type: application/yaml`)을 최대 1 MiB까지 받습니다. 유효하면 `200`과 `{valid: true, name, phases}`를 반환합니다. 빈 입력, YAML 문법 오류, 알 수 없는 필드, 잘못된 설정, 여러 YAML 문서는 `400`과 `{error: "…"}`를 반환하며 파서가 제공하는 줄 번호를 보존합니다. 본문 한도 초과는 `413`입니다. 저장·실행과 같은 파서를 사용하지만 기록이나 job을 만들지 않으며 로그인 세션을 사용합니다. 설정 검증이며 Agent 용량이나 실행 시 연결성을 검사하지는 않습니다.
 
 `POST /api/v1/experiments`는 첫 run의 experiment 객체와 `202`를 반환합니다. `{scenario, repetitions}`를 제출하려면 `Content-Type: application/json`을 사용하십시오. `scenario`는 YAML 문자열이며 `repetitions`를 생략하면 기본값은 `1`입니다. 다른 content type은 원시 YAML로 처리합니다. 원시 YAML과 JSON에서 해석한 `scenario` 문자열의 한도는 각각 1 MiB입니다. JSON 요청 본문은 escape를 고려해 `6 * 1 MiB + 64 KiB`까지 허용합니다. 요청 본문 자체가 한도를 넘으면 `413`, 해석한 YAML 문자열이 한도를 넘거나 scenario/repetition이 유효하지 않으면 `400`입니다.
 
 반복 제출은 매 iteration에 별도 run ID와 결과 기록을 예약하고 `batchId`, `iteration`, `repetitions`를 공유합니다. 순차 실행하며 실패하거나 취소된 iteration은 대기 중인 나머지 실행도 취소합니다. 반복 배치가 진행 중일 때 구성원 하나를 중지하면 해당 배치를 취소합니다. `repetitions > 1`에서는 마지막을 포함한 매 iteration이 최종 상태를 기록하기 전에 Peer를 fence하고 제거합니다. 자연스럽게 성공한 단일 실행만 YAML에 `stop-all`이 없을 때 Peer를 남겨둘 수 있습니다.
 
+`GET /api/v1/experiments`, Dashboard snapshot/SSE와 최초 제출 응답의 실시간 experiment 객체에는 `timing`이 포함될 수 있습니다. 필드는 `estimatedFinishAt`(UTC), 음수가 아닌 `remainingSeconds`, `basis`(`scenario` 또는 `observed-runs`), `observedRuns`, `overdue`입니다. 진행 중인 반복 Run에는 `batchEstimatedFinishAt`, `batchRemainingSeconds`, `batchOverdue`도 포함됩니다(0·false인 선택 필드는 생략 가능). 대기 Run의 종료 시각에는 같은 배치의 선행 Run 시간이 포함됩니다. 완료·실패·취소된 Run이나 시간 정보가 부족한 경우 `timing`을 생략하며 결과 manifest에 저장하지 않습니다. 계산 방식과 불확실성은 [예상 종료 시각](scenario-library.kr.md#예상-종료-시각)을 참고하십시오.
+
 중지 endpoint는 cleanup 완료 전, 취소 요청을 접수하면 `202`를 반환합니다. `/api/v1/experiments` 또는 snapshot에서 최종 상태를 확인하십시오. 취소 handle이 더 이상 없는 run은 `404`입니다. SSE는 최초 `event: snapshot`, 상태 변경을 최대 초당 한 번으로 합친 전체 snapshot(클라이언트 간 인코딩 공유), 이벤트가 없어도 15초마다 전체 snapshot를 보내며 event ID 기반 replay는 제공하지 않습니다. `/api/v1/events`는 현재 Controller 상태에서 가장 최근 event 최대 300개를 포함합니다.
 
-저장소 루트에서 실행하는 예시입니다. `control-node:8080`은 `sh scripts/swarm.sh access`가 표시한 Controller 주소로 바꾸고, `sh scripts/swarm.sh credentials`가 표시한 토큰을 `KPL_API_TOKEN`으로 export하십시오.
+저장소 루트에서 실행합니다. 호스트는 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [인증](#인증) 절차로 `KPL_COOKIE_JAR`를 생성하십시오.
 
 ```bash
 curl -X POST http://control-node:8080/api/v1/experiments \
   -H 'Content-Type: application/yaml' \
-  -H "Authorization: Bearer ${KPL_API_TOKEN:?Set KPL_API_TOKEN}" \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
   --data-binary @examples/smoke.yaml
 ```
 
@@ -73,11 +78,11 @@ typed 대역폭 표본을 포함한 원시 이벤트는 `<data-dir>/runs/<run-id
 
 `DELETE /api/v1/results/{id}`는 삭제 성공 시 `204`, 결과가 없으면 `404`, 실행·배치가 활성 상태이거나 실제 `GET` 다운로드가 결과를 사용 중이면 `409`를 반환합니다. 직접 요청한 `HEAD` 크기 계산과 목록 조회는 다운로드 충돌로 처리하지 않습니다.
 
-`DELETE /api/v1/result-batches/{batchId}`는 설정된 bearer token과 정확한 배치 ID를 사용합니다. 파일을 삭제하기 전에 전체 구성원을 검사하며 실행·정리 중인 run이나 구성원의 ZIP 다운로드가 있으면 `409`를 반환합니다. 실패·취소 run을 포함한 모든 저장 구성원, 개별 분석, 별도 통합 평균을 제거합니다. 성공 시 `200`과 `{"deletedIds":["run-id", "..."]}`를 반환하며 그룹이 없으면 `404`입니다. 원본 없이 남은 통합 평균도 제거할 수 있습니다. 저장 장치 오류는 `500`이며 일부 삭제가 끝났을 수 있으므로 목록을 갱신하고 저장 오류를 해결한 뒤 재시도하십시오. 브라우저는 요청에 30초 제한 시간을 적용하며 그 이후에도 Controller에서 완료될 수 있습니다.
+`DELETE /api/v1/result-batches/{batchId}`는 로그인 세션과 정확한 배치 ID를 사용합니다. 파일을 삭제하기 전에 전체 구성원을 검사하며 실행·정리 중인 run이나 구성원의 ZIP 다운로드가 있으면 `409`를 반환합니다. 실패·취소 run을 포함한 모든 저장 구성원, 개별 분석, 별도 통합 평균을 제거합니다. 성공 시 `200`과 `{"deletedIds":["run-id", "..."]}`를 반환하며 그룹이 없으면 `404`입니다. 원본 없이 남은 통합 평균도 제거할 수 있습니다. 저장 장치 오류는 `500`이며 일부 삭제가 끝났을 수 있으므로 목록을 갱신하고 저장 오류를 해결한 뒤 재시도하십시오. 브라우저는 요청에 30초 제한 시간을 적용하며 그 이후에도 Controller에서 완료될 수 있습니다.
 
 ## 백그라운드 분석
 
-저장 실행 하나를 분석하려면 `POST /api/v1/analysis-jobs/{id}`로 접수하고 같은 경로의 `GET`으로 상태를 확인합니다. POST에는 설정된 Bearer 토큰이 필요하며 GET/HEAD 조회는 공개입니다. 접수된 대기·실행 작업은 `202`, 현재 버전의 완료 결과를 재사용하면 `200`입니다. Controller 전체에서 대기·실행 작업을 최대 32개 접수하고(가득 차면 `503`), 공유 분석 슬롯은 한 번에 하나씩 계산합니다. 클라이언트를 닫아도 접수된 작업은 취소되지 않습니다.
+저장 실행 하나를 분석하려면 `POST /api/v1/analysis-jobs/{id}`로 접수하고 같은 경로의 `GET`으로 상태를 확인합니다. POST와 GET/HEAD 모두 로그인 세션이 필요합니다. 접수된 대기·실행 작업은 `202`, 현재 버전의 완료 결과를 재사용하면 `200`입니다. Controller 전체에서 대기·실행 작업을 최대 32개 접수하고(가득 차면 `503`), 공유 분석 슬롯은 한 번에 하나씩 계산합니다. 클라이언트를 닫아도 접수된 작업은 취소되지 않습니다.
 
 상태 `state`는 `idle`, `queued`, `running`, `completed`, `failed`, `canceled`, `interrupted`입니다. `idle`은 해당 저장 실행에 요청한 분석이 없다는 뜻입니다. 실패·취소·중단 작업은 다시 접수할 수 있습니다. 재시작 후 복구한 미완료 기록은 `interrupted`이며 정상 종료 과정에서 이미 `canceled`를 저장했을 수도 있습니다. 별도 작업 취소 endpoint는 없습니다. 삭제 가능한 저장 결과를 지우면 분석 작업도 취소하고 분석 파일을 제거합니다.
 
@@ -164,9 +169,36 @@ ID 상세는 종류별 최대 8,192개 및 hex 합계 512KiB, 구독 목록은 �
 
 ## 인증
 
-`KPL_API_TOKEN`은 KPL 변경 API에 쓰는 공통 Bearer 토큰이며 Swarm join token, Docker 권한, Grafana 비밀번호와는 별개입니다. Controller와 모든 Agent에 같은 값을 설정하면 Agent가 Peer에도 전달합니다. Swarm stack에서 필수이며 사용자·역할별 권한 분리는 없습니다.
+Controller와 모든 Agent에 같은 `KPL_USER`·`KPL_PASSWORD`를 설정하며 시작 시 둘 다 필수입니다. 대시보드는 먼저 **Log in** 화면을 열고, 로그인 성공 시 임의의 서버 세션을 생성해 HttpOnly·SameSite=Strict 쿠키로 식별합니다. HTTPS에서는 Secure 쿠키를 사용하며 신뢰할 수 있는 reverse proxy의 `X-Forwarded-Proto: https`도 지원합니다. 세션은 12시간 뒤 만료되고 **Log out** 또는 Controller 재시작 시 무효화됩니다. 로그아웃·만료 시 해당 세션의 SSE 연결도 닫지만 실행 중 실험과 백그라운드 분석은 계속됩니다. 설정 계정 하나가 대시보드 전체 권한을 가집니다.
 
-대시보드의 **Run experiment → API token**에 같은 값을 입력하십시오. 이 창에서 실행·저장·갱신·삭제하면 해당 origin의 브라우저 `localStorage`에 저장하여 이후 변경 요청에 사용하며 자동 만료되지 않습니다. REST 요청에는 `Authorization: Bearer <token>`을 붙입니다. 상태·이벤트·SSE·metrics 등 GET 조회는 토큰 설정 후에도 공개입니다. 상태를 바꾸지 않는 `POST /api/v1/scenarios/validate`도 공개이며 해당 method와 정확한 path에만 적용됩니다. Controller는 HEAD도 인증 검사에서 제외하고 Agent와 Peer는 GET만 제외합니다. 토큰 자체가 HTTP 전송을 암호화하지는 않습니다.
+대시보드/API 조회·변경, SSE, 시나리오 검증, 분석, 다운로드는 모두 로그인 세션이 필요합니다. 미인증 API는 `401`, 대시보드는 `/login` 리다이렉트를 반환합니다. 세션을 사용하는 변경 요청은 `X-KPL-Request: dashboard` 헤더도 필요하며 다른 origin의 요청은 거부합니다. UI는 이 헤더를 자동으로 넣으므로 추가 토큰 입력이 없고 비밀번호·세션 쿠키를 localStorage에 저장하지 않습니다. 로그인은 JSON `{user, password}`만 받으며 잘못된 계정은 `401`, 같은 접속 IP에서 5분 동안 10회 실패한 이후에는 `429`를 반환합니다. 세션과 실패 기록은 각각 최대 1,024개입니다.
+
+로그인 리소스, health/시각 endpoint, `/metrics`, 두 Prometheus target-discovery endpoint만 공개로 유지합니다. 내부 Agent 등록·heartbeat·이벤트와 Peer bootstrap·discovery는 계정 설정에서 용도를 분리해 자동 생성한 서비스 키를 사용합니다. Peer에는 로그인 비밀번호 대신 이 키만 전달하며, 키로 대시보드 결과 API에 접근하거나 실험을 시작할 수 없습니다. `KPL_API_TOKEN`과 `--token` CLI 옵션은 폐기했습니다. 자격 증명 변경 시 이전 키를 쓰는 진행 중 실험·잔존 Peer를 정리한 뒤 Controller와 Agent를 함께 재배포하십시오. Grafana 로그인은 별도입니다.
+
+REST 클라이언트는 아래 주소를 `access` 출력으로 바꾸고 한 번 로그인합니다. 비공개 쿠키 파일을 위 예제들에서 재사용하십시오.
+
+```bash
+KPL_URL=http://control-node:8080
+KPL_COOKIE_JAR=$(mktemp)
+read -r -p 'Username: ' KPL_USER
+read -r -s -p 'Password: ' KPL_PASSWORD; printf '\n'
+export KPL_USER KPL_PASSWORD
+python3 -c 'import json,os; print(json.dumps({"user":os.environ["KPL_USER"],"password":os.environ["KPL_PASSWORD"]}))' |
+  curl --fail-with-body -c "$KPL_COOKIE_JAR" \
+    -H 'Content-Type: application/json' --data-binary @- "$KPL_URL/api/v1/auth/login"
+unset KPL_PASSWORD
+curl --fail-with-body -b "$KPL_COOKIE_JAR" "$KPL_URL/api/v1/snapshot"
+```
+
+요청을 마친 뒤 로그아웃하고 쿠키 파일을 삭제합니다.
+
+```bash
+curl --fail-with-body -b "$KPL_COOKIE_JAR" -H 'X-KPL-Request: dashboard' \
+  -X POST "$KPL_URL/api/v1/auth/logout"
+rm -f "$KPL_COOKIE_JAR"
+```
+
+HTTP 자체는 자격 증명과 쿠키를 암호화하지 않습니다. HTTPS 또는 신뢰 관리망을 사용하고 HTTPS proxy는 forwarded protocol 헤더를 덮어써야 합니다.
 
 시나리오의 같은 네 가지 job counter가 `/api/v1/snapshot`과 SSE snapshot에도 포함됩니다. 대시보드는 각 run에 이를 표시하므로 Controller 로그를 열지 않아도 실행 중, 성공, 실패, 취소된 background 작업 수를 확인할 수 있습니다.
 

@@ -7,7 +7,8 @@ services:
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     command: [controller, --listen, ':8080', --data-dir, /var/lib/kpl/data]
     environment:
-      KPL_API_TOKEN: "${KPL_API_TOKEN:?Set KPL_API_TOKEN}"
+      KPL_USER: "${KPL_USER:?Set KPL_USER}"
+      KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with scripts/swarm.sh}"
       PROMETHEUS_PORT: "${PROMETHEUS_PORT:-9090}"
       GRAFANA_PORT: "${GRAFANA_PORT:-3000}"
@@ -34,7 +35,8 @@ services:
     user: '0:0'
     entrypoint: [sh, /usr/local/bin/kpl-swarm-agent.sh]
     environment:
-      KPL_API_TOKEN: "${KPL_API_TOKEN:?Set KPL_API_TOKEN}"
+      KPL_USER: "${KPL_USER:?Set KPL_USER}"
+      KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_SWARM_TASK_NAME: '{{.Task.Name}}'
       KPL_SWARM_SERVICE_NAME: '{{.Service.Name}}'
       KPL_SWARM_NODE_ID: '{{.Node.ID}}'
@@ -93,12 +95,12 @@ services:
       - |
         # Existing volumes retain the original admin account (ID 1).
         # Apply the configured password before each server start.
-        if [ -s "${GF_PATHS_DATA}/grafana.db" ]; then
-          : "${GF_SECURITY_ADMIN_PASSWORD:?Grafana administrator password is required}"
-          printf '%s\n' "${GF_SECURITY_ADMIN_PASSWORD}" |
-            grafana cli --homepath "${GF_PATHS_HOME}" \
-              --config "${GF_PATHS_CONFIG}" \
-              --configOverrides "cfg:default.paths.data=${GF_PATHS_DATA}" \
+        if [ -s "$${GF_PATHS_DATA}/grafana.db" ]; then
+          : "$${GF_SECURITY_ADMIN_PASSWORD:?Grafana administrator password is required}"
+          printf '%s\n' "$${GF_SECURITY_ADMIN_PASSWORD}" |
+            grafana cli --homepath "$${GF_PATHS_HOME}" \
+              --config "$${GF_PATHS_CONFIG}" \
+              --configOverrides "cfg:default.paths.data=$${GF_PATHS_DATA}" \
               admin reset-admin-password --user-id 1 --password-from-stdin
         fi
         exec /run.sh

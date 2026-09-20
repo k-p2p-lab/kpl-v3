@@ -1,6 +1,6 @@
 #!/bin/sh
 # Trusted configuration helpers, sourced by swarm.sh. Configuration is never sourced.
-swarm_config_keys='KPL_STACK_NAME KPL_CONTROL_NODE_ID KPL_PEER_NETWORK KPL_PEER_SUBNET KPL_IMAGE KPL_AGENT_CAPACITY KPL_AGENT_METRICS_PORT KPL_API_TOKEN GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD KPL_HTTP_PORT PROMETHEUS_PORT GRAFANA_PORT KPL_MIN_AGENTS KPL_DOCKER_TIMEOUT KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_IMAGE_PULL_TIMEOUT KPL_CONTROLLER_STOP_TIMEOUT KPL_AGENT_STOP_TIMEOUT'
+swarm_config_keys='KPL_STACK_NAME KPL_CONTROL_NODE_ID KPL_PEER_NETWORK KPL_PEER_SUBNET KPL_IMAGE KPL_AGENT_CAPACITY KPL_AGENT_METRICS_PORT KPL_USER KPL_PASSWORD GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD KPL_HTTP_PORT PROMETHEUS_PORT GRAFANA_PORT KPL_MIN_AGENTS KPL_DOCKER_TIMEOUT KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_IMAGE_PULL_TIMEOUT KPL_CONTROLLER_STOP_TIMEOUT KPL_AGENT_STOP_TIMEOUT'
 
 swarm_config_key() {
     case "$1" in ''|*[!A-Z0-9_]*) return 1 ;; esac
@@ -19,6 +19,7 @@ swarm_load_config() {
     [ "$2" != yes ] || [ -f "$1" ] || fail "Config not found: $1"
     [ -f "$1" ] || return 0
     sc_line_number=0
+    sc_legacy_token=no
     sc_cr=$(printf '\r')
     while IFS= read -r sc_line || [ -n "$sc_line" ]; do
         sc_line_number=$((sc_line_number + 1))
@@ -26,6 +27,8 @@ swarm_load_config() {
         case "$sc_line" in ''|'#'*) continue ;; esac
         case "$sc_line" in *=*) sc_key=${sc_line%%=*}; sc_value=${sc_line#*=} ;;
             *) fail "Invalid config entry at line $sc_line_number." ;; esac
+        # Old files can be rewritten by configure; the retired token is never used.
+        if [ "$sc_key" = KPL_API_TOKEN ]; then sc_legacy_token=yes; continue; fi
         swarm_config_key "$sc_key" || fail "Unsupported config key at line $sc_line_number."
         case "$sc_value" in \"*\") sc_value=${sc_value#\"}; sc_value=${sc_value%\"} ;;
             \'*\') sc_value=${sc_value#\'}; sc_value=${sc_value%\'} ;; esac
@@ -84,7 +87,13 @@ swarm_validate_setting() {
                 *) [ -n "$sc_digest" ] || fail 'KPL_IMAGE requires an explicit tag or sha256 digest.' ;;
             esac
             case "$sc_image" in ''|-*|/*|*/|*//*|*://*|*[!a-zA-Z0-9._:/-]*) fail 'KPL_IMAGE has an invalid repository reference.' ;; esac ;;
-        KPL_API_TOKEN|GRAFANA_ADMIN_USER|GRAFANA_ADMIN_PASSWORD)
+        KPL_USER)
+            case "$2" in ''|[[:space:]]*|*[[:space:]]) fail 'KPL_USER must not be blank or have surrounding whitespace.' ;; esac
+            [ "${#2}" -le 256 ] || fail 'KPL_USER cannot exceed 256 characters.' ;;
+        KPL_PASSWORD)
+            [ -n "$2" ] || fail 'KPL_PASSWORD cannot be empty.'
+            [ "${#2}" -le 4096 ] || fail 'KPL_PASSWORD cannot exceed 4096 characters.' ;;
+        GRAFANA_ADMIN_USER|GRAFANA_ADMIN_PASSWORD)
             [ -n "$2" ] || fail "$1 cannot be empty." ;;
     esac
 }
@@ -110,6 +119,7 @@ swarm_config_defaults() {
     export KPL_STACK_NAME=${KPL_STACK_NAME:-kpl}
     export KPL_PEER_NETWORK=${KPL_PEER_NETWORK:-$KPL_STACK_NAME-peers}
     export KPL_AGENT_CAPACITY=${KPL_AGENT_CAPACITY:-20} KPL_MIN_AGENTS=${KPL_MIN_AGENTS:-1}
+    export KPL_USER=${KPL_USER:-admin}
     export GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
     export KPL_HTTP_PORT=${KPL_HTTP_PORT:-8080} KPL_AGENT_METRICS_PORT=${KPL_AGENT_METRICS_PORT:-9091} PROMETHEUS_PORT=${PROMETHEUS_PORT:-9090} GRAFANA_PORT=${GRAFANA_PORT:-3000}
     export KPL_DOCKER_TIMEOUT=${KPL_DOCKER_TIMEOUT:-60}
@@ -171,11 +181,6 @@ swarm_config_command() (
             KPL_CONTROL_NODE_ID=$(timeout -s TERM -k 5 "$KPL_DOCKER_TIMEOUT" docker info --format '{{.Swarm.NodeID}}') || fail 'Cannot identify the current Swarm manager.'
             export KPL_CONTROL_NODE_ID
         fi
-        if [ -z "${KPL_API_TOKEN:-}" ]; then
-            KPL_API_TOKEN=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-            [ "${#KPL_API_TOKEN}" -eq 64 ] || fail 'Could not generate the API token.'
-            export KPL_API_TOKEN
-        fi
         if [ -z "${GRAFANA_ADMIN_PASSWORD:-}" ]; then
             GRAFANA_ADMIN_PASSWORD=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
             [ "${#GRAFANA_ADMIN_PASSWORD}" -eq 64 ] || fail 'Could not generate the Grafana password.'
@@ -186,20 +191,25 @@ swarm_config_command() (
     for sc_key in $swarm_config_keys; do
         if swarm_setting_value "$sc_key"; then swarm_validate_setting "$sc_key" "$sc_value"; fi
     done
+    if { [ "$sc_command" = init ] || [ "$sc_command" = configure ]; } && [ -z "${KPL_PASSWORD:-}" ]; then
+        KPL_PASSWORD=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+        [ "${#KPL_PASSWORD}" -eq 64 ] || fail 'Could not generate the dashboard password.'
+        export KPL_PASSWORD
+    fi
     case "$sc_command" in
         config)
             printf 'Effective configuration (environment overrides %s):\n' "$env_file"
             for sc_key in $swarm_config_keys; do
                 swarm_setting_value "$sc_key" || continue
-                case "$sc_key" in KPL_API_TOKEN|GRAFANA_ADMIN_PASSWORD) sc_value='[redacted]' ;; esac
+                case "$sc_key" in KPL_PASSWORD|GRAFANA_ADMIN_PASSWORD) sc_value='[redacted]' ;; esac
                 printf '%s=%s\n' "$sc_key" "$sc_value"
             done
             exit 0 ;;
         credentials)
-            : "${KPL_API_TOKEN:?API token is not configured}" "${GRAFANA_ADMIN_PASSWORD:?Grafana password is not configured}"
+            : "${KPL_PASSWORD:?Dashboard password is not configured}" "${GRAFANA_ADMIN_PASSWORD:?Grafana password is not configured}"
             printf 'Credentials from the effective configuration; keep this output private.\n'
-            printf 'KPL_API_TOKEN=%s\nGRAFANA_ADMIN_USER=%s\nGRAFANA_ADMIN_PASSWORD=%s\n' "$KPL_API_TOKEN" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD"
-            printf 'An existing Grafana data volume retains its administrator password after configuration changes.\n'
+            printf 'KPL_USER=%s\nKPL_PASSWORD=%s\nGRAFANA_ADMIN_USER=%s\nGRAFANA_ADMIN_PASSWORD=%s\n' "$KPL_USER" "$KPL_PASSWORD" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD"
+            printf 'Grafana retains its existing username and synchronizes the original administrator password on startup.\n'
             exit 0 ;;
     esac
     # Stage beside the destination so rename is atomic and stays on one filesystem.
@@ -224,6 +234,9 @@ swarm_config_command() (
         [ ! -L "$env_file" ] || fail 'Config became a symlink; refusing to replace it.'
         mv -f -- "$sc_stage/config" "$env_file"
         printf 'Updated %s (mode 0600); existing credentials are preserved unless explicitly changed.\n' "$env_file"
+        if [ "$sc_legacy_token" = yes ]; then
+            printf 'Migrated KPL_API_TOKEN to dashboard login settings; use credentials to view KPL_USER and KPL_PASSWORD.\n'
+        fi
         printf 'Exported environment variables still override saved settings. Run deploy to apply changes to services.\n'
     fi
 )

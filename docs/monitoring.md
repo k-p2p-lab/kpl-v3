@@ -17,7 +17,7 @@ The local SQLite database uses WAL mode. Both the database and WAL files are ret
 | Prometheus queries and target status | http://control-node:9090 |
 | Controller metrics endpoint | http://control-node:8080/metrics |
 
-The Swarm stack disables anonymous Grafana access and requires `GRAFANA_ADMIN_PASSWORD`. Its setup helper stores credentials in the manager's configuration; `sh scripts/swarm.sh credentials` prints the configured login. Changing environment variables alone does not update the password in an existing Grafana data volume.
+The Swarm stack disables anonymous Grafana access and requires `GRAFANA_ADMIN_PASSWORD`. Its setup helper stores credentials in the manager's configuration; `sh scripts/swarm.sh credentials` prints the configured login. On startup, this stack synchronizes the original Grafana administrator password to the configured value while preserving the existing username and data.
 
 Swarm publishes the Prometheus and Grafana ports on the control node. It also publishes each Agent's dedicated metrics listener on its own node at `KPL_AGENT_METRICS_PORT` (default `9091`). Use `scripts/swarm.sh configure` to set `PROMETHEUS_PORT`, `GRAFANA_PORT`, or the Agent metrics port, then redeploy to apply the changes.
 
@@ -83,17 +83,17 @@ The first HEAD after Controller startup or a source/state change must read the c
 
 After a restart, a saved run that still says `running` or `queued` is displayed as `interrupted`; its original metadata is preserved in the ZIP. This is a display status, not evidence that its Peers have stopped. Saved results do not restore live experiment state, resume execution, or replay live counters. ZIP metrics are rebuilt from the retained log. An unreadable metadata file is displayed as `unreadable`; inspect the Controller logs and stored files before retrying.
 
-**Saved results → Delete** permanently deletes the selected run's scenario, metadata, events, and live metric index after confirmation. Running/queued experiments, members of an active batch, and results being downloaded are protected. The deletion API is `DELETE /api/v1/results/{id}` with the configured bearer token. It does not stop Peers; previously scraped Prometheus/Grafana history remains. Deletion markers prevent late telemetry from recreating a deleted result; preserve them with Controller data in backups and migrations. Reconstructing ZIP metrics uses memory proportional to distinct event IDs and message/receiver pairs; the raw file copy itself is streamed. See the [REST API guide](api.md) for status codes and download headers.
+**Saved results → Delete** permanently deletes the selected run's scenario, metadata, events, and live metric index after confirmation. Running/queued experiments, members of an active batch, and results being downloaded are protected. The deletion API is `DELETE /api/v1/results/{id}` with the login session. It does not stop Peers; previously scraped Prometheus/Grafana history remains. Deletion markers prevent late telemetry from recreating a deleted result; preserve them with Controller data in backups and migrations. Reconstructing ZIP metrics uses memory proportional to distinct event IDs and message/receiver pairs; the raw file copy itself is streamed. See the [REST API guide](api.md) for status codes and download headers.
 
 Explicit ZIP size requests (`HEAD`) and list inspections do not block deletion. Actual ZIP downloads (`GET`) protect their captured result until the request finishes. The delete request has a 30-second browser timeout; on timeout the Controller may still finish, so refresh or retry the same result. A slow follow-up list refresh does not keep the dialog controls disabled.
 
 The series header's **Delete group** confirms the saved-run count and deletes the entire batch through `DELETE /api/v1/result-batches/{batchId}`. Unlike individual-source deletion, this also removes the separate `batch-analyses/{batchId}` mean files and cancels pending analyses. All members are checked for activity/downloads before deletion starts. A storage error can leave partial progress; refresh and retry after resolving the error. Existing Prometheus/Grafana history remains.
 
-The existing public GET policy also applies to the saved-result list and downloads. API clients can use:
+Saved-result lists and downloads require login. After [API login](api.md#authentication), reuse the cookie jar:
 
 ```bash
-curl --fail http://control-node:8080/api/v1/results
-curl --fail --output run-results.zip \
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" http://control-node:8080/api/v1/results
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" --output run-results.zip \
   http://control-node:8080/api/v1/experiments/RUN_ID/download
 ```
 

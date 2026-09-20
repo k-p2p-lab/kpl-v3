@@ -17,7 +17,7 @@ sudo sh scripts/swarm.sh credentials
 sudo sh scripts/swarm.sh scenario examples/swarm-churn-publish.yaml
 ```
 
-`access`의 Controller URL을 여십시오. **Run experiment**에서 **YAML scenario** 전체를 출력된 내용으로 교체하고, `credentials`의 실제 배포된 API 토큰을 입력한 뒤 **Run**을 누릅니다. `scenario`는 YAML만 출력하며 웹 동작이 실험을 시작합니다. 웹 폼의 기본값과 helper의 기본 `scenario` 출력은 다른 예제입니다.
+`access`의 Controller URL을 여십시오. **Run experiment**에서 **YAML scenario** 전체를 출력된 내용으로 교체하고, 대시보드에 로그인한 상태에서 **Run**을 누릅니다. `scenario`는 YAML만 출력하며 웹 동작이 실험을 시작합니다. 웹 폼의 기본값과 helper의 기본 `scenario` 출력은 다른 예제입니다.
 
 실행 창 **Run** 옆 **Runs**를 1~100으로 설정하면 전체 시나리오를 순차 반복하고 회차별 결과를 남깁니다. **Stop batch** 또는 회차 실패는 남은 반복을 취소하며 명시된 seed는 재사용합니다. [반복 실행과 지표 정의](experiment-metrics.kr.md)를 참고하십시오.
 

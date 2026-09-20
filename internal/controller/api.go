@@ -17,12 +17,16 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/k-p2p-lab/v3/internal/auth"
 	"github.com/k-p2p-lab/v3/internal/model"
 	"github.com/k-p2p-lab/v3/internal/webui"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func (s *Server) Run(ctx context.Context) error {
+	if err := auth.Validate(s.config.User, s.config.Password); err != nil {
+		return err
+	}
 	if s.config.MetricsURL != "" {
 		if _, _, _, ok := prometheusTargetFromURL(s.config.MetricsURL); !ok {
 			return errors.New("Controller metrics URL must be a non-loopback HTTP(S) URL ending in /metrics, without credentials, query or fragment")
@@ -109,7 +113,18 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (s *Server) Handler(ctx context.Context) http.Handler {
+	return s.withMiddleware(s.withAuthentication(s.routes(ctx)))
+}
+
+func (s *Server) routes(ctx context.Context) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/v1/auth/session", s.handleSession)
+	mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFileFS(w, r, webui.FS(), "login.html")
+	})
 	mux.Handle("/metrics", promhttp.HandlerFor(s.state.metrics.registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/ui-config", s.handleUIConfig)
@@ -146,7 +161,7 @@ func (s *Server) Handler(ctx context.Context) http.Handler {
 		s.handleStream(w, r.WithContext(streamCtx))
 	})
 	mux.Handle("/", http.FileServer(http.FS(webui.FS())))
-	return s.withMiddleware(mux)
+	return mux
 }
 
 type prometheusTargetGroup struct {
@@ -273,14 +288,6 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-		}
-		// Validation only parses the supplied body; it cannot save or run a scenario.
-		validationOnly := r.Method == http.MethodPost && r.URL.Path == "/api/v1/scenarios/validate"
-		if s.config.Token != "" && r.Method != http.MethodGet && r.Method != http.MethodHead && !validationOnly {
-			if r.Header.Get("Authorization") != "Bearer "+s.config.Token {
-				writeError(w, http.StatusUnauthorized, "valid bearer token required")
-				return
-			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -614,11 +621,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(snapshotInterval)
 	defer ticker.Stop()
 	lastSent := time.Time{}
+	pendingUpdate := time.Time{}
 	send := func() error {
 		if err := r.Context().Err(); err != nil {
 			return err
 		}
-		data, err := s.streamSnapshot()
+		data, generatedAt, err := s.streamSnapshotAt()
 		if err != nil {
 			return err
 		}
@@ -639,6 +647,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		lastSent = time.Now()
+		// A shared cached snapshot may predate this client's notification.
+		// Keep it pending until a newly generated snapshot covers the update.
+		if !generatedAt.Before(pendingUpdate) {
+			pendingUpdate = time.Time{}
+		}
 		return nil
 	}
 	if err := send(); err != nil {
@@ -649,13 +662,14 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			dirty := false
 			select {
 			case <-updates:
-				dirty = true
+				if pendingUpdate.IsZero() {
+					pendingUpdate = time.Now()
+				}
 			default:
 			}
-			if dirty || time.Since(lastSent) >= 15*time.Second {
+			if !pendingUpdate.IsZero() || time.Since(lastSent) >= 15*time.Second {
 				if err := send(); err != nil {
 					return
 				}
@@ -667,17 +681,25 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 const snapshotInterval = time.Second
 
 func (s *Server) streamSnapshot() ([]byte, error) {
+	data, _, err := s.streamSnapshotAt()
+	return data, err
+}
+
+func (s *Server) streamSnapshotAt() ([]byte, time.Time, error) {
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
 	if s.snapshotData != nil && time.Since(s.snapshotAt) < snapshotInterval {
-		return s.snapshotData, nil
+		return s.snapshotData, s.snapshotAt, nil
 	}
+	// Timestamp the beginning of the read, not the end of JSON encoding.
+	// Notifications during encoding must still be delivered by a later read.
+	generatedAt := time.Now()
 	data, err := json.Marshal(s.state.snapshot())
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	s.snapshotData, s.snapshotAt = data, time.Now()
-	return data, nil
+	s.snapshotData, s.snapshotAt = data, generatedAt
+	return data, generatedAt, nil
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {

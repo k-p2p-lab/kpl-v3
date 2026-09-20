@@ -124,7 +124,7 @@ func TestNetworkAPIUsesStatusSnapshotsBeyondRecentEvents(t *testing.T) {
 		s.state.events = append(s.state.events, model.TraceEvent{NodeID: "a", Type: "prune", Topic: "one", RemotePeerID: "peer-b"})
 	}
 	recorder := httptest.NewRecorder()
-	s.Handler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/network", nil))
+	s.apiTestHandler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/network", nil))
 	var network struct {
 		Edges []model.Edge `json:"edges"`
 	}

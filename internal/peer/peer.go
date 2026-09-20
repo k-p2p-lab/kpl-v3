@@ -472,6 +472,9 @@ func (s *Server) fetchBootstrap(ctx context.Context) ([]bootstrapNode, error) {
 		return nil, err
 	}
 	query := req.URL.Query()
+	if s.config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.config.Token)
+	}
 	query.Set("runId", s.config.Node.RunID)
 	req.URL.RawQuery = query.Encode()
 	client := &http.Client{Timeout: 5 * time.Second}

@@ -143,7 +143,7 @@ func TestStreamCoalescesFrequentTelemetryAndSharesEncoding(t *testing.T) {
 	if err != nil || &first[0] != &second[0] {
 		t.Fatal("tabs did not share encoded snapshot")
 	}
-	server := httptest.NewServer(s.Handler(context.Background()))
+	server := httptest.NewServer(s.apiTestHandler(context.Background()))
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 1250*time.Millisecond)
 	defer cancel()
@@ -194,7 +194,10 @@ func TestShutdownAcceptsLastEventsBeforeAgentDrainAcknowledgment(t *testing.T) {
 			return
 		}
 		body := `{"agentId":"agent","events":[{"eventId":"last","runId":"finished","nodeId":"peer","type":"measurement_terminated","timestamp":"2026-09-10T00:00:00Z"}]}`
-		response, err := http.Post(base+"/api/v1/events/batch", "application/json", bytes.NewBufferString(body))
+		request, _ := http.NewRequest(http.MethodPost, base+"/api/v1/events/batch", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+s.config.Token)
+		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			http.Error(w, err.Error(), 503)
 			return

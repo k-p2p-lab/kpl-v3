@@ -309,7 +309,7 @@ func TestMetricsEndpointEscapesLabelsAndIncludesRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	server.apiTestHandler(context.Background()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Header().Get("Content-Type"), "text/plain") {
 		t.Fatalf("scrape status = %d, content type = %q, body = %s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
@@ -325,7 +325,7 @@ func TestMetricsConcurrentScrapesAndIngestion(t *testing.T) {
 	if _, err := server.state.registerAgent(model.Agent{ID: "agent", URL: "http://agent", Capacity: 100}); err != nil {
 		t.Fatal(err)
 	}
-	handler := server.Handler(context.Background())
+	handler := server.apiTestHandler(context.Background())
 	var workers sync.WaitGroup
 	for worker := 0; worker < 4; worker++ {
 		workers.Add(1)

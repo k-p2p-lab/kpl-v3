@@ -52,7 +52,7 @@ Lower delay may improve P2 first-delivery rewards; P1 also depends on mesh age. 
 
 ## Run and collect
 
-Complete [Swarm deployment](swarm.md), validate, then paste the printed YAML into the Dashboard and start the run with the deployed API token:
+Complete [Swarm deployment](swarm.md), validate, then paste the printed YAML into the Dashboard and log in with the configured dashboard account and start the run:
 
 ```sh
 go run ./cmd/kpl validate --scenario examples/swarm-churn-prysm-block.yaml

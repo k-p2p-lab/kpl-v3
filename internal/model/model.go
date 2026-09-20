@@ -113,24 +113,25 @@ type PublishRequest struct {
 }
 
 type Experiment struct {
-	ID            string    `json:"id"`
-	BatchID       string    `json:"batchId,omitempty"`
-	Iteration     int       `json:"iteration,omitempty"`
-	Repetitions   int       `json:"repetitions,omitempty"`
-	Name          string    `json:"name"`
-	State         string    `json:"state"`
-	Seed          int64     `json:"seed"`
-	Phase         int       `json:"phase"`
-	TotalPhases   int       `json:"totalPhases"`
-	PhaseName     string    `json:"phaseName,omitempty"`
-	ActiveJobs    int       `json:"activeJobs"`
-	CompletedJobs int       `json:"completedJobs"`
-	FailedJobs    int       `json:"failedJobs"`
-	CanceledJobs  int       `json:"canceledJobs"`
-	StartedAt     time.Time `json:"startedAt"`
-	FinishedAt    time.Time `json:"finishedAt,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	ScenarioYAML  string    `json:"-"`
+	ID            string            `json:"id"`
+	BatchID       string            `json:"batchId,omitempty"`
+	Iteration     int               `json:"iteration,omitempty"`
+	Repetitions   int               `json:"repetitions,omitempty"`
+	Name          string            `json:"name"`
+	State         string            `json:"state"`
+	Seed          int64             `json:"seed"`
+	Phase         int               `json:"phase"`
+	TotalPhases   int               `json:"totalPhases"`
+	PhaseName     string            `json:"phaseName,omitempty"`
+	ActiveJobs    int               `json:"activeJobs"`
+	CompletedJobs int               `json:"completedJobs"`
+	FailedJobs    int               `json:"failedJobs"`
+	CanceledJobs  int               `json:"canceledJobs"`
+	StartedAt     time.Time         `json:"startedAt"`
+	FinishedAt    time.Time         `json:"finishedAt,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	ScenarioYAML  string            `json:"-"`
+	Timing        *ExperimentTiming `json:"timing,omitempty"`
 }
 
 type Edge struct {
@@ -219,4 +220,16 @@ type PeerProcessConfig struct {
 	APListen      string     `json:"apiListen"`
 	P2PListen     string     `json:"p2pListen"`
 	Token         string     `json:"token,omitempty"`
+}
+
+// ExperimentTiming is a live projection, not a persisted completion promise.
+type ExperimentTiming struct {
+	EstimatedFinishAt      time.Time  `json:"estimatedFinishAt"`
+	RemainingSeconds       float64    `json:"remainingSeconds"`
+	Basis                  string     `json:"basis"`
+	ObservedRuns           int        `json:"observedRuns"`
+	Overdue                bool       `json:"overdue"`
+	BatchEstimatedFinishAt *time.Time `json:"batchEstimatedFinishAt,omitempty"`
+	BatchRemainingSeconds  float64    `json:"batchRemainingSeconds,omitempty"`
+	BatchOverdue           bool       `json:"batchOverdue,omitempty"`
 }

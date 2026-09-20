@@ -2,12 +2,15 @@
 
 English | [Korean](api.kr.md)
 
-The Controller exposes the following public and operational endpoints. When `KPL_API_TOKEN` is configured, clients must send it as a Bearer token for mutation requests.
+The dashboard and operational APIs require a login session. See [authentication](#authentication) for public monitoring exceptions and internal service authentication.
 
 ## Controller endpoints
 
 | Method | Path | Description |
 |---|---|---|
+| `POST` | `/api/v1/auth/login` | Log in with JSON credentials and receive a session cookie |
+| `GET` | `/api/v1/auth/session` | Current username and session expiry |
+| `POST` | `/api/v1/auth/logout` | Revoke the current session and its SSE streams |
 | `GET` | `/metrics` | Prometheus exposition for Controller and experiment metrics |
 | `GET` | `/api/v1/health` | Controller health and current UTC time used for Peer clock sampling |
 | `GET` | `/api/v1/ui-config` | Published Prometheus and Grafana ports used by Dashboard navigation |
@@ -23,7 +26,7 @@ The Controller exposes the following public and operational endpoints. When `KPL
 | `GET` | `/api/v1/stream` | Real-time snapshot SSE stream, including `peerScores` |
 | `GET` | `/api/v1/experiments` | Experiment state plus `activeJobs`, `completedJobs`, `failedJobs`, and `canceledJobs` counters |
 | `GET` / `POST` | `/api/v1/scenarios` | List scenario summaries or save validated `{name, yaml}` |
-| `POST` | `/api/v1/scenarios/validate` | Validate raw YAML without saving or running; public, no token required |
+| `POST` | `/api/v1/scenarios/validate` | Validate raw YAML without saving or running; requires login |
 | `GET` / `PUT` / `DELETE` | `/api/v1/scenarios/{id}` | Load, update, or delete one saved scenario |
 | `GET` | `/api/v1/results` | Saved experiment results, including runs from previous Controller sessions |
 | `DELETE` | `/api/v1/results/{id}` | Delete an inactive saved result; active batches and downloads are protected |
@@ -46,20 +49,22 @@ The bootstrap response is an array of `{nodeId, peerId, addresses}` records (or 
 
 ## Submit, stop, and observe runs
 
-`POST /api/v1/scenarios/validate` accepts a raw YAML body (`Content-Type: application/yaml`), limited to 1 MiB. A valid scenario returns `200` with `{valid: true, name, phases}`. Empty input, YAML syntax errors, unknown fields, invalid settings, and multiple YAML documents return `400` with `{error: "…"}`; parser diagnostics retain line numbers when available. Bodies over the limit return `413`. This endpoint uses the same parser as save/run, creates no records or jobs, and does not require a token. Validation checks configuration, not Agent capacity or runtime connectivity.
+`POST /api/v1/scenarios/validate` accepts a raw YAML body (`Content-Type: application/yaml`), limited to 1 MiB. A valid scenario returns `200` with `{valid: true, name, phases}`. Empty input, YAML syntax errors, unknown fields, invalid settings, and multiple YAML documents return `400` with `{error: "…"}`; parser diagnostics retain line numbers when available. Bodies over the limit return `413`. This endpoint uses the same parser as save/run, creates no records or jobs, and reuses the login session. Validation checks configuration, not Agent capacity or runtime connectivity.
 
 `POST /api/v1/experiments` returns `202` with the first run's experiment object. Use `Content-Type: application/json` for `{scenario, repetitions}`; `scenario` is a YAML string and omitted `repetitions` defaults to `1`. Other content types are treated as raw YAML. Raw YAML and the decoded JSON `scenario` string are limited to 1 MiB. The JSON request envelope allows `6 * 1 MiB + 64 KiB` for escaping. An oversized request envelope returns `413`; a decoded YAML string over its limit or invalid scenario/repetition returns `400`.
 
 Repeated submissions reserve a separate run ID and result record for every iteration, sharing `batchId`, `iteration`, and `repetitions`. Runs execute sequentially; a failed or canceled iteration cancels the queued remainder. Stopping any member while its repetition batch is still active cancels that batch. For `repetitions > 1`, every iteration, including the last, fences and removes its Peers before finalization. Only a naturally successful single run may retain Peers when its YAML omits `stop-all`.
 
+Live experiment objects in `GET /api/v1/experiments`, dashboard snapshots/SSE, and the initial submission response may include `timing`: `estimatedFinishAt` (UTC), non-negative `remainingSeconds`, `basis` (`scenario` or `observed-runs`), `observedRuns`, and `overdue`. Active repeated runs also include `batchEstimatedFinishAt`, `batchRemainingSeconds`, and `batchOverdue` (optional zero/false fields). Queued finish times include earlier runs in the same batch. Completed/failed/canceled runs and estimates with insufficient timing information omit `timing`; it is not persisted in result manifests. See [estimated finish times](scenario-library.md#estimated-finish-times) for calculation and uncertainty.
+
 The stop endpoint returns `202` once cancellation is requested, before cleanup completes. Observe `/api/v1/experiments` or the snapshot until the final state is recorded. A run with no remaining cancellation handle returns `404`. SSE coalesces updates to at most one full snapshot per second, shares encoding across clients, and sends an initial `event: snapshot`, subsequent full snapshots on state updates, and full snapshots every 15 seconds even without events; it does not provide event-ID replay. `/api/v1/events` contains at most the 300 most recent events across live Controller state.
 
-From the repository root, replace `control-node:8080` with the Controller address printed by `sh scripts/swarm.sh access` and export the token printed by `sh scripts/swarm.sh credentials` as `KPL_API_TOKEN`:
+From the repository root, replace the host with the Controller address from `access` and first follow [authentication](#authentication) to create `KPL_COOKIE_JAR`:
 
 ```bash
 curl -X POST http://control-node:8080/api/v1/experiments \
   -H 'Content-Type: application/yaml' \
-  -H "Authorization: Bearer ${KPL_API_TOKEN:?Set KPL_API_TOKEN}" \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
   --data-binary @examples/smoke.yaml
 ```
 
@@ -73,11 +78,11 @@ Use **Download results** in the Dashboard to export a run as ZIP. **Saved result
 
 `DELETE /api/v1/results/{id}` returns `204` on deletion, `404` if the result is absent, and `409` while the run/batch is active or an actual `GET` download holds it. Explicit `HEAD` size calculations and list reads do not cause a download conflict.
 
-`DELETE /api/v1/result-batches/{batchId}` uses the configured bearer token and exact batch ID. It checks every member before deleting any files, returns `409` if a run is active/finalizing or a ZIP download holds a member, and removes all saved member runs (including failed/canceled runs), their individual analyses, and the separate batch mean. Success returns `200` with `{"deletedIds":["run-id", "..."]}`; an absent group returns `404`. An orphan batch mean can also be removed. Storage failures return `500` and may leave a partially deleted group; refresh the list and resolve the storage error before retrying. The browser uses a 30-second request timeout; the Controller may finish after that timeout.
+`DELETE /api/v1/result-batches/{batchId}` uses the login session and exact batch ID. It checks every member before deleting any files, returns `409` if a run is active/finalizing or a ZIP download holds a member, and removes all saved member runs (including failed/canceled runs), their individual analyses, and the separate batch mean. Success returns `200` with `{"deletedIds":["run-id", "..."]}`; an absent group returns `404`. An orphan batch mean can also be removed. Storage failures return `500` and may leave a partially deleted group; refresh the list and resolve the storage error before retrying. The browser uses a 30-second request timeout; the Controller may finish after that timeout.
 
 ## Background analysis
 
-Use `POST /api/v1/analysis-jobs/{id}` to analyze one saved run, then poll `GET` on that path. The POST requires the configured Bearer token; GET/HEAD reads are public. An admitted queued/running job returns `202`; reuse of a current completed artifact returns `200`. At most 32 queued/running jobs are admitted across the Controller (`503` when full), and the shared analysis slot permits one computation at a time. Closing a client does not cancel admitted work.
+Use `POST /api/v1/analysis-jobs/{id}` to analyze one saved run, then poll `GET` on that path. Both POST and GET/HEAD require a login session. An admitted queued/running job returns `202`; reuse of a current completed artifact returns `200`. At most 32 queued/running jobs are admitted across the Controller (`503` when full), and the shared analysis slot permits one computation at a time. Closing a client does not cancel admitted work.
 
 The status `state` is `idle`, `queued`, `running`, `completed`, `failed`, `canceled`, or `interrupted`. `idle` means the saved run has no requested analysis. Failed/canceled/interrupted work can be resubmitted. Persisted unfinished work recovered after restart becomes `interrupted`; orderly cancellation can already have saved `canceled`. There is no separate job-cancel endpoint. Deleting an eligible saved run cancels its job and removes its artifacts.
 
@@ -164,9 +169,36 @@ Detailed IDs are limited to 8,192 entries and 512KiB of hex per category; subscr
 
 ## Authentication
 
-`KPL_API_TOKEN` is one shared Bearer credential for mutating KPL APIs, not a Swarm join token, Docker permission, or Grafana password. Use the same value for the Controller and every Agent; Agents pass it to their Peers automatically. It is required by the Swarm stack. There are no per-user roles or scoped tokens.
+Set the same `KPL_USER` and `KPL_PASSWORD` on the Controller and every Agent. Both are required at startup. The dashboard first opens **Log in**; a successful login creates a random, server-side session identified by an HttpOnly, SameSite=Strict cookie. The cookie is Secure over HTTPS (including a trusted reverse proxy setting `X-Forwarded-Proto: https`). Sessions expire after 12 hours, are revoked by **Log out**, and do not survive a Controller restart. Logging out or expiry closes that session's SSE streams without stopping experiments or background analysis. There is one configured account with full dashboard permissions.
 
-Enter the value in the dashboard's **Run experiment → API token** field. Running, saving, updating, or deleting through that dialog saves it in that origin's browser `localStorage` for later mutation requests; it does not expire automatically. REST clients send `Authorization: Bearer <token>`. GET reads, including state, events, SSE, and metrics, stay public. The stateless `POST /api/v1/scenarios/validate` is also public; this exception applies only to that exact method and path. The Controller also exempts HEAD; Agents and Peers only exempt GET. The token does not encrypt HTTP traffic.
+All dashboard/API reads, writes, SSE, scenario validation, analysis and downloads require a session. Unauthenticated API requests return `401`; the dashboard redirects to `/login`. Session-authenticated mutations also require `X-KPL-Request: dashboard` and reject cross-origin requests. The UI adds this header automatically; it never asks for another token and stores neither the password nor the session cookie in localStorage. Login accepts only JSON `{user, password}`; wrong credentials return `401`, and ten failed attempts from one connection IP within five minutes cause `429`. Sessions and failure records are bounded to 1,024 entries each.
+
+Only the login assets, health/clock endpoint, `/metrics`, and the two Prometheus target-discovery endpoints remain public. Internal Agent registration/heartbeats/events and Peer bootstrap/discovery accept an automatically derived, domain-separated service key. It is generated from the account configuration and passed to Peers without exposing the login password to them. This key cannot access dashboard result APIs or start experiments. `KPL_API_TOKEN` and the `--token` CLI flag are retired; direct service clients must be updated together. Changing credentials requires redeploying Controller and Agents, with no active experiments or retained Peers using the old key. Grafana keeps its separate login.
+
+For REST clients, replace the address below with `access` output and log in once. The cookie jar is private and can be reused by the examples above:
+
+```bash
+KPL_URL=http://control-node:8080
+KPL_COOKIE_JAR=$(mktemp)
+read -r -p 'Username: ' KPL_USER
+read -r -s -p 'Password: ' KPL_PASSWORD; printf '\n'
+export KPL_USER KPL_PASSWORD
+python3 -c 'import json,os; print(json.dumps({"user":os.environ["KPL_USER"],"password":os.environ["KPL_PASSWORD"]}))' |
+  curl --fail-with-body -c "$KPL_COOKIE_JAR" \
+    -H 'Content-Type: application/json' --data-binary @- "$KPL_URL/api/v1/auth/login"
+unset KPL_PASSWORD
+curl --fail-with-body -b "$KPL_COOKIE_JAR" "$KPL_URL/api/v1/snapshot"
+```
+
+After completing your requests, log out and remove the cookie jar:
+
+```bash
+curl --fail-with-body -b "$KPL_COOKIE_JAR" -H 'X-KPL-Request: dashboard' \
+  -X POST "$KPL_URL/api/v1/auth/logout"
+rm -f "$KPL_COOKIE_JAR"
+```
+
+HTTP does not encrypt credentials or cookies. Use HTTPS or a trusted management network; an HTTPS proxy must overwrite the forwarded protocol header.
 
 The same four scenario job counters are present in `/api/v1/snapshot` and SSE snapshots. The dashboard displays them on each run, so active, successful, failed, and canceled background work is visible without inspecting Controller logs.
 

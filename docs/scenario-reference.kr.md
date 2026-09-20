@@ -147,12 +147,12 @@ v2 실험을 옮기실 때는 [재현 검토와 설정 대응표](v2-reproductio
 
 [`examples/network-conditions.yaml`](../examples/network-conditions.yaml)은 bootstrap 노드 두 개와 네트워크 조건이 적용된 worker 네 개를 생성하고, 초기화 대기와 메시지 발행 후 모든 노드를 종료합니다. 대시보드에서 실행하거나 다음과 같이 제출할 수 있습니다.
 
-`control-node:8080`은 `sh scripts/swarm.sh access`가 표시한 Controller 주소로 바꾸고, `sh scripts/swarm.sh credentials`가 표시한 토큰을 `KPL_API_TOKEN`으로 export하십시오.
+`control-node:8080`은 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [API 인증](api.kr.md#인증)으로 `KPL_COOKIE_JAR`를 생성하십시오.
 
 ```bash
 curl -X POST http://control-node:8080/api/v1/experiments \
   -H 'Content-Type: application/yaml' \
-  -H "Authorization: Bearer ${KPL_API_TOKEN:?Set KPL_API_TOKEN}" \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
   --data-binary @examples/network-conditions.yaml
 ```
 

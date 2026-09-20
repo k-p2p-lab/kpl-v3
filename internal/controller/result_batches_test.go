@@ -16,7 +16,7 @@ import (
 )
 
 func TestResultBatchDeletionRemovesOnlyItsRunsAndMean(t *testing.T) {
-	s := New(ServerConfig{DataDir: t.TempDir(), Token: "secret"}, nil)
+	s := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "secret"}, nil)
 	for i, state := range []string{"completed", "completed", "failed", "canceled"} {
 		batchFixture(t, s, "batch", "run-"+string(rune('a'+i)), state, i+1, 4, 1)
 	}
@@ -38,9 +38,9 @@ func TestResultBatchDeletionRemovesOnlyItsRunsAndMean(t *testing.T) {
 		t.Fatalf("unauthenticated deletion: %d", response.Code)
 	}
 	request := httptest.NewRequest(http.MethodDelete, "/api/v1/result-batches/batch", nil)
-	request.Header.Set("Authorization", "Bearer secret")
+	authenticateRequest(t, s, request)
 	response := httptest.NewRecorder()
-	s.Handler(context.Background()).ServeHTTP(response, request)
+	s.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	var body struct {
 		DeletedIDs []string `json:"deletedIds"`
 	}

@@ -52,7 +52,7 @@ Worker profile 사이에서는 지연만 다릅니다. Balanced 배치로 각 �
 
 ## 실행과 수집
 
-[Swarm 배포](swarm.kr.md)를 마친 뒤 아래 명령으로 검증하고, 출력한 YAML을 Dashboard에 붙여 넣어 배포된 API token으로 실행합니다.
+[Swarm 배포](swarm.kr.md)를 마친 뒤 아래 명령으로 검증하고, 출력한 YAML을 Dashboard에 붙여 넣어 설정된 대시보드 계정으로 로그인한 뒤 실행합니다.
 
 ```sh
 go run ./cmd/kpl validate --scenario examples/swarm-churn-prysm-block.yaml

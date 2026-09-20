@@ -112,6 +112,9 @@ func (s *Server) fetchDiscoveryPeers(ctx context.Context, topic string) ([]boots
 		return nil, err
 	}
 	query := req.URL.Query()
+	if s.config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.config.Token)
+	}
 	query.Set("runId", s.config.Node.RunID)
 	query.Set("topic", topic)
 	query.Set("requesterNodeId", s.config.Node.ID)

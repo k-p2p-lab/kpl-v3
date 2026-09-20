@@ -13,8 +13,8 @@ import (
 	"github.com/k-p2p-lab/v3/internal/scenario"
 )
 
-func TestScenarioValidationIsPublicAndHasNoSideEffects(t *testing.T) {
-	server := New(ServerConfig{DataDir: t.TempDir(), Token: "secret"}, nil)
+func TestScenarioValidationRequiresSessionAndHasNoSideEffects(t *testing.T) {
+	server := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "secret"}, nil)
 	// Exercise profiles, aliases, and explicit scoring through the actual API.
 	raw, err := os.ReadFile("../../examples/swarm-churn-prysm-block.yaml")
 	if err != nil {
@@ -26,8 +26,9 @@ func TestScenarioValidationIsPublicAndHasNoSideEffects(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/validate", strings.NewReader(string(raw)))
 	request.Header.Set("Content-Type", "application/yaml")
+	authenticateRequest(t, server, request)
 	response := httptest.NewRecorder()
-	server.Handler(context.Background()).ServeHTTP(response, request)
+	server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 	var result struct {
 		Valid  bool   `json:"valid"`
 		Name   string `json:"name"`
@@ -68,7 +69,7 @@ func TestScenarioValidationReturnsParserDiagnostics(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/scenarios/validate", strings.NewReader(test.yaml))
 			response := httptest.NewRecorder()
-			server.Handler(context.Background()).ServeHTTP(response, request)
+			server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 			var result struct {
 				Error string `json:"error"`
 			}
@@ -94,7 +95,7 @@ func TestScenarioValidationLimitsAndMethods(t *testing.T) {
 	} {
 		request := httptest.NewRequest(test.method, "/api/v1/scenarios/validate", strings.NewReader(test.body))
 		response := httptest.NewRecorder()
-		server.Handler(context.Background()).ServeHTTP(response, request)
+		server.apiTestHandler(context.Background()).ServeHTTP(response, request)
 		if response.Code != test.status {
 			t.Fatalf("%s (%d bytes) status=%d body=%s, want %d", test.method, len(test.body), response.Code, response.Body, test.status)
 		}

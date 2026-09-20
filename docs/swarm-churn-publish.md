@@ -17,7 +17,7 @@ sudo sh scripts/swarm.sh credentials
 sudo sh scripts/swarm.sh scenario examples/swarm-churn-publish.yaml
 ```
 
-Open the Controller URL from `access`. Choose **Run experiment**, replace the entire **YAML scenario** field with the scenario output, enter the deployed API token from `credentials`, and click **Run**. `scenario` only prints YAML; the web action starts the experiment. The default web form and the helper's default `scenario` output are different examples.
+Open the Controller URL from `access`. Choose **Run experiment**, replace the entire **YAML scenario** field with the scenario output, log in with the account from `credentials` if needed, and click **Run**. `scenario` only prints YAML; the web action starts the experiment. The default web form and the helper's default `scenario` output are different examples.
 
 Set **Runs** beside **Run** to repeat the entire scenario 1–100 times. Iterations run sequentially and get separate results; **Stop batch** or a failed iteration cancels the remainder. The explicit seed is reused. See [repetition and metric definitions](experiment-metrics.md).
 

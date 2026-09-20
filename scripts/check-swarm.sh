@@ -9,6 +9,9 @@ command -v docker >/dev/null 2>&1 || fail 'Docker CLI is required.'
 command -v awk >/dev/null 2>&1 || fail 'awk is required.'
 : "${KPL_CONTROL_NODE_ID:?Set KPL_CONTROL_NODE_ID to the exact control node ID}"
 : "${KPL_IMAGE:?Set KPL_IMAGE to a registry image with an explicit tag or sha256 digest}"
+: "${KPL_USER:?Set KPL_USER}" "${KPL_PASSWORD:?Set KPL_PASSWORD}"
+swarm_validate_setting KPL_USER "$KPL_USER"
+swarm_validate_setting KPL_PASSWORD "$KPL_PASSWORD"
 peer_network=${KPL_PEER_NETWORK:-kpl-swarm-peers}
 capacity=${KPL_AGENT_CAPACITY:-20}
 stack_name=${KPL_STACK_NAME:-kpl}

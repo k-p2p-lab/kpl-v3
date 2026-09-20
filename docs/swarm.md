@@ -43,7 +43,7 @@ sh scripts/swarm.sh login
 sh scripts/swarm.sh publish
 ```
 
-Replace the image reference with your registry and repository. `init` validates the supplied settings, selects the current manager as the control node by default, and creates a private `.env.swarm` without overwriting an existing file. It generates separate API and Grafana credentials. If configuration already exists, use `configure KEY=VALUE...` to change it. `config` shows effective settings with credentials redacted.
+Replace the image reference with your registry and repository. `init` validates the supplied settings, selects the current manager as the control node by default, and creates a private `.env.swarm` without overwriting an existing file. It generates separate dashboard and Grafana credentials. If configuration already exists, use `configure KEY=VALUE...` to change it. `config` shows effective settings with credentials redacted.
 
 `login` infers the registry from `KPL_IMAGE` and runs an interactive login under the same account as the helper. `publish` builds this repository and pushes the configured image tag. Skip `publish` when that image is already published. The default build targets the native platform; for mixed architectures, use a capable existing Buildx builder and publish every target architecture, including the manager:
 
@@ -68,7 +68,7 @@ sh scripts/swarm.sh credentials
 
 Open the Controller URL printed by `access`. The Controller, Prometheus, and Grafana ports are published on the configured **control node**, which may differ from the manager running the command. The same command lists a host-mode metrics URL for every selected Agent node. Opening those Agent links in a browser also requires direct access from the operator's trusted management network. From a machine that can reach the control node, wait until the Dashboard shows **at least 2 Online Agents**. In **Agent status**, consider only `online` rows: **Peers** displays occupied / capacity, and the sum of capacity minus occupied must be **at least 6**. The summary's **Available slots** can include offline Agents, so use the table for this check. A running Swarm task alone does not prove registration. If startup fails, inspect `sh scripts/swarm.sh logs agent` or `sh scripts/swarm.sh logs controller`.
 
-`credentials` explicitly prints the configured API token and Grafana login in plaintext. Use its API token in the Controller and its separate Grafana username/password for the Grafana URL from `access`. An existing Grafana volume retains its administrator password; changing the configuration alone does not reset that password.
+`credentials` explicitly prints dashboard `KPL_USER`/`KPL_PASSWORD` and the separate Grafana account. Sign in through the Controller's **Log in** screen. Grafana preserves its existing username and synchronizes its original administrator password at startup.
 
 ### 3. Run the distributed smoke experiment
 
@@ -77,7 +77,7 @@ Open the Controller URL printed by `access`. The Controller, Prometheus, and Gra
 sh scripts/swarm.sh scenario
 ```
 
-In the Dashboard, choose **Run experiment**, replace the entire **YAML scenario** field with the printed YAML, enter the API token, and click **Run**. The web form's default scenario is a different smoke test; it does not automatically load the Swarm example.
+In the Dashboard, choose **Run experiment**, replace the entire **YAML scenario** field with the printed YAML, and click **Run**. The web form's default scenario is a different smoke test; it does not automatically load the Swarm example.
 
 The example creates one boot Peer and five workers. Workers use 25ms delay, 2ms jitter, and 0.5% loss. After readiness and a 20-second settling period, it publishes fifty messages with `payloadSize: 4096`, waits one minute for collection, and runs `stop-all`. With equally sized, otherwise idle Agents, balanced placement spreads the Peers across them. Confirm Peers appear on different Agents and publish/deliver events are present. Readiness confirms process initialization, not GossipSub mesh convergence, and message delivery counts depend on actual conditions.
 
@@ -178,7 +178,7 @@ Makefile targets forward `NODES` unchanged, so `make swarm-add-node NODES='--wor
 | `sh scripts/swarm.sh nodes` | List current Swarm nodes |
 | `sh scripts/swarm.sh init [KEY=VALUE...]` | Create validated private configuration and credentials; never overwrite an existing file |
 | `sh scripts/swarm.sh configure KEY=VALUE...` | Save validated changes atomically, preserving other settings and credentials |
-| `sh scripts/swarm.sh config` / `credentials` | Show effective configuration with secrets redacted / explicitly show API and Grafana credentials |
+| `sh scripts/swarm.sh config` / `credentials` | Show effective configuration with secrets redacted / explicitly show dashboard and Grafana credentials |
 | `sh scripts/swarm.sh login` | Log in interactively to the registry inferred from the configured image |
 | `sh scripts/swarm.sh publish [--platforms CSV]` | Build and push the configured tag; optional platforms use the existing Buildx builder |
 | `sh scripts/swarm.sh check` | Rerun deployment preflight with loaded settings |
@@ -195,13 +195,20 @@ A full `remove` keeps Agents running while the Controller cancels active experim
 
 Removal stops if cleanup cannot be verified because a node is offline, a task failed or exited abnormally, or task history is unavailable. **Retained historical task failures also block automatic removal.** Even if a later task recovered, you must manually check for leftover Peers. A service that never started also requires manual verification if it has no task history. Stops, placement exclusions, and label changes already performed are not automatically rolled back; inspect the tasks and nodes named in the error before retrying. To run an Agent again, `add-node` also clears any remaining exclusion. Experiment, Prometheus, and Grafana **data volumes and the external Peer network are preserved**.
 
-## API Token
+## Dashboard login
 
-`KPL_API_TOKEN` is the shared Bearer token used for starting and stopping experiments, creating and deleting Peers, publishing, registration, heartbeats, and telemetry. It is separate from Swarm join tokens, Docker manager privileges, and the Grafana password. It is required for Swarm deployment and must have the same value on the Controller and every Agent. Agents automatically include it in Peer configuration, so no per-Peer setup is needed. There is no per-user or per-role permission model.
+`KPL_USER` and `KPL_PASSWORD` replace `KPL_API_TOKEN`. `init` defaults the username to `admin` and independently generates dashboard and Grafana passwords. `credentials` explicitly displays both logins; `config` redacts passwords. Sign in once at the Controller's **Log in** screen; running/stopping experiments, saving scenarios, deleting results, analysis and downloads then reuse the session. **Log out** ends it. Sessions last 12 hours and require another login after a Controller restart. No API-token fields remain.
 
-Use `sh scripts/swarm.sh credentials` to read the effective `KPL_API_TOKEN`, and enter the value applied by the deployment in **Run experiment → API token** on the Controller page. Configuration changes require deployment before the services use the new token. Clicking **Run** saves it in the browser's `localStorage` for that origin and uses it for subsequent Run and Stop requests. For REST requests, add the `Authorization: Bearer <token>` header. Tokens do not expire or rotate automatically.
+Migrate an existing token-based configuration without recreating volumes:
 
-Even with a token configured, the dashboard and GET endpoints for status, events, SSE, and metrics remain public. The Controller exempts GET/HEAD from authentication; Agents and Peers exempt GET. The token is stored in Swarm service environment variables and in each Peer's configuration JSON with permissions `0600`. It does not encrypt HTTP traffic.
+```sh
+sh scripts/swarm.sh configure KPL_USER=admin
+sh scripts/swarm.sh credentials
+```
+
+The migration removes the retired token entry, preserves unrelated settings, and generates `KPL_PASSWORD` only if it is missing. The retired token is not reused as a password. To choose credentials, use `configure KPL_USER=... KPL_PASSWORD=...`; environment overrides still take precedence at deployment. Publish the updated image and deploy Controller and Agents together after finishing experiments and cleaning up retained Peers. Their internal service key is generated automatically from the login settings; the browser never needs it.
+
+All dashboard data, SSE, validation, analysis and downloads require login. Health/clock, Prometheus metrics and target discovery remain public for monitoring. Internal registration/telemetry and Peer discovery use the service key; Peer config JSON retains mode `0600`. Grafana has a separate account. HTTP is not encrypted; use a trusted management network or HTTPS proxy. See [API authentication](api.md#authentication) for session-cookie curl examples.
 
 ## Migrate an Earlier v3 Stack
 
@@ -257,7 +264,7 @@ Prometheus asks the Controller's HTTP service-discovery endpoint for registered 
 
 Go process metrics describe only the Controller and Agent processes, not total Peer resource consumption. Use host monitoring or a separate container exporter to measure Peer load. Full node-status reports, Controller persistence and aggregation, central HTTP collection, and Docker CLI creation/deletion costs also limit scale. Records of terminated nodes and per-run Prometheus series are retained, so long churn experiments need measurements of both memory use and collection delays.
 
-This stack publishes ports 8080, 9090, and 3000 in host mode on the control node, plus `KPL_AGENT_METRICS_PORT` (default 9091) on every selected Agent node. The latter must be free on all those nodes; separate stacks sharing a node need distinct Agent metrics ports. It must also differ from `KPL_HTTP_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`, and Swarm TCP ports 2377 and 7946; the configuration helper and deployment preflight reject these conflicts. Permit it from the control node and, when direct browser access is needed, from the operators' trusted management network. Block untrusted sources because the metrics endpoint is read-only but unauthenticated. The Agent control API on 8090 and Peer ports remain internal and unpublished. Restrict the control-node ports with a management-network firewall or an authenticated reverse proxy. `KPL_API_TOKEN` protects only mutation APIs, not GET requests. Anonymous Grafana access is disabled in this stack. [Publishing ports in Swarm host mode](https://docs.docker.com/engine/swarm/services/#publish-ports)
+This stack publishes ports 8080, 9090, and 3000 in host mode on the control node, plus `KPL_AGENT_METRICS_PORT` (default 9091) on every selected Agent node. The latter must be free on all those nodes; separate stacks sharing a node need distinct Agent metrics ports. It must also differ from `KPL_HTTP_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`, and Swarm TCP ports 2377 and 7946; the configuration helper and deployment preflight reject these conflicts. Permit it from the control node and, when direct browser access is needed, from the operators' trusted management network. Block untrusted sources because the metrics endpoint is read-only but unauthenticated. The Agent control API on 8090 and Peer ports remain internal and unpublished. Restrict the control-node ports with a management-network firewall or an authenticated reverse proxy. Dashboard reads and mutations require login; monitoring endpoints remain public. Anonymous Grafana access is disabled in this stack. [Publishing ports in Swarm host mode](https://docs.docker.com/engine/swarm/services/#publish-ports)
 
 Monitoring configuration is distributed through Swarm configs, so the repository does not need to be copied to every server. Swarm configs are immutable. When configuration files change, give the config keys and their references in `stack.swarm.yaml` new versioned names to deploy new configs. Data volumes remain on the same control Node ID.
 

@@ -58,7 +58,7 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 
 `GET /api/v1/experiments`, Dashboard snapshot/SSE와 최초 제출 응답의 실시간 experiment 객체에는 `timing`이 포함될 수 있습니다. 필드는 `estimatedFinishAt`(UTC), 음수가 아닌 `remainingSeconds`, `basis`(`scenario` 또는 `observed-runs`), `observedRuns`, `overdue`입니다. 진행 중인 반복 Run에는 `batchEstimatedFinishAt`, `batchRemainingSeconds`, `batchOverdue`도 포함됩니다(0·false인 선택 필드는 생략 가능). 대기 Run의 종료 시각에는 같은 배치의 선행 Run 시간이 포함됩니다. 완료·실패·취소된 Run이나 시간 정보가 부족한 경우 `timing`을 생략하며 결과 manifest에 저장하지 않습니다. 계산 방식과 불확실성은 [예상 종료 시각](scenario-library.kr.md#예상-종료-시각)을 참고하십시오.
 
-중지 endpoint는 cleanup 완료 전, 취소 요청을 접수하면 `202`를 반환합니다. `/api/v1/experiments` 또는 snapshot에서 최종 상태를 확인하십시오. 취소 handle이 더 이상 없는 run은 `404`입니다. SSE는 최초 `event: snapshot`, 상태 변경을 최대 초당 한 번으로 합친 전체 snapshot(클라이언트 간 인코딩 공유), 이벤트가 없어도 15초마다 전체 snapshot를 보내며 event ID 기반 replay는 제공하지 않습니다. `/api/v1/events`는 현재 Controller 상태에서 가장 최근 event 최대 300개를 포함합니다.
+중지 endpoint는 cleanup 완료 전, 취소 요청을 접수하면 `202`와 JSON `{"runId":"run-id","status":"stopping"}`을 반환합니다. Dashboard는 snapshot에서 실행·대기 중인 구성원이 없음을 확인할 때까지 해당 실행 또는 배치의 버튼을 **Stopping…**으로 비활성화하며, 접수 응답만으로 버튼을 다시 활성화하지 않습니다. `/api/v1/experiments` 또는 snapshot에서 최종 상태를 확인하십시오. 취소 handle이 더 이상 없는 run은 `404`입니다. SSE는 최초 `event: snapshot`, 상태 변경을 최대 초당 한 번으로 합친 전체 snapshot(클라이언트 간 인코딩 공유), 이벤트가 없어도 15초마다 전체 snapshot를 보내며 event ID 기반 replay는 제공하지 않습니다. `/api/v1/events`는 현재 Controller 상태에서 가장 최근 event 최대 300개를 포함합니다.
 
 저장소 루트에서 실행합니다. 호스트는 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [인증](#인증) 절차로 `KPL_COOKIE_JAR`를 생성하십시오.
 

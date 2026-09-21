@@ -288,3 +288,43 @@ func TestExperimentJSONSubmissionRejectsInvalidUTF8BeforeDecode(t *testing.T) {
 		t.Fatal("invalid UTF-8 request reserved an experiment")
 	}
 }
+
+func TestStopAPIRespondsWithJSONAndCancelsSingleRunOrBatch(t *testing.T) {
+	for _, repetitions := range []int{1, 3} {
+		server := newLifecycleTestController(t)
+		first, err := server.StartScenarioRepeated(context.Background(), []byte("name: stop-response\nphases:\n  - action: wait\n    duration: 1h\n"), repetitions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := first.ID
+		if repetitions > 1 {
+			for _, run := range server.state.snapshot().Experiments {
+				if run.Iteration == repetitions {
+					id = run.ID
+				}
+			}
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/experiments/"+id+"/stop", nil)
+		authenticateRequest(t, server, request)
+		response := httptest.NewRecorder()
+		server.apiTestHandler(context.Background()).ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("stop response: status=%d type=%q body=%q", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+		var body struct {
+			RunID  string `json:"runId"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("Dashboard cannot parse accepted stop: %v", err)
+		}
+		if body.RunID != id || body.Status != "stopping" {
+			t.Fatalf("unexpected acknowledgement: %+v", body)
+		}
+		for _, run := range waitRepetitions(t, server) {
+			if run.State != "canceled" {
+				t.Fatalf("one stop did not cancel member: %+v", run)
+			}
+		}
+	}
+}

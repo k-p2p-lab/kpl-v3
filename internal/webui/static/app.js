@@ -534,6 +534,10 @@ function renderBatchEstimates(runs) {
 
 function renderRuns(runs) {
   runs = runs.filter((run) => !state.deletedResultIDs?.has(run.id));
+  const activeGroups = new Set(runs.filter(isPendingRun).map(run => run.batchId || run.id));
+  for (const key of state.pendingStops) {
+    if (!activeGroups.has(key)) state.pendingStops.delete(key);
+  }
   const runStates = JSON.stringify(runs.map((run) => [run.id, run.state]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
   if (state.runStates !== null && state.runStates !== runStates) {
     clearTimeout(state.resultsRefreshTimer);
@@ -566,6 +570,27 @@ function renderRuns(runs) {
 
 function isPendingRun(run) {
   return run.active || run.state === "running" || run.state === "queued";
+}
+
+async function requestRunStop(id) {
+  const runs = state.snapshot?.experiments || [];
+  const run = runs.find(item => item.id === id);
+  if (!run) return;
+  const key = run.batchId || run.id;
+  if (state.pendingStops.has(key) || !runs.some(item => (item.batchId || item.id) === key && isPendingRun(item))) return;
+  state.pendingStops.add(key);
+  renderRuns(runs);
+  try {
+    await api(`/api/v1/experiments/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    // Acceptance precedes job/container cleanup. Keep all batch controls
+    // disabled until an authoritative snapshot has no active members left.
+    showToast(run.repetitions > 1 ? "Batch stop requested. Remaining queued runs will be canceled." : "Stop requested. Cleaning up Peers…");
+  } catch (error) {
+    state.pendingStops.delete(key);
+    showToast(error.message);
+  } finally {
+    if (state.snapshot) renderRuns(state.snapshot.experiments || []);
+  }
 }
 
 function resultLocked(run) {
@@ -1761,22 +1786,7 @@ document.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("[data-stop-run]");
   if (!button || button.disabled) return;
-  const run = (state.snapshot?.experiments || []).find((item) => item.id === button.dataset.stopRun);
-  const key = run?.batchId || button.dataset.stopRun;
-  if (state.pendingStops.has(key)) return;
-  state.pendingStops.add(key);
-  button.disabled = true;
-  if (state.snapshot) renderRuns(state.snapshot.experiments || []);
-  try {
-    await api(`/api/v1/experiments/${encodeURIComponent(button.dataset.stopRun)}/stop`, { method: "POST" });
-    showToast("Stop requested. Remaining queued runs in this batch will be canceled.");
-  } catch (caught) {
-    showToast(caught.message);
-  } finally {
-    state.pendingStops.delete(key);
-    button.disabled = false;
-    if (state.snapshot) renderRuns(state.snapshot.experiments || []);
-  }
+  await requestRunStop(button.dataset.stopRun);
 });
 
 $("#confirmDeleteResult").addEventListener("click", confirmResultDeletion);

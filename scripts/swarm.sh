@@ -21,7 +21,7 @@ Usage: sh scripts/swarm.sh [--env-file PATH] COMMAND [NODE... | SELECTOR]
   status               Show services, Agent tasks and selected nodes
   add-node NODE... | SELECTOR     Enable one Agent per selected Linux node
   remove-node NODE... | SELECTOR  Stop Agents and wait for their Peer cleanup
-  remove               Stop Controller, then Agents, then remove stack services
+  remove               Delete stack services even when tasks or nodes are unhealthy
 Environment overrides the config file. NODE is a Swarm node ID or hostname.
 Init/configure accept literal KEY=VALUE arguments; quote values containing spaces.
 Use one selector without NODE arguments:
@@ -38,6 +38,7 @@ KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
 Log components: controller (default), agent, prometheus, grafana.
 Removal preserves experiment/monitoring volumes and the external Peer network.
+Full remove does not wait for clean task exits or verify standalone Peer cleanup.
 EOF
 }
 
@@ -125,9 +126,8 @@ docker_timeout=${KPL_DOCKER_TIMEOUT:-60}
 image_pull_timeout=${KPL_IMAGE_PULL_TIMEOUT:-300}
 image_build_timeout=${KPL_IMAGE_BUILD_TIMEOUT:-1800}
 image_push_timeout=${KPL_IMAGE_PUSH_TIMEOUT:-600}
-controller_timeout=${KPL_CONTROLLER_STOP_TIMEOUT:-660}
 agent_timeout=${KPL_AGENT_STOP_TIMEOUT:-240}
-for number in "$docker_timeout" "$image_pull_timeout" "$image_build_timeout" "$image_push_timeout" "$controller_timeout" "$agent_timeout" "$KPL_MIN_AGENTS"; do
+for number in "$docker_timeout" "$image_pull_timeout" "$image_build_timeout" "$image_push_timeout" "$agent_timeout" "$KPL_MIN_AGENTS"; do
     case "$number" in ''|0*|*[!0-9]*) fail 'Timeouts and KPL_MIN_AGENTS must be positive integers without leading zeros.' ;; esac
     [ "$number" -gt 0 ] 2>/dev/null || fail 'Integer is out of range.'
 done
@@ -545,32 +545,15 @@ case "$command_name" in
         printf 'Selected Agents stopped with clean exits. Other node labels were unchanged.\n'
         ;;
     remove)
-        if [ -z "$services" ]; then
-            printf 'Stack %s has no services; no changes made.\n' "$KPL_STACK_NAME"
-            exit 0
+        if [ -n "$services" ]; then
+            # Ownership was checked above. Delete the service definitions
+            # directly: failed tasks, missing history and offline workers must
+            # not block removal or leave Swarm scheduling replacements.
+            dock service rm $services || fail 'Service removal failed; inspect status and retry remove.'
         fi
-        controller_tasks=''; agent_tasks=''
-        if service_exists "${KPL_STACK_NAME}_controller"; then controller_tasks=$(capture_tasks "${KPL_STACK_NAME}_controller"); fi
-        if service_exists "${KPL_STACK_NAME}_agent"; then agent_tasks=$(capture_tasks "${KPL_STACK_NAME}_agent"); fi
-        nodes=$(selected_nodes)
-        # All task/node checks above finish before the first destructive action.
-        if service_exists "${KPL_STACK_NAME}_controller"; then
-            # Scaling to zero destroys the replicated slot and may immediately
-            # garbage-collect its shutdown evidence. Contradictory role
-            # constraints keep the slot, but prevent replacement on any node.
-            dock service update --detach=true --no-resolve-image --constraint-add 'node.role==manager' --constraint-add 'node.role==worker' "${KPL_STACK_NAME}_controller"
-            wait_tasks "$controller_tasks" "$controller_timeout"
-            remaining=$(capture_tasks "${KPL_STACK_NAME}_controller")
-            wait_tasks "$remaining" "$controller_timeout"
-        fi
-        if service_exists "${KPL_STACK_NAME}_agent"; then placement_exclusions add "$nodes"; fi
-        wait_tasks "$agent_tasks" "$agent_timeout"
-        if service_exists "${KPL_STACK_NAME}_agent"; then
-            remaining=$(capture_tasks "${KPL_STACK_NAME}_agent")
-            wait_tasks "$remaining" "$agent_timeout"
-        fi
-        for node in $nodes; do dock node update --label-rm "$agent_label" "$node"; done
-        dock stack rm "$KPL_STACK_NAME"
+        # Also remove stack-owned configs and monitoring networks. Repeat this
+        # on an empty stack so an interrupted removal can finish its cleanup.
+        dock stack rm "$KPL_STACK_NAME" || fail 'Stack resource removal failed; inspect status and retry remove.'
         deadline=$(( $(date +%s) + $docker_timeout ))
         while :; do
             remaining_services=$(dock service ls --quiet --filter "label=com.docker.stack.namespace=$KPL_STACK_NAME") || fail 'Cannot verify stack removal; Docker service lookup failed.'
@@ -578,6 +561,16 @@ case "$command_name" in
             [ "$(date +%s)" -lt "$deadline" ] || fail 'Stack removal is still pending; inspect status.'
             sleep 2
         done
-        printf 'Stack services removed after Controller/Agent clean exits. Data volumes and Peer network preserved.\n'
+        # Placement labels are best effort after deletion. Retry them even if
+        # a previous remove already deleted every service.
+        if nodes=$(selected_nodes); then
+            for node in $nodes; do
+                dock node update --label-rm "$agent_label" "$node" || printf 'KPL Swarm: Could not clear Agent label on %s; retry remove to clear remaining labels.\n' "$node" >&2
+            done
+        else
+            printf 'KPL Swarm: Could not list Agent labels; retry remove to clear remaining labels.\n' >&2
+        fi
+        printf 'Stack services removed. Data volumes and Peer network preserved.\n'
+        printf 'Service deletion does not verify final experiment logs or standalone Peer cleanup.\n'
         ;;
 esac

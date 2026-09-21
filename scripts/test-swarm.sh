@@ -75,7 +75,7 @@ case "$1 ${2:-}" in
         case "$*" in *"label=com.docker.stack.namespace=$stack"*) ;; *) die "$@" ;; esac
         if [ -f "$s/removed" ]; then
             if [ "${KPL_TEST_FINAL_LIST_FAIL:-0}" = 1 ]; then printf 'mock final service listing failed\n' >&2; exit 2; fi
-            exit 0
+            [ "${KPL_TEST_REMOVAL_PENDING:-0}" = 1 ] || exit 0
         fi
         [ "${KPL_TEST_EMPTY_STACK:-0}" = 0 ] || exit 0
         case "$*" in
@@ -147,8 +147,11 @@ case "$1 ${2:-}" in
                 case "$last" in taskA1) node=worker1 ;; taskA2) node=worker2 ;; *) node=${last#taskA-} ;; esac
                 container=container$node
                 if [ -f "$s/stopped-$node" ]; then
+                    if [ "${KPL_TEST_SLOW_STOP_INSPECT:-0}" = 1 ]; then sleep 4; fi
                     state=shutdown; pid=0
-                    if [ "${KPL_TEST_AGENT_STOP:-clean}" = failed ]; then state=failed; code=1; issue=error; fi
+                    case "${KPL_TEST_AGENT_STOP:-clean}" in
+                        failed|rejected|orphaned|remove) state=$KPL_TEST_AGENT_STOP; code=1; issue=error ;;
+                    esac
                 fi
                 # Swarm can reject an existing task when its placement label
                 # disappears before clean shutdown has been verified.
@@ -218,6 +221,7 @@ case "$1 ${2:-}" in
             [ -f "$s/unlabeled-$node" ] || printf '%s\n' "$node"
         done ;;
     'node update')
+        if [ "${KPL_TEST_NODE_UPDATE_FAIL:-}" = "$last" ]; then printf 'mock node label update failed\n' >&2; exit 2; fi
         case "$3 $4" in
             "--label-rm kpl.$stack.agent")
                 case "$last" in worker1) task=taskA1 ;; worker2) task=taskA2 ;; control1|manager2|unlabeled1) task=taskA-$last ;; *) die "$@" ;; esac
@@ -227,6 +231,12 @@ case "$1 ${2:-}" in
                 rm -f "$s/unlabeled-$last"; : > "$s/labeled-$last"; event "label-$last" ;;
             *) die "$@" ;;
         esac ;;
+    'service rm')
+        [ "$*" = 'service rm svccontroller svcagent svcprometheus svcgrafana' ] || die "$@"
+        if [ "${KPL_TEST_SERVICE_RM_FAIL:-0}" = 1 ]; then printf 'mock service removal failed\n' >&2; exit 2; fi
+        shift 2
+        for service do event "service-rm-$service"; done
+        : > "$s/removed" ;;
     'service update')
         [ "$3 $4" = '--detach=true --no-resolve-image' ] || die "$@"
         if [ "$last" = "${stack}_controller" ]; then
@@ -268,7 +278,9 @@ case "$1 ${2:-}" in
     'stack services') printf 'mock stack services\n' ;;
     'stack rm')
         [ "$3" = "$stack" ] || die "$@"
-        event stack-rm; : > "$s/removed" ;;
+        event stack-rm
+        if [ "${KPL_TEST_STACK_RM_FAIL:-0}" = 1 ]; then printf 'mock stack removal failed\n' >&2; exit 2; fi
+        : > "$s/removed" ;;
     *) die "$@" ;;
 esac
 MOCK_DOCKER
@@ -290,7 +302,7 @@ reset_case() {
     export KPL_DOCKER_TIMEOUT=3 KPL_CONTROLLER_STOP_TIMEOUT=3 KPL_AGENT_STOP_TIMEOUT=3
     export KPL_TEST_REPO_ROOT=$root
     unset KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
-    unset KPL_TEST_SLOW_STOP_INSPECT
+    unset KPL_TEST_SLOW_STOP_INSPECT KPL_TEST_SERVICE_RM_FAIL KPL_TEST_STACK_RM_FAIL KPL_TEST_REMOVAL_PENDING KPL_TEST_NODE_UPDATE_FAIL
     unset KPL_TEST_SELF_ID KPL_TEST_NODE_IDS KPL_TEST_LABEL_NODES KPL_TEST_NODE_LS_FAIL KPL_TEST_NODE_INSPECT_FAIL
     unset KPL_PEER_SUBNET KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_TEST_BUILD_FAIL KPL_TEST_PUSH_FAIL KPL_TEST_EXPECT_CONTEXT DOCKER_CONTEXT KPL_TEST_NETWORK_SUBNET KPL_TEST_CONTROL_ADDR KPL_TEST_WORKER1_ADDR KPL_TEST_WORKER2_ADDR KPL_HTTP_PORT KPL_AGENT_METRICS_PORT PROMETHEUS_PORT GRAFANA_PORT
 }
@@ -305,59 +317,119 @@ reject() {
 no_stack_removal() { ! grep -q '^stack-rm$' "$KPL_TEST_STATE/events"; }
 no_mutation() { [ ! -s "$KPL_TEST_STATE/events" ]; }
 
-reset_case
-run remove
-cat > "$scratch/expected" <<'EXPECTED'
-pause-controller
-clean-taskC
-exclude-worker1
-exclude-worker2
-clean-taskA1
-clean-taskA2
+# Full removal is scoped to verified services and never depends on task exits.
+no_shutdown_checks() {
+    ! grep -q '^service ps\|^inspect --type task\|^node inspect\|^service update' "$KPL_TEST_STATE/calls"
+}
+cat > "$scratch/expected-remove" <<'EXPECTED'
+service-rm-svccontroller
+service-rm-svcagent
+service-rm-svcprometheus
+service-rm-svcgrafana
+stack-rm
 unlabel-worker1
 unlabel-worker2
-stack-rm
 EXPECTED
-cmp "$scratch/expected" "$KPL_TEST_STATE/events"
-# The pending task is inspected by capture_tasks, but never waited on or treated
-# as evidence that the previous Controller exited. The clean-taskC event above
-# must occur before any Agent exclusion.
-[ "$(grep -c 'inspect --type task .* pendingC$' "$KPL_TEST_STATE/calls")" = 1 ]
+reset_case
+run remove
+cmp "$scratch/expected-remove" "$KPL_TEST_STATE/events"
+no_shutdown_checks
 grep -q 'Data volumes and Peer network preserved' "$KPL_TEST_STATE/output"
+grep -q 'does not verify final experiment logs or standalone Peer cleanup' "$KPL_TEST_STATE/output"
+# Repeated removal finishes without attempting to delete missing service IDs.
+run remove
+[ "$(grep -c '^service rm ' "$KPL_TEST_STATE/calls")" = 1 ]
+[ "$(grep -c '^stack-rm$' "$KPL_TEST_STATE/events")" = 2 ]
+[ "$(grep -c '^unlabel-' "$KPL_TEST_STATE/events")" = 2 ]
 
-for pending_state in new allocated shutdown; do
+for task_state in failed rejected orphaned remove; do
     reset_case
-    export KPL_TEST_PENDING_STATE=$pending_state
+    export KPL_TEST_AGENT_STOP=$task_state KPL_TEST_CONTROLLER_STOP=nonzero KPL_TEST_OLD_FAILED=1
+    : > "$KPL_TEST_STATE/controller-stopped"
+    : > "$KPL_TEST_STATE/stopped-worker1"
+    : > "$KPL_TEST_STATE/stopped-worker2"
     run remove
-    cmp "$scratch/expected" "$KPL_TEST_STATE/events"
+    cmp "$scratch/expected-remove" "$KPL_TEST_STATE/events"
+    no_shutdown_checks
 done
 
-# A busy daemon cannot make one stop inspection consume the full CLI timeout
-# after only one second remains in the Controller stop budget.
-reset_case
-export KPL_DOCKER_TIMEOUT=30 KPL_CONTROLLER_STOP_TIMEOUT=1 KPL_TEST_SLOW_STOP_INSPECT=1
-reject remove
-no_stack_removal
-grep -q 'Cannot inspect task taskC' "$KPL_TEST_STATE/output"
-grep -q -- '-s TERM -k 5 1 docker inspect --type task .* taskC$' "$KPL_TEST_STATE/timeouts"
-if grep -q '^exclude-\|^unlabel-' "$KPL_TEST_STATE/events"; then exit 1; fi
+for fault in KPL_TEST_DOWN_NODE=worker2 KPL_TEST_EMPTY_HISTORY=1 KPL_TEST_NODE_INSPECT_FAIL=worker1; do
+    reset_case
+    export "$fault"
+    run remove
+    cmp "$scratch/expected-remove" "$KPL_TEST_STATE/events"
+    no_shutdown_checks
+done
 
-# Only never-assigned new/pending/allocated/shutdown tasks are safe to skip. An unknown
-# process assignment or state must prevent proceeding to Agent shutdown.
+# Labels are cleaned even when services are already gone; this also allows
+# recovery from an interrupted stack removal.
 reset_case
-export KPL_TEST_PENDING_CONTAINER=unexpected-container
-reject remove
-no_stack_removal
-grep -q 'pendingC has no verifiable node/container assignment' "$KPL_TEST_STATE/output"
-if grep -q '^exclude-\|^unlabel-' "$KPL_TEST_STATE/events"; then exit 1; fi
+export KPL_TEST_EMPTY_STACK=1
+run remove
+printf 'stack-rm\nunlabel-worker1\nunlabel-worker2\n' > "$scratch/expected"
+cmp "$scratch/expected" "$KPL_TEST_STATE/events"
+no_shutdown_checks
 
 reset_case
-export KPL_TEST_PENDING_STATE=running
+export KPL_TEST_NODE_LS_FAIL=1
+run remove
+grep -q '^stack-rm$' "$KPL_TEST_STATE/events"
+grep -q 'Could not list Agent labels' "$KPL_TEST_STATE/output"
+grep -q 'Stack services removed' "$KPL_TEST_STATE/output"
+unset KPL_TEST_NODE_LS_FAIL
+run remove
+[ "$(grep -c '^service rm ' "$KPL_TEST_STATE/calls")" = 1 ]
+[ "$(grep -c '^unlabel-' "$KPL_TEST_STATE/events")" = 2 ]
+
+reset_case
+export KPL_TEST_NODE_UPDATE_FAIL=worker1
+run remove
+grep -q 'Could not clear Agent label on worker1' "$KPL_TEST_STATE/output"
+[ ! -e "$KPL_TEST_STATE/unlabeled-worker1" ]
+[ -e "$KPL_TEST_STATE/unlabeled-worker2" ]
+unset KPL_TEST_NODE_UPDATE_FAIL
+run remove
+[ -e "$KPL_TEST_STATE/unlabeled-worker1" ]
+[ "$(grep -c '^service rm ' "$KPL_TEST_STATE/calls")" = 1 ]
+
+for fault in KPL_TEST_FOREIGN=1 KPL_TEST_FOREIGN_STACK=1 KPL_TEST_INSPECT_FAIL=1; do
+    reset_case
+    export "$fault"
+    reject remove
+    no_mutation
+done
+
+reset_case
+export KPL_TEST_SERVICE_RM_FAIL=1
 reject remove
 no_stack_removal
-grep -q 'pendingC has no verifiable node/container assignment' "$KPL_TEST_STATE/output"
-if grep -q '^exclude-\|^unlabel-' "$KPL_TEST_STATE/events"; then exit 1; fi
+grep -q 'Service removal failed' "$KPL_TEST_STATE/output"
+if grep -q 'Stack services removed' "$KPL_TEST_STATE/output"; then exit 1; fi
 
+reset_case
+export KPL_TEST_STACK_RM_FAIL=1
+reject remove
+grep -q 'Stack resource removal failed' "$KPL_TEST_STATE/output"
+unset KPL_TEST_STACK_RM_FAIL
+run remove
+[ "$(grep -c '^service rm ' "$KPL_TEST_STATE/calls")" = 1 ]
+[ "$(grep -c '^stack-rm$' "$KPL_TEST_STATE/events")" = 2 ]
+grep -q 'Stack services removed' "$KPL_TEST_STATE/output"
+
+reset_case
+export KPL_TEST_FINAL_LIST_FAIL=1
+reject remove
+grep -q '^stack-rm$' "$KPL_TEST_STATE/events"
+grep -q 'Cannot verify stack removal' "$KPL_TEST_STATE/output"
+if grep -q 'Stack services removed' "$KPL_TEST_STATE/output"; then exit 1; fi
+
+reset_case
+export KPL_TEST_REMOVAL_PENDING=1 KPL_DOCKER_TIMEOUT=1
+reject remove
+grep -q 'Stack removal is still pending' "$KPL_TEST_STATE/output"
+if grep -q 'Stack services removed' "$KPL_TEST_STATE/output"; then exit 1; fi
+
+# Individual node removal still requires a verified, clean Agent exit.
 reset_case
 run remove-node worker-a
 printf 'exclude-worker1\nclean-taskA1\nunlabel-worker1\ninclude-worker1\n' > "$scratch/expected"
@@ -368,8 +440,17 @@ cmp "$scratch/expected" "$KPL_TEST_STATE/events"
 grep -q 'node update --label-rm kpl.lab.agent worker1' "$KPL_TEST_STATE/calls"
 if grep -q 'label-rm kpl.agent\|label-rm kpl.other.agent' "$KPL_TEST_STATE/calls"; then exit 1; fi
 
-# The fake must reproduce Swarm's stale-PID rejection for the unsafe old order,
-# so moving label removal ahead of verified shutdown cannot pass these tests.
+# A busy daemon cannot make one stop inspection consume the full CLI timeout
+# after only one second remains in the Agent stop budget.
+reset_case
+export KPL_DOCKER_TIMEOUT=30 KPL_AGENT_STOP_TIMEOUT=1 KPL_TEST_SLOW_STOP_INSPECT=1
+reject remove-node worker-a
+no_stack_removal
+grep -q 'Cannot inspect task taskA1' "$KPL_TEST_STATE/output"
+grep -q -- '-s TERM -k 5 1 docker inspect --type task .* taskA1$' "$KPL_TEST_STATE/timeouts"
+if grep -q '^unlabel-' "$KPL_TEST_STATE/events"; then exit 1; fi
+
+# The fake reproduces Swarm's stale-PID rejection for premature label removal.
 reset_case
 docker node update --label-rm kpl.lab.agent worker1 > "$KPL_TEST_STATE/output"
 [ "$(docker inspect --type task --format unused taskA1)" = 'worker1|rejected|containerworker1|42|0|error' ]
@@ -379,58 +460,12 @@ grep -q 'cleanup is unverified' "$KPL_TEST_STATE/output"
 [ -e "$KPL_TEST_STATE/excluded-worker1" ]
 if grep -q '^include-worker1$' "$KPL_TEST_STATE/events"; then exit 1; fi
 
-reset_case
-export KPL_TEST_FOREIGN=1
-reject remove
-no_mutation
-grep -q 'unrecognized service' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_FOREIGN_STACK=1
-reject remove
-no_mutation
-grep -q 'unrecognized service' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_DOWN_NODE=worker2
-reject remove
-no_mutation
-grep -q 'cleanup cannot be verified' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_EMPTY_HISTORY=1
-reject remove
-no_mutation
-grep -q 'No task history' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_INSPECT_FAIL=1
-reject remove
-no_mutation
-grep -q 'mock service inspection failed' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_FINAL_LIST_FAIL=1
-reject remove
-grep -q '^stack-rm$' "$KPL_TEST_STATE/events"
-grep -q 'mock final service listing failed' "$KPL_TEST_STATE/output"
-if grep -q 'Stack services removed after' "$KPL_TEST_STATE/output"; then exit 1; fi
-
-reset_case
-export KPL_TEST_AGENT_STOP=failed
-reject remove
-no_stack_removal
-grep -q 'cleanup is unverified' "$KPL_TEST_STATE/output"
-# Failed shutdown retains both placement labels and exclusions. Retrying must
-# still inspect that failed task and must not re-enable the excluded Agents.
-for node in worker1 worker2; do
-    [ -e "$KPL_TEST_STATE/excluded-$node" ]
-    [ ! -e "$KPL_TEST_STATE/unlabeled-$node" ]
+for fault in KPL_TEST_DOWN_NODE=worker1 KPL_TEST_EMPTY_HISTORY=1; do
+    reset_case
+    export "$fault"
+    reject remove-node worker-a
+    no_mutation
 done
-reject remove
-no_stack_removal
-grep -q 'cleanup is unverified' "$KPL_TEST_STATE/output"
-if grep -q '^unlabel-\|^include-' "$KPL_TEST_STATE/events"; then exit 1; fi
 
 reset_case
 export KPL_TEST_AGENT_STOP=failed
@@ -443,20 +478,12 @@ if grep -q '^unlabel-\|^include-' "$KPL_TEST_STATE/events"; then exit 1; fi
 
 reset_case
 export KPL_TEST_OLD_FAILED=1
-reject remove
+reject remove-node worker-a
 no_stack_removal
 # A later clean task cannot prove that an older failed Agent cleaned its peers.
 grep -q 'oldA1' "$KPL_TEST_STATE/output"
-reject remove
-no_stack_removal
+reject remove-node worker-a
 grep -q 'oldA1' "$KPL_TEST_STATE/output"
-
-reset_case
-export KPL_TEST_CONTROLLER_STOP=nonzero
-reject remove
-no_stack_removal
-if grep -q '^exclude-\|^unlabel-' "$KPL_TEST_STATE/events"; then exit 1; fi
-grep -q 'without a clean container exit' "$KPL_TEST_STATE/output"
 
 reset_case
 : > "$KPL_TEST_STATE/excluded-worker1"
@@ -969,4 +996,4 @@ if sh "$root/scripts/swarm.sh" --env-file "$scratch/generated.env" init > "$KPL_
 cmp "$scratch/original.env" "$scratch/generated.env"
 no_mutation
 
-printf '%s\n' 'PASS: Manager commands enforce cleanup order, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'
+printf '%s\n' 'PASS: Manager commands enforce direct stack removal, verified node cleanup, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'

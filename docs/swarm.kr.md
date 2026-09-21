@@ -95,7 +95,7 @@ sh scripts/swarm.sh scenario
 sh scripts/swarm.sh remove
 ```
 
-철거는 Controller 종료 후 Agent 종료와 Peer 정리를 확인하고 stack 서비스를 삭제합니다. 실험·Prometheus·Grafana volume과 외부 Peer network는 남습니다. 보존된 volume에 다시 배포할 때는 같은 설정을 재사용하십시오. 이후 **Saved results**에서 기존 기록을 다시 볼 수 있습니다. 이전에 실행 중이던 기록은 `interrupted`로 표시하며 자동 재개하지 않습니다. 이 상태는 Peer 정리 완료를 뜻하지 않습니다. 실패하거나 접근할 수 없는 노드는 자동 철거를 막을 수 있으므로 아래 정리 규칙을 참고하십시오.
+철거는 실패 task, task 이력 부재, offline worker가 있어도 stack 서비스를 직접 삭제합니다. Controller·Agent 정상 종료를 기다리지 않으며 최종 로그와 standalone Peer 정리 완료를 확인하지 않습니다. 실험·Prometheus·Grafana volume과 외부 Peer network는 남습니다. 보존된 volume에 다시 배포할 때는 같은 설정을 재사용하십시오. 이후 **Saved results**에서 기존 기록을 다시 볼 수 있습니다. 이전에 실행 중이던 기록은 `interrupted`로 표시하며 자동 재개하지 않습니다. 이 상태는 Peer 정리 완료를 뜻하지 않습니다.
 
 worker가 계속 들어오고 수명에 따라 나가는 더 긴 실험은 [churn 중 무작위 반복 발행](swarm-churn-publish.kr.md)을 참고하십시오. 안정적인 bootstrap 두 개와 반복적인 발행 대상 선택, 마지막 수집·정리 단계를 사용합니다.
 
@@ -187,13 +187,13 @@ Makefile은 `NODES`를 그대로 전달하므로 `make swarm-add-node NODES='--w
 | `sh scripts/swarm.sh scenario [FILE]` | 웹 폼에 넣을 YAML 출력. 기본은 분산 smoke 예제이며 실행 요청은 하지 않음 |
 | `sh scripts/swarm.sh add-node worker-c` | 기존 서비스에 Agent 배치 노드 추가. Linux·Ready·Active 상태 필요 |
 | `sh scripts/swarm.sh remove-node worker-b` | 서비스에서 대상 노드를 제외하고 Agent 정상 종료 확인 후 배치 label 정리 |
-| `sh scripts/swarm.sh remove` | Controller 종료 확인 → Agent 종료·Peer 정리 확인 → stack 서비스 제거 |
+| `sh scripts/swarm.sh remove` | 비정상 task가 있어도 stack 서비스 직접 삭제; 데이터 volume·Peer network 보존 |
 
 서버를 추가하면 이후 join부터 새 용량을 사용하며 이미 실행 중인 Peer는 이동하지 않습니다. **`remove-node`는 해당 서버 Agent가 관리하는 Peer를 종료하므로 진행 중 실험에 영향을 줍니다.** 다른 stack의 label은 변경하지 않습니다.
 
-전체 `remove`는 Controller가 실행 중 실험을 취소하고 정리를 마칠 때까지 Agent를 유지합니다. 이어 Agent 서비스의 배치 조건에서 대상 노드를 제외하여 종료를 요청하고, clean container exit를 확인한 뒤 배치 label과 stack 서비스를 제거합니다. label부터 제거하면 정상 종료도 Swarm이 `Rejected`로 기록할 수 있으므로 이 순서를 유지합니다. 개별 `remove-node`는 label 정리 후 임시 제외 조건도 제거합니다.
+전체 `remove`는 해당 stack이 알려진 KPL 서비스만 포함하는지 확인한 뒤, 해당 서비스 ID를 `docker service rm`으로 직접 삭제합니다. 이어 `docker stack rm`으로 stack 소유 config와 모니터링 network를 제거하고 남은 stack 서비스가 없는지 확인합니다. 실패·Rejected task, 이력 부재, offline worker는 이 경로를 막지 않습니다. 배치 label은 서비스 삭제 후 가능한 범위에서 정리합니다. label 조회·변경 실패는 안내하며, 다시 `remove`하면 서비스가 이미 없어도 남은 stack 리소스와 label을 재정리합니다. Manager API 오류나 서비스가 계속 남는 경우에는 실패를 반환합니다. 실험·Prometheus·Grafana의 **데이터 volume과 외부 Peer network는 보존**합니다.
 
-노드가 offline이거나 task 실패·비정상 종료·task 이력 부재로 정리를 확인할 수 없으면 중단합니다. **보존된 과거 실패 task 이력도 자동 철거를 막습니다.** 이후 task가 복구되었더라도 잔존 Peer를 수동 점검해야 합니다. 한 번도 시작하지 않은 서비스도 이력이 없으면 수동 확인이 필요합니다. 이미 수행한 정지·배치 제외·label 변경은 자동 복구하지 않으므로 오류에 나온 task와 노드를 점검한 뒤 재시도하십시오. 다시 Agent를 실행하려는 경우 `add-node`가 남은 제외 조건도 해제합니다. 실험·Prometheus·Grafana의 **데이터 volume과 외부 Peer network는 보존**합니다.
+`remove-node`는 기존처럼 Agent 서비스에서 선택 노드를 제외하고 clean container exit를 기다린 뒤 배치 label과 임시 제외 조건을 정리합니다. label부터 제거하면 정상 종료도 Swarm이 `Rejected`로 기록할 수 있기 때문입니다. offline 노드, 보존된 과거 이력을 포함한 실패 task, 이력 부재로 Peer 정리를 확인할 수 없으면 이 명령은 중단합니다. 이미 수행한 배치 변경은 자동 복구하지 않으므로 오류에 나온 task와 노드를 점검한 뒤 재시도하십시오. 다시 Agent를 실행하려는 경우 `add-node`가 남은 제외 조건도 해제합니다.
 
 ## 대시보드 로그인
 
@@ -278,11 +278,11 @@ Controller는 단일 인스턴스이며 공유 DB/leader election을 구현하�
 
 Controller crash만으로 Agent의 Peer가 종료되지는 않습니다. 정상 Controller 종료는 활성 run을 취소한 뒤 등록된 Agent에 남은 Peer 제거를 요청하며, `stop-all`을 생략한 완료된 단일 run의 Peer도 포함합니다. 계획된 업데이트 전에는 활성 run을 완료하거나 취소하고 이 정리가 끝날 때까지 기다리십시오. Agent에 연결할 수 없거나 정리가 실패하면 종료 오류를 보고하므로 해당 호스트의 잔존 컨테이너를 확인해야 합니다.
 
-전체 철거에는 `sh scripts/swarm.sh remove`를 사용하십시오. Controller 정상 종료를 확인한 뒤 Agent를 정지하고, Agent 정상 종료까지 확인한 뒤 stack을 제거합니다. Controller 정리 오류가 발생하면 확인을 위해 절차를 중단하며 Agent 단계로 진행하지 않습니다.
+전체 철거와 비정상 서비스 복구에는 `sh scripts/swarm.sh remove`를 사용하십시오. Controller·Agent 정리를 기다리지 않고 서비스 정의를 삭제합니다. 실제 컨테이너 종료는 Docker가 설정된 종료 유예에 따라 처리합니다. 명령 성공은 Manager에 stack 서비스가 남지 않았다는 뜻이며, offline 호스트의 모든 컨테이너가 종료되었다는 뜻은 아닙니다. Agent 비정상 종료 후 standalone Peer가 남을 수 있으므로 해당 호스트를 점검하거나 같은 소유 범위로 재시작하여 회수하십시오. 계획된 종료라면 철거 전에 실험을 완료·취소하고 결과를 다운로드하십시오.
 
 SIGTERM을 받으면 Controller는 새 실험 수락을 중단하고 HTTP 연결, 실험 job, Peer 정리와 최종 상태 저장을 기다립니다. 기본 `jobShutdownTimeout: 3m`은 job 종료와 Peer 정리에 각각 적용되므로 stack은 Controller 종료 유예를 `10m`로 설정합니다. Agent에는 최대 175초의 Peer 정리, HTTP handler 종료와 제한된 telemetry drain을 포함하는 `4m`를 제공합니다. 시나리오의 `jobShutdownTimeout`을 늘리면 Controller 유예도 함께 늘리고 외부 서비스 관리자가 이 시간을 단축하지 않도록 하십시오.
 
-Controller는 실행 취소 후에도 Agent 이벤트 수신을 유지하고, 완료된 실험이 남긴 Peer와 Agent 전송 큐까지 정리한 뒤 HTTP를 닫습니다. 이 최종 Agent 정리·전송에는 최대 190초를 추가로 허용합니다. `remove`의 기본 Controller 대기는 660초이며, 각 Docker 조회에도 남은 대기 예산을 적용합니다.
+Controller는 실행 취소 후에도 Agent 이벤트 수신을 유지하고, 완료된 실험이 남긴 Peer와 Agent 전송 큐까지 정리한 뒤 HTTP를 닫습니다. 이 최종 Agent 정리·전송에는 최대 190초를 추가로 허용합니다. 전체 `remove`는 이 과정을 기다리지 않습니다. `KPL_CONTROLLER_STOP_TIMEOUT`은 기존 설정 호환을 위해 읽지만 더 이상 사용하지 않습니다. `KPL_AGENT_STOP_TIMEOUT`은 `remove-node`의 정리 확인과 각 Docker 조회에 적용하며, `KPL_DOCKER_TIMEOUT`은 삭제 명령과 서비스 제거 확인 대기에 적용합니다.
 
 ### 데이터 저장소와 재시작
 
@@ -294,9 +294,9 @@ Controller 데이터 디렉터리에 쓸 수 없으면 시작이 실패합니다
 
 ## 검증 범위
 
-현재 Go 회귀 suite와 셸 회귀 네 개인 `test-swarm-agent.sh`, `test-check-swarm.sh`, `test-swarm-config.sh`, `test-swarm.sh`는 `make test-linux` 또는 `docker build --target test -t kpl-v3:test .`로 실행합니다. 셸 테스트는 Docker 응답을 모사하여 철거 순서, 다른 stack 변경 방지, 실패·이력 부재·조회 오류 시 중단, 재시도와 설정 파일 처리를 검증하며 실제 클러스터를 배포하지 않습니다. 별도 브라우저 테스트와 명시적으로 활성화하는 커널 테스트는 [개발 검사](development.kr.md#컨테이너와-브라우저-회귀-검사)를 참고하십시오.
+현재 Go 회귀 suite와 셸 회귀 네 개인 `test-swarm-agent.sh`, `test-check-swarm.sh`, `test-swarm-config.sh`, `test-swarm.sh`는 `make test-linux` 또는 `docker build --target test -t kpl-v3:test .`로 실행합니다. 셸 테스트는 Docker 응답을 모사하여 비정상 task·offline 노드·이력 부재에도 직접 철거, 다른 stack 변경 방지, 삭제·조회 오류, 부분 정리 후 재시도, `remove-node` 정상 종료 확인과 설정 파일 처리를 검증하며 실제 클러스터를 배포하지 않습니다. 별도 브라우저 테스트와 명시적으로 활성화하는 커널 테스트는 [개발 검사](development.kr.md#컨테이너와-브라우저-회귀-검사)를 참고하십시오.
 
-이전 검증 기록은 별도 Docker 29.7.2 daemon에서 SIGTERM 종료용 Controller·Agent 테스트 서비스로 `remove-node`, `add-node`, 전체 `remove`를 실행했다고 보고합니다. 정상 종료의 `shutdown / PID 0 / exit 0`, 재배치 후 새 task, 최종 stack 서비스 0개, 다른 노드를 제외할 때 영향 없는 실행 중 task ID 유지가 기록되어 있습니다. 원본 실행 산출물은 이 저장소에 포함되어 있지 않으므로 현재 checkout이나 전체 registry·Peer 실험의 검증 결과가 아닌 과거 보고입니다. 현재 helper가 Controller의 replica 수를 유지한 채 배치를 중지하고, 노드에 할당되지 않은 대기·취소 task를 종료 확인에서 제외하는 동작은 [`scripts/swarm.sh`](../scripts/swarm.sh)에서 확인할 수 있습니다.
+이전 검증 기록은 별도 Docker 29.7.2 daemon에서 SIGTERM 종료용 Controller·Agent 테스트 서비스로 `remove-node`, `add-node`, 전체 `remove`를 실행했다고 보고합니다. 정상 종료의 `shutdown / PID 0 / exit 0`, 재배치 후 새 task, 최종 stack 서비스 0개, 다른 노드를 제외할 때 영향 없는 실행 중 task ID 유지가 기록되어 있습니다. 원본 실행 산출물은 이 저장소에 포함되어 있지 않으므로 현재 checkout이나 전체 registry·Peer 실험의 검증 결과가 아닌 과거 보고입니다. 이 기록은 현재 `remove`의 서비스 직접 삭제 방식으로 변경하기 전 보고입니다. 현재 구현은 [`scripts/swarm.sh`](../scripts/swarm.sh)와 mock 테스트를 참고하십시오.
 
 Swarm 사전 검사는 `sh scripts/swarm.sh check`를 사용하십시오. helper가 설정을 불러와 배포 검사를 실행합니다. 설정·배치·overlay를 검사하지만 모든 Agent 노드에 커널 규칙을 설치하거나 호스트 간 트래픽을 검증하지는 않습니다. 실제 네트워크 조건은 선택한 Swarm 노드에서 시나리오를 실행해 검증하십시오. 배포 사전 검사나 패키지 테스트만으로 분산 smoke 실험·실제 cross-host VXLAN 통신·처리량 측정을 대체할 수는 없습니다.
 

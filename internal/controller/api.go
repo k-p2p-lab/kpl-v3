@@ -599,7 +599,7 @@ func (s *Server) handleExperimentAction(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, map[string]string{"runId": parts[0], "status": "stopping"})
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {

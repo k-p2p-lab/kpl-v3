@@ -47,7 +47,7 @@ sh scripts/swarm.sh scenario
 
 manager에도 Agent를 실행해야 한다면 `--workers` 대신 `--all`을 사용합니다. 단일 노드 Swarm에서는 `init` 시 `KPL_MIN_AGENTS=1`을 설정하고 `--all`로 배포하십시오. `access`가 출력한 Controller 주소를 열고 `credentials`의 `KPL_USER`·`KPL_PASSWORD`로 로그인한 뒤 `scenario` 출력을 붙여 넣으십시오. `access`는 선택된 각 Agent 노드의 metrics URL도 표시합니다. TCP `KPL_AGENT_METRICS_PORT`(기본 `9091`)는 control 노드에서 허용하고, 운영자가 해당 링크를 직접 열 때에는 운영자 브라우저가 속한 신뢰 관리망에서도 허용하십시오. helper는 배포 시점의 이미지 digest를 확인해 고정하므로 tag를 갱신할 때 SHA를 직접 수정할 필요가 없습니다. 운영 클러스터를 관리하거나 철거하기 전에 [전체 Swarm 절차](docs/swarm.kr.md)를 확인하십시오.
 
-모니터링 예제는 [`examples/monitoring.yaml`](examples/monitoring.yaml)을 실행하십시오. [모니터링과 결과](docs/monitoring.kr.md)에서 Grafana의 run 선택과 이벤트 로그·파생 지표 다운로드 방법을 확인할 수 있습니다. Controller 재시작 후에도 결과 ZIP을 받을 수 있지만 이 파일에서 실행이나 실시간 counter를 복원하지는 않습니다. 서비스 종료에는 Controller와 Agent 정리를 기다리는 `sh scripts/swarm.sh remove`를 사용하십시오.
+모니터링 예제는 [`examples/monitoring.yaml`](examples/monitoring.yaml)을 실행하십시오. [모니터링과 결과](docs/monitoring.kr.md)에서 Grafana의 run 선택과 이벤트 로그·파생 지표 다운로드 방법을 확인할 수 있습니다. Controller 재시작 후에도 결과 ZIP을 받을 수 있지만 이 파일에서 실행이나 실시간 counter를 복원하지는 않습니다. 비정상 task가 있어도 `sh scripts/swarm.sh remove`로 서비스를 직접 삭제할 수 있습니다. standalone Peer 정리 완료를 확인하지 않으므로 계획된 종료에서는 먼저 실험을 완료·취소하고 결과를 다운로드하십시오.
 
 ## 문서
 

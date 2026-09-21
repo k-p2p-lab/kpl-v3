@@ -53,7 +53,7 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 
 ## Dashboard SSE
 
-브라우저는 `GET /api/v1/stream?view=dashboard`를 사용합니다. 연결마다 **대시보드용 전체 데이터**를 `event: snapshot`으로 한 번 보낸 뒤, 변경이 있으면 최대 초당 1회 `event: snapshot_delta`를 보냅니다. 재접속은 항상 전체 데이터로 시작하므로 `Last-Event-ID` 재전송이 필요하지 않습니다. 유휴 연결도 시간에 따라 달라지는 값을 갱신하며, 15초 동안 변경이 없으면 작은 `: keep-alive` 주석만 보냅니다.
+브라우저는 `GET /api/v1/stream?view=dashboard`를 사용합니다. 연결마다 **대시보드용 전체 데이터**를 `event: snapshot`으로 한 번 보낸 뒤, 변경이 있으면 최대 초당 1회 `event: snapshot_delta`를 보냅니다. 재접속은 항상 전체 데이터로 시작하므로 `Last-Event-ID` 재전송이 필요하지 않습니다. 유휴 연결도 시간에 따라 달라지는 값을 갱신하며, 15초 동안 변경이 없으면 `event: heartbeat`, `data: {}`를 보냅니다. SSE 주석과 달리 브라우저가 받을 수 있어 연결 무응답 감지에 사용합니다.
 
 대시보드 데이터는 현재 Peer(stopping·stopped·failed 제외), 전체 실험 진행 정보, 토폴로지, 지표, 최근 **이벤트 요약 40개**를 포함합니다. 이벤트 요약은 run/node ID, 종류, 상대 Peer, 시각, 지연과 화면 표시용 단일 값 `latencyAvailable`, `direction`, `controlType`, `controlEntries`, `messageIdCount`, `peerExchangeCount`만 포함합니다. 원본 message-ID/cohort 배열과 이벤트별 bandwidth 표본은 보내지 않습니다. 전체 trace 기록은 기존 snapshot API와 저장된 실험 내보내기에 보존됩니다.
 
@@ -62,6 +62,8 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 `view` 없는 기존 `GET /api/v1/stream`은 다른 클라이언트와의 호환을 위해 원본 최근 이벤트 상세를 포함한 전체 snapshot 형식을 유지합니다. 알 수 없는 view는 400을 반환합니다. 두 형식 모두 같은 세션 인증을 적용하고 로그아웃·세션 만료·Controller 종료 시 연결을 닫습니다. 응답은 캐시를 금지하고 reverse proxy에 버퍼링 비활성화를 요청합니다(`X-Accel-Buffering: no`).
 
 대시보드는 모바일 백그라운드 탭 등 문서가 숨겨지거나 페이지를 떠날 때 SSE를 닫습니다. 돌아오면 연결 하나를 다시 열어 전체 데이터를 받습니다. 화면이 보이는 동안 스트림은 계속 열려 있으므로 누적 수신 바이트는 정적 페이지 다운로드 크기와 다릅니다.
+
+최초 snapshot은 30초, 이후 snapshot·변경분·heartbeat 사이는 45초까지 기다립니다. 이를 넘으면 멈춘 연결을 닫고 SSE 오류와 같은 복구 경로를 실행합니다. 세션 확인은 8초 뒤 취소하며, 실패·시간 초과여도 다음 연결을 시도합니다. 401은 로그인 화면으로 이동합니다. 반복 실패 시 재시도 간격은 무작위 편차를 포함해 약 2초에서 최대 30초까지 늘어나고, 데이터를 받으면 초기화합니다. 브라우저 `online` 이벤트는 오래된 연결·인증 확인을 취소하고 화면이 보이면 바로 재연결합니다. 화면을 숨기거나 떠나면 SSE와 진행 중인 세션 확인을 함께 취소합니다. 서버의 10초 쓰기 제한시간은 각 전송·flush 중에만 적용하고 직후 해제하므로 HTTP/2 유휴 연결이 다음 heartbeat 전에 끊기지 않습니다.
 
 ## 실행 제출, 중지와 관측
 

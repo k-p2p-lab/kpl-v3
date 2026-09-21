@@ -53,7 +53,7 @@ The bootstrap response is an array of `{nodeId, peerId, addresses}` records (or 
 
 ## Dashboard SSE
 
-The browser uses `GET /api/v1/stream?view=dashboard`. Every connection starts with an `event: snapshot` containing the full **dashboard view**, followed by `event: snapshot_delta` updates at most once per second when data changes. Reconnection always starts with a full baseline; no `Last-Event-ID` replay is required. Idle streams refresh time-dependent values and send a small `: keep-alive` comment if nothing changed after 15 seconds.
+The browser uses `GET /api/v1/stream?view=dashboard`. Every connection starts with an `event: snapshot` containing the full **dashboard view**, followed by `event: snapshot_delta` updates at most once per second when data changes. Reconnection always starts with a full baseline; no `Last-Event-ID` replay is required. Idle streams refresh time-dependent values and send `event: heartbeat` with `data: {}` if nothing changed after 15 seconds. Unlike SSE comments, this event is visible to the browser’s liveness check.
 
 The dashboard view includes live/starting nodes (excluding stopping, stopped and failed nodes), all experiment progress records, topology, metrics, and the latest **40 event summaries**. Event summaries contain run/node IDs, type, remote peer, timestamp, latency and the scalar display fields `latencyAvailable`, `direction`, `controlType`, `controlEntries`, `messageIdCount`, `peerExchangeCount`. Raw message-ID/cohort arrays and per-event bandwidth samples are excluded. Full trace records remain available in the ordinary snapshot API and saved experiment exports.
 
@@ -62,6 +62,8 @@ A delta omits unchanged sections. For `agents`, `nodes`, and `experiments`, it c
 The original `GET /api/v1/stream` without `view` retains its full snapshot format, including original recent trace details, for existing clients. Unknown views return 400. Both forms require the same session authentication and stop on logout, session expiry or Controller shutdown. Responses disable caching and request that reverse proxies avoid buffering (`X-Accel-Buffering: no`).
 
 The Dashboard closes SSE while the document is hidden or the page is leaving, including mobile background tabs. Returning to the page establishes one connection and receives a fresh baseline. The stream remains open during ordinary visible use; its cumulative byte count is not a static page download size.
+
+The browser allows 30 seconds for the initial snapshot and 45 seconds between snapshots, deltas or heartbeats. A timeout closes the stalled connection and enters the same recovery path as an SSE error. The session check is aborted after 8 seconds; a failed/timed-out check still permits retry, while 401 redirects to login. Repeated failures back off from approximately 2 seconds to at most 30 seconds with jitter, resetting when data arrives. A browser `online` event cancels stale connection/probe state and reconnects immediately if visible. Hiding or leaving the page cancels both the stream and any pending session check. On the server, the 10-second write deadline applies only during each write/flush and is cleared afterward, so HTTP/2 idle streams survive until the next heartbeat.
 
 ## Submit, stop, and observe runs
 

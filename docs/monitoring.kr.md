@@ -72,6 +72,8 @@ sh scripts/swarm.sh logs auth --context kpl-control --tail 500
 
 Controller 이미지를 갱신하고 페이지를 새로고침한 뒤 브라우저 Network에서 `/api/v1/stream?view=dashboard`와 처음의 `snapshot`, 이후의 `snapshot_delta` 이벤트를 확인할 수 있습니다. 접근 로그의 `sse_close.bytes`는 누적 응답 바이트, `durationMs`는 연결 시간입니다. 대용량 trace를 사용한 20초 합성 회귀 테스트(21회 갱신)에서 JSON 전송량은 85,767,024바이트에서 170,144바이트로 감소했습니다. 이는 테스트 수치이며 모든 클러스터 규모의 전송량을 보장하는 값은 아닙니다. query 없이 기존 전체 snapshot을 요청하는 클라이언트는 이전 형식을 계속 받습니다.
 
+최초 snapshot 없이 30초, 데이터·heartbeat 없이 45초가 지나면 대시보드가 연결을 닫고 복구합니다. 세션 확인 제한시간은 8초이며 재시도 간격은 최대 30초까지 늘어납니다. 유휴 연결에서는 약 15초마다 작은 `heartbeat` 이벤트가 와야 하며, 정상 HTTP/2 연결은 이전의 10초 쓰기 제한시간 때문에 끊기지 않습니다. 서버 지연이 계속되면 `/api/v1/auth/session` 접근 로그의 처리 시간과 SSE open/close 기록을 비교해 서버 응답 지연과 연결 장애를 구분하십시오.
+
 ## Dashboard 내장 시각화
 
 **Metrics**는 클러스터·전달·대역폭·관측 지표 카드 11개를 가로 한 행에 표시합니다. 가로로 스크롤하거나 **Previous metrics / Next metrics** 화살표 버튼으로 이동하십시오. 카드에 마우스를 올리면 해당 카드 하나만 가로로 넓어지면서 상세 수치와 설명을 보여 줍니다. 긴 상세 내용은 펼친 카드 안에서 세로로 스크롤합니다.

@@ -72,6 +72,8 @@ The Dashboard requests the compact SSE view described in [Dashboard SSE](api.md#
 
 After updating the Controller image and reloading the page, the browser's Network panel should show `/api/v1/stream?view=dashboard`, with `snapshot` followed by `snapshot_delta` events. The access log's `sse_close.bytes` reports the cumulative response bytes and `durationMs` the connection duration. A synthetic trace-heavy 20-second regression fixture (21 updates) decreased JSON payload from 85,767,024 to 170,144 bytes; this is a test measurement, not a bandwidth guarantee for arbitrary cluster sizes. Original full-snapshot clients without the query parameter still receive the legacy payload.
 
+If a connection stalls, the Dashboard automatically closes it after 30 seconds without an initial snapshot or 45 seconds without data/heartbeat. Its session check has an 8-second timeout and retries back off to at most 30 seconds. An idle connection should receive a small `heartbeat` event roughly every 15 seconds; a healthy HTTP/2 stream no longer resets at the former 10-second write deadline. For continuing server delays, compare `/api/v1/auth/session` access-log durations with SSE open/close records to distinguish an unavailable server from a failed connection.
+
 ## Built-in Dashboard visualization
 
 **Metrics** places all 11 cluster, delivery, bandwidth and observation cards in one horizontal row. Scroll sideways or use the **Previous metrics / Next metrics** arrow buttons. Hover over a card to expand that card horizontally and reveal its detailed values and explanation; only one card expands at a time. Long details scroll vertically within the expanded card.

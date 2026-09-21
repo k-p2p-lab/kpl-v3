@@ -17,6 +17,7 @@ function fixture() {
   }
   const context = {
     state: { snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, loginRedirecting: false, reconnectTimer: null, snapshotRenderTimer: null },
+    AbortController, Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     EventSource, document: { hidden: false, addEventListener(name, callback) { documentEvents[name] = callback; } },
     window: { addEventListener(name, callback) { windowEvents[name] = callback; } },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
@@ -55,8 +56,9 @@ test('one connection receives the initial snapshot and merges only changed rows,
   assert.deepEqual(plain(state.snapshot.agents),original.agents);
   assert.deepEqual(plain(state.snapshot.experiments),[{id:'r2',state:'running'},{id:'r1',state:'completed'}]);
   assert.deepEqual(plain(state.snapshot.edges),[]);
-  assert.equal(timers.size,1,'burst updates should share one render');
-  [...timers.values()][0].callback();
+  const renderTimers = [...timers.values()].filter(timer => timer.delay === 250);
+  assert.equal(renderTimers.length,1,'burst updates should share one render');
+  renderTimers[0].callback();
   assert.equal(rendered.length,1);
   assert.equal(rendered[0].generatedAt,'two');
   streams[0].receive('snapshot_delta',{nodes:{remove:['n2','n3'],order:[]}});
@@ -121,4 +123,107 @@ test('logout redirect prevents stream reopening on visibility and bfcache restor
   state.loginRedirecting=true;
   context.connectStream(); documentEvents.visibilitychange(); windowEvents.pageshow();
   assert.equal(streams.length,0);
+});
+
+function fireTimer(timers, delay) {
+  const entry = [...timers.entries()].find(([, timer]) => timer.delay === delay);
+  assert.ok(entry, `expected a ${delay} ms timer`);
+  timers.delete(entry[0]);
+  return entry[1].callback();
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('a session request that never responds is aborted and cannot strand reconnecting', async () => {
+  const {context,state,streams,timers,statuses} = fixture();
+  let signal;
+  context.api = (url, options) => {
+    assert.equal(url,'/api/v1/auth/session');
+    signal = options.signal;
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), {once:true}));
+  };
+  context.connectStream();
+  const reconnect = streams[0].onerror();
+  assert.equal(signal.aborted,false);
+  fireTimer(timers,8000);
+  await reconnect;
+  assert.equal(signal.aborted,true);
+  assert.equal(state.streamAuthAbort,null);
+  assert.equal(state.stream,null);
+  assert.equal(timers.size,1);
+  fireTimer(timers,2000);
+  assert.equal(streams.length,2);
+  streams[1].receive('snapshot',baseline());
+  assert.equal(state.streamFailures,0);
+  assert.equal(statuses.at(-1).label,'Live');
+});
+
+test('watchdog recovers both a stalled connection attempt and a silently stalled open stream', async () => {
+  const {context,state,streams,timers} = fixture();
+  context.connectStream();
+  fireTimer(timers,30000); await settle();
+  assert.equal(streams[0].closed,1);
+  fireTimer(timers,2000);
+  streams[1].receive('snapshot',baseline());
+  fireTimer(timers,250);
+  fireTimer(timers,45000); await settle();
+  assert.equal(streams[1].closed,1);
+  assert.equal(state.stream,null);
+  fireTimer(timers,2000);
+  assert.equal(streams.length,3);
+});
+
+test('heartbeats keep an idle dashboard live without rerendering or accepting stale streams', () => {
+  const {context,state,streams,timers,rendered,documentEvents} = fixture();
+  context.connectStream();
+  // A heartbeat cannot mask a missing initial snapshot.
+  streams[0].receive('heartbeat',{});
+  assert.equal([...timers.values()][0].delay,30000);
+  streams[0].receive('snapshot',baseline());
+  fireTimer(timers,250);
+  for(let i=0;i<100;i++) streams[0].receive('heartbeat',{});
+  assert.equal(timers.size,1);
+  assert.equal([...timers.values()][0].delay,45000);
+  assert.equal(rendered.length,1);
+  context.document.hidden=true; documentEvents.visibilitychange();
+  streams[0].receive('heartbeat',{});
+  assert.equal(timers.size,0);
+  assert.equal(state.stream,null);
+});
+
+test('repeated failures back off up to 30 seconds and successful snapshots reset the delay', async () => {
+  const {context,state,streams,timers} = fixture();
+  context.connectStream();
+  for(const delay of [2000,4000,8000,16000,30000,30000]) {
+    await streams.at(-1).onerror();
+    assert.equal(timers.size,1);
+    fireTimer(timers,delay);
+  }
+  streams.at(-1).receive('snapshot',baseline());
+  assert.equal(state.streamFailures,0);
+  fireTimer(timers,250);
+  await streams.at(-1).onerror();
+  fireTimer(timers,2000);
+});
+
+test('hiding a page cancels its session probe and network restoration opens just one fresh stream', async () => {
+  const {context,state,streams,timers,documentEvents,windowEvents} = fixture();
+  let signal;
+  context.api = (url, options) => {
+    signal = options.signal;
+    return new Promise((resolve,reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), {once:true}));
+  };
+  context.connectStream();
+  const reconnect = streams[0].onerror();
+  context.document.hidden=true; documentEvents.visibilitychange();
+  await reconnect;
+  assert.equal(signal.aborted,true);
+  assert.equal(timers.size,0);
+  windowEvents.online();
+  assert.equal(streams.length,1,'background online event must not reopen SSE');
+  context.document.hidden=false; documentEvents.visibilitychange();
+  windowEvents.online();
+  assert.equal(streams.length,3);
+  assert.equal(streams[1].closed,1);
+  assert.equal(state.stream,streams[2]);
+  assert.equal(timers.size,1);
 });

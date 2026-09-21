@@ -669,26 +669,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		if data == nil && time.Since(lastSent) < 15*time.Second {
 			return nil
 		}
-		response := http.NewResponseController(w)
-		_ = response.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		stopWrite := context.AfterFunc(r.Context(), func() { _ = response.SetWriteDeadline(time.Now()) })
-		defer stopWrite()
 		if data == nil {
-			if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
-				return err
-			}
-		} else {
-			if _, err := io.WriteString(w, "event: "+event+"\ndata: "); err != nil {
-				return err
-			}
-			if _, err := w.Write(data); err != nil {
-				return err
-			}
-			if _, err := io.WriteString(w, "\n\n"); err != nil {
-				return err
-			}
+			// SSE comments are invisible to EventSource. A named event lets the
+			// browser distinguish a quiet dashboard from a stalled connection.
+			event, data = "heartbeat", []byte("{}")
 		}
-		if err := response.Flush(); err != nil {
+		if err := writeStreamEvent(r.Context(), w, event, data); err != nil {
 			return err
 		}
 		lastSent = time.Now()

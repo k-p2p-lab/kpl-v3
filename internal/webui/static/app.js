@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const state = {
   snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, reconnectTimer: null, snapshotRenderTimer: null,
+  streamWatchdogTimer: null, streamAuthAbort: null, streamFailures: 0,
   savedResults: null, resultsLoading: false, resultsError: "",
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
@@ -295,6 +296,8 @@ function redirectToLogin() {
   state.loginRedirecting = true;
   state.stream?.close();
   clearTimeout(state.reconnectTimer);
+  if (state.streamWatchdogTimer != null) clearTimeout(state.streamWatchdogTimer);
+  state.streamAuthAbort?.abort();
   globalThis.location.replace("/login");
 }
 
@@ -397,11 +400,19 @@ function pauseStream() {
   state.stream = null;
   state.streamSnapshot = null;
   stream?.close();
+  clearTimeout(state.streamWatchdogTimer);
+  state.streamWatchdogTimer = null;
+  state.streamAuthAbort?.abort();
+  state.streamAuthAbort = null;
   clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
   clearTimeout(state.snapshotRenderTimer);
   state.snapshotRenderTimer = null;
 }
+
+const streamConnectTimeoutMs = 30000;
+const streamIdleTimeoutMs = 45000;
+const streamAuthTimeoutMs = 8000;
 
 function connectStream() {
   if (state.loginRedirecting || state.streamPageHidden || document.hidden || state.stream) return;
@@ -412,18 +423,41 @@ function connectStream() {
   state.stream = stream;
   let reconnecting = false;
   const reconnect = async () => {
-    if (state.stream !== stream || reconnecting) return;
+    if (state.stream !== stream || reconnecting || state.loginRedirecting) return;
+    if (document.hidden || state.streamPageHidden) { pauseStream(); return; }
     reconnecting = true;
     setConnection("offline", "Reconnecting");
     stream.close();
+    clearTimeout(state.streamWatchdogTimer);
+    state.streamWatchdogTimer = null;
     clearTimeout(state.reconnectTimer);
-    try { await api("/api/v1/auth/session"); }
+    // A slow/half-open session probe must not prevent the next SSE attempt.
+    const controller = new AbortController();
+    state.streamAuthAbort = controller;
+    const timeout = setTimeout(() => controller.abort(), streamAuthTimeoutMs);
+    try { await api("/api/v1/auth/session", { signal: controller.signal }); }
     catch (error) { if (error.status === 401) return; }
+    finally {
+      clearTimeout(timeout);
+      if (state.streamAuthAbort === controller) state.streamAuthAbort = null;
+    }
     if (state.stream === stream && !state.loginRedirecting) {
       state.stream = null;
       state.streamSnapshot = null;
-      if (!document.hidden && !state.streamPageHidden) state.reconnectTimer = setTimeout(connectStream, 2000);
+      state.streamFailures = Math.min((state.streamFailures || 0) + 1, 5);
+      const baseDelay = Math.min(30000, 2000 * 2 ** (state.streamFailures - 1));
+      const delay = Math.min(30000, Math.round(baseDelay * (0.8 + Math.random() * 0.4)));
+      if (!document.hidden && !state.streamPageHidden) state.reconnectTimer = setTimeout(connectStream, delay);
     }
+  };
+  const armWatchdog = (delay) => {
+    clearTimeout(state.streamWatchdogTimer);
+    state.streamWatchdogTimer = setTimeout(() => { void reconnect(); }, delay);
+  };
+  const markLive = () => {
+    state.streamFailures = 0;
+    armWatchdog(streamIdleTimeoutMs);
+    setConnection("live", "Live");
   };
   const receive = (event, delta) => {
     if (state.stream !== stream || reconnecting) return;
@@ -431,12 +465,16 @@ function connectStream() {
       const data = JSON.parse(event.data);
       state.streamSnapshot = delta ? applySnapshotDelta(state.streamSnapshot, data) : data;
       scheduleSnapshotRender(state.streamSnapshot);
-      setConnection("live", "Live");
+      markLive();
     } catch { void reconnect(); }
   };
   stream.addEventListener("snapshot", event => receive(event, false));
   stream.addEventListener("snapshot_delta", event => receive(event, true));
+  stream.addEventListener("heartbeat", () => {
+    if (state.stream === stream && !reconnecting && state.streamSnapshot) markLive();
+  });
   stream.onerror = reconnect;
+  armWatchdog(streamConnectTimeoutMs);
 }
 
 function setupStreamLifecycle() {
@@ -452,6 +490,12 @@ function setupStreamLifecycle() {
   });
   window.addEventListener("pageshow", () => {
     state.streamPageHidden = false;
+    connectStream();
+  });
+  window.addEventListener("online", () => {
+    // Mobile network changes can leave a socket looking open but unusable.
+    pauseStream();
+    state.streamFailures = 0;
     connectStream();
   });
 }

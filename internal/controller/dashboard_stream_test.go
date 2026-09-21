@@ -263,13 +263,13 @@ func TestDashboardStreamKeepsNotificationsAcrossSharedCacheAndReconnects(t *test
 		s.state.notify()
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
-		// With no changing data, the next idle refresh is a small SSE comment.
+		// With no changing data, the next idle refresh is a small observable heartbeat.
 		time.Sleep(15 * time.Second)
 		synctest.Wait()
 		cancel()
 		<-done
 		body := response.Body.String()
-		if strings.Count(body, "event: snapshot\n") != 1 || strings.Count(body, "event: snapshot_delta\n") != 1 || !strings.Contains(body, ": keep-alive\n\n") {
+		if strings.Count(body, "event: snapshot\n") != 1 || strings.Count(body, "event: snapshot_delta\n") != 1 || !strings.Contains(body, "event: heartbeat\ndata: {}\n\n") {
 			t.Fatalf("unexpected snapshot/delta/heartbeat sequence: %s", body)
 		}
 		if !strings.Contains(body, `"upsert":[{"id":"new"`) {

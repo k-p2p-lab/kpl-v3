@@ -65,6 +65,7 @@ type Server struct {
 	scenarioSummaryFlights map[string][]*scenarioSummaryFlight
 	scenarioRecordCheck    func([]byte) error
 	snapshotMu             sync.Mutex
+	dashboardFrame         *dashboardFrame
 	snapshotData           []byte
 	snapshotAt             time.Time
 }

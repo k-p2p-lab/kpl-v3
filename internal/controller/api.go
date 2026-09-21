@@ -614,13 +614,19 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	view := r.URL.Query().Get("view")
+	if view != "" && view != "dashboard" {
+		writeError(w, http.StatusBadRequest, "unknown stream view")
+		return
+	}
 	_, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming is unavailable")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Connection", "keep-alive")
 	updates, unsubscribe := s.state.subscribe()
 	defer unsubscribe()
@@ -630,36 +636,62 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 	lastSent := time.Time{}
 	pendingUpdate := time.Time{}
+	var previous *dashboardFrame
 	send := func() error {
 		if err := r.Context().Err(); err != nil {
 			return err
 		}
-		data, generatedAt, err := s.streamSnapshotAt()
+		var data []byte
+		var generatedAt time.Time
+		var err error
+		event := "snapshot"
+		if view == "dashboard" {
+			frame, frameErr := s.dashboardStreamSnapshot()
+			if frameErr != nil {
+				return frameErr
+			}
+			generatedAt, data = frame.at, frame.data
+			if previous != nil {
+				event = "snapshot_delta"
+				data, err = frame.delta(previous)
+			}
+			previous = frame
+		} else {
+			data, generatedAt, err = s.streamSnapshotAt()
+		}
 		if err != nil {
 			return err
+		}
+		// A cached frame may predate the notification; don't consume it yet.
+		if !generatedAt.Before(pendingUpdate) {
+			pendingUpdate = time.Time{}
+		}
+		if data == nil && time.Since(lastSent) < 15*time.Second {
+			return nil
 		}
 		response := http.NewResponseController(w)
 		_ = response.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		stopWrite := context.AfterFunc(r.Context(), func() { _ = response.SetWriteDeadline(time.Now()) })
 		defer stopWrite()
-		if _, err := io.WriteString(w, "event: snapshot\ndata: "); err != nil {
-			return err
-		}
-		if _, err := w.Write(data); err != nil {
-			return err
-		}
-		if _, err := io.WriteString(w, "\n\n"); err != nil {
-			return err
+		if data == nil {
+			if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
+				return err
+			}
+		} else {
+			if _, err := io.WriteString(w, "event: "+event+"\ndata: "); err != nil {
+				return err
+			}
+			if _, err := w.Write(data); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(w, "\n\n"); err != nil {
+				return err
+			}
 		}
 		if err := response.Flush(); err != nil {
 			return err
 		}
 		lastSent = time.Now()
-		// A shared cached snapshot may predate this client's notification.
-		// Keep it pending until a newly generated snapshot covers the update.
-		if !generatedAt.Before(pendingUpdate) {
-			pendingUpdate = time.Time{}
-		}
 		return nil
 	}
 	if err := send(); err != nil {

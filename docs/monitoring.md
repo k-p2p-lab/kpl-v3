@@ -66,6 +66,12 @@ sh scripts/swarm.sh logs auth --context kpl-control --tail 500
 
 Keep the caller's Docker context connected to a manager; `--context` on these two commands selects the daemon for the node check and file read, while task discovery stays on the manager. The helper verifies that the selected daemon is the task's actual node. It requires a running Controller with web logging enabled and reports missing files, unavailable tasks or a wrong node as errors. It does not start containers or change the stack. For continuous following or rotated backups, access the files directly on the Controller node.
 
+## Dashboard stream traffic
+
+The Dashboard requests the compact SSE view described in [Dashboard SSE](api.md#dashboard-sse): one complete initial view, then changed records/sections only. It sends the 40 event summaries actually displayed instead of repeatedly transferring the 300-event raw trace buffer. The browser disconnects when hidden and synchronizes again when visible. A long-running SSE request accumulating bytes is expected, but full raw trace arrays should no longer dominate normal Dashboard traffic.
+
+After updating the Controller image and reloading the page, the browser's Network panel should show `/api/v1/stream?view=dashboard`, with `snapshot` followed by `snapshot_delta` events. The access log's `sse_close.bytes` reports the cumulative response bytes and `durationMs` the connection duration. A synthetic trace-heavy 20-second regression fixture (21 updates) decreased JSON payload from 85,767,024 to 170,144 bytes; this is a test measurement, not a bandwidth guarantee for arbitrary cluster sizes. Original full-snapshot clients without the query parameter still receive the legacy payload.
+
 ## Built-in Dashboard visualization
 
 **Metrics** places all 11 cluster, delivery, bandwidth and observation cards in one horizontal row. Scroll sideways or use the **Previous metrics / Next metrics** arrow buttons. Hover over a card to expand that card horizontally and reveal its detailed values and explanation; only one card expands at a time. Long details scroll vertically within the expanded card.

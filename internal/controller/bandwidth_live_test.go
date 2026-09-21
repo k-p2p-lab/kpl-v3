@@ -115,48 +115,52 @@ func TestSnapshotBandwidthUsesTheSameRunAsMessageMetrics(t *testing.T) {
 }
 
 func TestStreamRefreshesExpiredBandwidthWithoutTelemetry(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		s := New(ServerConfig{DataDir: t.TempDir()}, nil)
-		now := time.Now().UTC()
-		s.state.experiments["run"] = model.Experiment{ID: "run", State: "running", StartedAt: now}
-		a := newRunMetricAccumulator()
-		event := bandwidthEvent("s", 1, 5, 100, 200, false)
-		event.Timestamp = now.Add(-time.Second)
-		a.observe(event)
-		s.state.runMetrics["run"] = a
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		response := httptest.NewRecorder()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			s.handleStream(response, httptest.NewRequest(http.MethodGet, "/api/v1/stream", nil).WithContext(ctx))
-		}()
-		synctest.Wait()
-		time.Sleep(15 * time.Second)
-		synctest.Wait()
-		cancel()
-		<-done // Stop writes before reading the non-concurrent response recorder.
-		snapshots := []model.Snapshot{}
-		for _, line := range strings.Split(response.Body.String(), "\n") {
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			var snapshot model.Snapshot
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &snapshot); err != nil {
-				t.Fatal(err)
-			}
-			snapshots = append(snapshots, snapshot)
-		}
-		if len(snapshots) != 2 {
-			t.Fatalf("idle stream did not refresh metrics: snapshots=%d", len(snapshots))
-		}
-		if bw := snapshots[0].Metrics.Bandwidth; bw == nil || bw.CurrentRates == nil || !bw.CurrentRates.Available {
-			t.Fatal("initial live rate missing")
-		}
-		bw := snapshots[1].Metrics.Bandwidth
-		if bw.CurrentRates.Available || bw.CurrentRates.StaleSessions != 1 || bw.SentBytes != 200 {
-			t.Fatalf("expired rate or retained total incorrect: %+v", bw)
-		}
-	})
+	for _, query := range []string{"", "?view=dashboard"} {
+		t.Run("stream"+query, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+				now := time.Now().UTC()
+				s.state.experiments["run"] = model.Experiment{ID: "run", State: "running", StartedAt: now}
+				a := newRunMetricAccumulator()
+				event := bandwidthEvent("s", 1, 5, 100, 200, false)
+				event.Timestamp = now.Add(-time.Second)
+				a.observe(event)
+				s.state.runMetrics["run"] = a
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				response := httptest.NewRecorder()
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					s.handleStream(response, httptest.NewRequest(http.MethodGet, "/api/v1/stream"+query, nil).WithContext(ctx))
+				}()
+				synctest.Wait()
+				time.Sleep(15 * time.Second)
+				synctest.Wait()
+				cancel()
+				<-done // Stop writes before reading the non-concurrent response recorder.
+				snapshots := []model.Snapshot{}
+				for _, line := range strings.Split(response.Body.String(), "\n") {
+					if !strings.HasPrefix(line, "data: ") {
+						continue
+					}
+					var snapshot model.Snapshot
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &snapshot); err != nil {
+						t.Fatal(err)
+					}
+					snapshots = append(snapshots, snapshot)
+				}
+				if len(snapshots) != 2 {
+					t.Fatalf("idle stream did not refresh metrics: snapshots=%d", len(snapshots))
+				}
+				if bw := snapshots[0].Metrics.Bandwidth; bw == nil || bw.CurrentRates == nil || !bw.CurrentRates.Available {
+					t.Fatal("initial live rate missing")
+				}
+				bw := snapshots[1].Metrics.Bandwidth
+				if bw.CurrentRates.Available || bw.CurrentRates.StaleSessions != 1 || bw.SentBytes != 200 {
+					t.Fatalf("expired rate or retained total incorrect: %+v", bw)
+				}
+			})
+		})
+	}
 }

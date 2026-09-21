@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const state = {
-  snapshot: null, stream: null, reconnectTimer: null, snapshotRenderTimer: null,
+  snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, reconnectTimer: null, snapshotRenderTimer: null,
   savedResults: null, resultsLoading: false, resultsError: "",
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
@@ -361,7 +361,8 @@ function setConnection(mode, label) {
 
 // Coalesce bursts of telemetry while keeping the latest snapshot available to controls.
 function scheduleSnapshotRender(snapshot) {
-  state.snapshot = snapshot;
+  // Controls may optimistically edit runs; keep the stream's delta base intact.
+  state.snapshot = { ...snapshot, experiments: (snapshot.experiments || []).map(run => ({ ...run })) };
   if (state.snapshotRenderTimer != null) return;
   state.snapshotRenderTimer = setTimeout(() => {
     state.snapshotRenderTimer = null;
@@ -369,24 +370,90 @@ function scheduleSnapshotRender(snapshot) {
   }, 250);
 }
 
+function applySnapshotDelta(snapshot, patch) {
+  if (!snapshot) throw new Error("Snapshot delta arrived before a full snapshot");
+  const next = { ...snapshot };
+  for (const key of ["generatedAt", "edges", "events", "metrics"]) {
+    if (Object.hasOwn(patch, key)) next[key] = patch[key];
+  }
+  for (const key of ["agents", "nodes", "experiments"]) {
+    if (!Object.hasOwn(patch, key)) continue;
+    const change = patch[key];
+    const items = new Map((snapshot[key] || []).map(item => [item.id, item]));
+    for (const id of change.remove || []) items.delete(id);
+    for (const item of change.upsert || []) items.set(item.id, item);
+    if (change.order) {
+      next[key] = change.order.map(id => {
+        if (!items.has(id)) throw new Error("Incomplete snapshot delta");
+        return items.get(id);
+      });
+    } else next[key] = [...items.values()];
+  }
+  return next;
+}
+
+function pauseStream() {
+  const stream = state.stream;
+  state.stream = null;
+  state.streamSnapshot = null;
+  stream?.close();
+  clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
+  clearTimeout(state.snapshotRenderTimer);
+  state.snapshotRenderTimer = null;
+}
+
 function connectStream() {
-  if (state.stream) state.stream.close();
-  const stream = new EventSource("/api/v1/stream");
+  if (state.loginRedirecting || state.streamPageHidden || document.hidden || state.stream) return;
+  clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
+  state.streamSnapshot = null;
+  const stream = new EventSource("/api/v1/stream?view=dashboard");
   state.stream = stream;
-  stream.addEventListener("snapshot", (event) => {
-    if (state.stream !== stream) return;
-    scheduleSnapshotRender(JSON.parse(event.data));
-    setConnection("live", "Live");
-  });
-  stream.onerror = async () => {
-    if (state.stream !== stream) return;
+  let reconnecting = false;
+  const reconnect = async () => {
+    if (state.stream !== stream || reconnecting) return;
+    reconnecting = true;
     setConnection("offline", "Reconnecting");
     stream.close();
     clearTimeout(state.reconnectTimer);
     try { await api("/api/v1/auth/session"); }
     catch (error) { if (error.status === 401) return; }
-    if (state.stream === stream && !state.loginRedirecting) state.reconnectTimer = setTimeout(connectStream, 2000);
+    if (state.stream === stream && !state.loginRedirecting) {
+      state.stream = null;
+      state.streamSnapshot = null;
+      if (!document.hidden && !state.streamPageHidden) state.reconnectTimer = setTimeout(connectStream, 2000);
+    }
   };
+  const receive = (event, delta) => {
+    if (state.stream !== stream || reconnecting) return;
+    try {
+      const data = JSON.parse(event.data);
+      state.streamSnapshot = delta ? applySnapshotDelta(state.streamSnapshot, data) : data;
+      scheduleSnapshotRender(state.streamSnapshot);
+      setConnection("live", "Live");
+    } catch { void reconnect(); }
+  };
+  stream.addEventListener("snapshot", event => receive(event, false));
+  stream.addEventListener("snapshot_delta", event => receive(event, true));
+  stream.onerror = reconnect;
+}
+
+function setupStreamLifecycle() {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      pauseStream();
+      setConnection("offline", "Paused");
+    } else connectStream();
+  });
+  window.addEventListener("pagehide", () => {
+    state.streamPageHidden = true;
+    pauseStream();
+  });
+  window.addEventListener("pageshow", () => {
+    state.streamPageHidden = false;
+    connectStream();
+  });
 }
 
 function isPanelCollapsed(id) {
@@ -1867,4 +1934,5 @@ window.addEventListener("resize", () => {
   if (state.snapshot) renderTopology(state.snapshot.nodes || [], state.snapshot.edges || []);
 });
 refreshSavedResults();
+setupStreamLifecycle();
 connectStream();

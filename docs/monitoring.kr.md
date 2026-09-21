@@ -66,6 +66,12 @@ sh scripts/swarm.sh logs auth --context kpl-control --tail 500
 
 호출자의 Docker context는 manager에 연결된 상태로 유지합니다. 위 두 명령의 `--context`는 노드 확인과 파일 조회에만 적용되며, task 탐색은 manager에서 수행합니다. 선택한 daemon이 task의 실제 실행 노드인지 검사합니다. 웹 로그 기능이 포함된 Controller가 실행 중이어야 하며, 파일 부재·task 실행 불가·잘못된 노드는 오류로 안내합니다. 컨테이너를 새로 띄우거나 stack을 변경하지 않습니다. 실시간 추적이나 회전된 백업 조회는 Controller 노드에서 파일을 직접 확인하십시오.
 
+## 대시보드 스트림 전송량
+
+대시보드는 [Dashboard SSE](api.kr.md#dashboard-sse)의 경량 형식을 사용합니다. 첫 전체 데이터 이후 변경된 항목·영역만 전송하고, 원본 trace 300개를 반복 전송하는 대신 실제 화면에 표시하는 이벤트 요약 40개를 보냅니다. 브라우저가 숨겨지면 연결을 끊고 다시 보이면 동기화합니다. 오래 열린 SSE 요청의 누적 수신량이 늘어나는 것은 정상이나, 일반 대시보드 접속에서 큰 원본 trace 배열이 전송량을 차지하지 않도록 했습니다.
+
+Controller 이미지를 갱신하고 페이지를 새로고침한 뒤 브라우저 Network에서 `/api/v1/stream?view=dashboard`와 처음의 `snapshot`, 이후의 `snapshot_delta` 이벤트를 확인할 수 있습니다. 접근 로그의 `sse_close.bytes`는 누적 응답 바이트, `durationMs`는 연결 시간입니다. 대용량 trace를 사용한 20초 합성 회귀 테스트(21회 갱신)에서 JSON 전송량은 85,767,024바이트에서 170,144바이트로 감소했습니다. 이는 테스트 수치이며 모든 클러스터 규모의 전송량을 보장하는 값은 아닙니다. query 없이 기존 전체 snapshot을 요청하는 클라이언트는 이전 형식을 계속 받습니다.
+
 ## Dashboard 내장 시각화
 
 **Metrics**는 클러스터·전달·대역폭·관측 지표 카드 11개를 가로 한 행에 표시합니다. 가로로 스크롤하거나 **Previous metrics / Next metrics** 화살표 버튼으로 이동하십시오. 카드에 마우스를 올리면 해당 카드 하나만 가로로 넓어지면서 상세 수치와 설명을 보여 줍니다. 긴 상세 내용은 펼친 카드 안에서 세로로 스크롤합니다.

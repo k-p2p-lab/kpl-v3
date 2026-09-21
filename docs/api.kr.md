@@ -51,6 +51,18 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 
 `/api/v1/prometheus/controller-targets`는 Controller의 `--metrics-url` (`KPL_CONTROLLER_METRICS_URL`)을 광고하며 미설정 시 `[]`를 반환합니다. 인증 없이 조회하는 읽기 전용 endpoint입니다. URL은 HTTP(S)의 `/metrics` 경로여야 하며 인증정보·query·fragment·loopback/unspecified 주소를 허용하지 않습니다. Swarm helper가 control 노드 주소와 `KPL_HTTP_PORT`로 자동 설정합니다.
 
+## Dashboard SSE
+
+브라우저는 `GET /api/v1/stream?view=dashboard`를 사용합니다. 연결마다 **대시보드용 전체 데이터**를 `event: snapshot`으로 한 번 보낸 뒤, 변경이 있으면 최대 초당 1회 `event: snapshot_delta`를 보냅니다. 재접속은 항상 전체 데이터로 시작하므로 `Last-Event-ID` 재전송이 필요하지 않습니다. 유휴 연결도 시간에 따라 달라지는 값을 갱신하며, 15초 동안 변경이 없으면 작은 `: keep-alive` 주석만 보냅니다.
+
+대시보드 데이터는 현재 Peer(stopping·stopped·failed 제외), 전체 실험 진행 정보, 토폴로지, 지표, 최근 **이벤트 요약 40개**를 포함합니다. 이벤트 요약은 run/node ID, 종류, 상대 Peer, 시각, 지연과 화면 표시용 단일 값 `latencyAvailable`, `direction`, `controlType`, `controlEntries`, `messageIdCount`, `peerExchangeCount`만 포함합니다. 원본 message-ID/cohort 배열과 이벤트별 bandwidth 표본은 보내지 않습니다. 전체 trace 기록은 기존 snapshot API와 저장된 실험 내보내기에 보존됩니다.
+
+변경분에는 바뀐 영역만 들어갑니다. `agents`, `nodes`, `experiments`는 선택 필드 `upsert`(추가·변경된 항목의 전체 내용, `id` 기준), `remove`(삭제 ID), `order`(순서가 바뀌면 전체 ID 순서)를 갖는 객체입니다. 삭제, upsert, 순서 적용 순으로 처리합니다. `edges`, `events`, `metrics`는 필드가 있으면 빈 배열·null을 포함해 해당 영역 전체를 교체하며, 갱신 시 `generatedAt`도 바뀝니다. 연결마다 마지막으로 전달한 데이터를 기준으로 비교하므로 중간 갱신을 건너뛰어도 변경이 유실되지 않습니다.
+
+`view` 없는 기존 `GET /api/v1/stream`은 다른 클라이언트와의 호환을 위해 원본 최근 이벤트 상세를 포함한 전체 snapshot 형식을 유지합니다. 알 수 없는 view는 400을 반환합니다. 두 형식 모두 같은 세션 인증을 적용하고 로그아웃·세션 만료·Controller 종료 시 연결을 닫습니다. 응답은 캐시를 금지하고 reverse proxy에 버퍼링 비활성화를 요청합니다(`X-Accel-Buffering: no`).
+
+대시보드는 모바일 백그라운드 탭 등 문서가 숨겨지거나 페이지를 떠날 때 SSE를 닫습니다. 돌아오면 연결 하나를 다시 열어 전체 데이터를 받습니다. 화면이 보이는 동안 스트림은 계속 열려 있으므로 누적 수신 바이트는 정적 페이지 다운로드 크기와 다릅니다.
+
 ## 실행 제출, 중지와 관측
 
 `POST /api/v1/scenarios/validate`는 원본 YAML 본문(`Content-Type: application/yaml`)을 최대 1 MiB까지 받습니다. 유효하면 `200`과 `{valid: true, name, phases}`를 반환합니다. 빈 입력, YAML 문법 오류, 알 수 없는 필드, 잘못된 설정, 여러 YAML 문서는 `400`과 `{error: "…"}`를 반환하며 파서가 제공하는 줄 번호를 보존합니다. 본문 한도 초과는 `413`입니다. 저장·실행과 같은 파서를 사용하지만 기록이나 job을 만들지 않으며 로그인 세션을 사용합니다. 설정 검증이며 Agent 용량이나 실행 시 연결성을 검사하지는 않습니다.

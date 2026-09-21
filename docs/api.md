@@ -51,6 +51,18 @@ The bootstrap response is an array of `{nodeId, peerId, addresses}` records (or 
 
 `/api/v1/prometheus/controller-targets` advertises the Controller `--metrics-url` (`KPL_CONTROLLER_METRICS_URL`) and returns `[]` when it is unset. It is a public, read-only endpoint; the URL must be HTTP(S), end in `/metrics`, and have no credentials, query, fragment, or loopback/unspecified address. The Swarm helper supplies the control node address and `KPL_HTTP_PORT` automatically.
 
+## Dashboard SSE
+
+The browser uses `GET /api/v1/stream?view=dashboard`. Every connection starts with an `event: snapshot` containing the full **dashboard view**, followed by `event: snapshot_delta` updates at most once per second when data changes. Reconnection always starts with a full baseline; no `Last-Event-ID` replay is required. Idle streams refresh time-dependent values and send a small `: keep-alive` comment if nothing changed after 15 seconds.
+
+The dashboard view includes live/starting nodes (excluding stopping, stopped and failed nodes), all experiment progress records, topology, metrics, and the latest **40 event summaries**. Event summaries contain run/node IDs, type, remote peer, timestamp, latency and the scalar display fields `latencyAvailable`, `direction`, `controlType`, `controlEntries`, `messageIdCount`, `peerExchangeCount`. Raw message-ID/cohort arrays and per-event bandwidth samples are excluded. Full trace records remain available in the ordinary snapshot API and saved experiment exports.
+
+A delta omits unchanged sections. For `agents`, `nodes`, and `experiments`, it contains an object with optional `upsert` (complete changed/new records keyed by `id`), `remove` (IDs), and `order` (complete ID order when changed). Apply removals, then upserts, then ordering. `edges`, `events`, and `metrics` replace their whole section when present, including empty arrays/null; `generatedAt` advances with an update. Each connection compares against its own last delivered view, so skipped intermediate updates do not lose changes.
+
+The original `GET /api/v1/stream` without `view` retains its full snapshot format, including original recent trace details, for existing clients. Unknown views return 400. Both forms require the same session authentication and stop on logout, session expiry or Controller shutdown. Responses disable caching and request that reverse proxies avoid buffering (`X-Accel-Buffering: no`).
+
+The Dashboard closes SSE while the document is hidden or the page is leaving, including mobile background tabs. Returning to the page establishes one connection and receives a fresh baseline. The stream remains open during ordinary visible use; its cumulative byte count is not a static page download size.
+
 ## Submit, stop, and observe runs
 
 `POST /api/v1/scenarios/validate` accepts a raw YAML body (`Content-Type: application/yaml`), limited to 1 MiB. A valid scenario returns `200` with `{valid: true, name, phases}`. Empty input, YAML syntax errors, unknown fields, invalid settings, and multiple YAML documents return `400` with `{error: "…"}`; parser diagnostics retain line numbers when available. Bodies over the limit return `413`. This endpoint uses the same parser as save/run, creates no records or jobs, and reuses the login session. Validation checks configuration, not Agent capacity or runtime connectivity.

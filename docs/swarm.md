@@ -183,11 +183,13 @@ Makefile targets forward `NODES` unchanged, so `make swarm-add-node NODES='--wor
 | `sh scripts/swarm.sh publish [--platforms CSV]` | Build and push the configured tag; optional platforms use the existing Buildx builder |
 | `sh scripts/swarm.sh check` | Rerun deployment preflight with loaded settings |
 | `sh scripts/swarm.sh access` | Print control-node URLs and every selected Agent node's metrics URL; does not test reachability or service readiness |
-| `sh scripts/swarm.sh logs [COMPONENT]` | Show the last 100 timestamped lines; controller by default, or agent, prometheus, grafana |
+| `sh scripts/swarm.sh logs [COMPONENT] [--tail N\|all]` | Show the last 100 lines by default: service logs for controller/agent/prometheus/grafana; web JSONL files for access/auth |
 | `sh scripts/swarm.sh scenario [FILE]` | Print YAML for the web form; defaults to the distributed smoke example and does not submit it |
 | `sh scripts/swarm.sh add-node worker-c` | Add an Agent placement node to the existing service. Requires Linux, Ready, and Active status |
 | `sh scripts/swarm.sh remove-node worker-b` | Exclude the target node from the service, confirm clean Agent shutdown, then remove its placement label |
 | `sh scripts/swarm.sh remove` | Directly delete stack services, including unhealthy tasks; retain data volumes and the Peer network |
+
+For web access and login records, use `logs access` and `logs auth`. To read a Controller on another node, add `--context NAME` for that node’s Docker daemon while keeping the caller connected to a manager. See [web access and authentication logs](monitoring.md#web-access-and-authentication-logs) for examples and file retention.
 
 After a server is added, subsequent joins can use its capacity; existing Peers do not move. **`remove-node` stops the Peers managed by that server's Agent and therefore affects active experiments.** Labels belonging to other stacks are not changed.
 

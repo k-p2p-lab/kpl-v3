@@ -183,11 +183,13 @@ Makefile은 `NODES`를 그대로 전달하므로 `make swarm-add-node NODES='--w
 | `sh scripts/swarm.sh publish [--platforms CSV]` | 설정 태그로 빌드·push. 플랫폼 지정 시 기존 Buildx builder 사용 |
 | `sh scripts/swarm.sh check` | 불러온 설정으로 배포 사전 검사 재실행 |
 | `sh scripts/swarm.sh access` | control 노드 URL과 선택된 각 Agent 노드의 metrics URL 출력. 접근 가능 여부나 서비스 readiness는 검사하지 않음 |
-| `sh scripts/swarm.sh logs [COMPONENT]` | 타임스탬프가 있는 최근 100줄 표시. 기본 controller, 또는 agent·prometheus·grafana |
+| `sh scripts/swarm.sh logs [COMPONENT] [--tail N\|all]` | 기본 최근 100줄. controller·agent·prometheus·grafana 서비스 로그 또는 access·auth 웹 JSONL 파일 조회 |
 | `sh scripts/swarm.sh scenario [FILE]` | 웹 폼에 넣을 YAML 출력. 기본은 분산 smoke 예제이며 실행 요청은 하지 않음 |
 | `sh scripts/swarm.sh add-node worker-c` | 기존 서비스에 Agent 배치 노드 추가. Linux·Ready·Active 상태 필요 |
 | `sh scripts/swarm.sh remove-node worker-b` | 서비스에서 대상 노드를 제외하고 Agent 정상 종료 확인 후 배치 label 정리 |
 | `sh scripts/swarm.sh remove` | 비정상 task가 있어도 stack 서비스 직접 삭제; 데이터 volume·Peer network 보존 |
+
+웹 접근·로그인 기록은 `logs access`, `logs auth`로 조회합니다. Controller가 다른 노드에 있으면 호출자는 manager에 연결한 상태에서 해당 노드의 Docker daemon을 가리키는 `--context NAME`을 추가합니다. 사용 예와 파일 보존 방식은 [웹 접근·인증 로그](monitoring.kr.md#웹-접근인증-로그)를 참고하십시오.
 
 서버를 추가하면 이후 join부터 새 용량을 사용하며 이미 실행 중인 Peer는 이동하지 않습니다. **`remove-node`는 해당 서버 Agent가 관리하는 Peer를 종료하므로 진행 중 실험에 영향을 줍니다.** 다른 stack의 label은 변경하지 않습니다.
 

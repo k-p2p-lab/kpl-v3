@@ -44,11 +44,27 @@ UTC `timestamp`, `event`, 서버가 생성한 `requestId`, `remoteIp`, HTTP `met
 tail -F data/logs/access.jsonl data/logs/auth.jsonl
 ```
 
-Swarm에서는 Controller 컨테이너 안에서 다음 명령을 실행하거나 데이터 volume의 같은 파일을 확인합니다.
+Swarm에서는 manager helper로 최근 100줄을 JSONL 원문 그대로 출력합니다.
 
 ```sh
-tail -F /var/lib/kpl/data/logs/access.jsonl /var/lib/kpl/data/logs/auth.jsonl
+sh scripts/swarm.sh logs access
+sh scripts/swarm.sh logs auth
+sh scripts/swarm.sh logs access --tail 500
+sh scripts/swarm.sh logs auth --tail all > auth.jsonl
 ```
+
+`--tail`은 양의 정수 또는 `all`을 받습니다. 현재 파일만 조회하며 회전된 `.1`~`.5` 백업은 Controller volume에 남아 있습니다. 명령 실행 시점의 내용을 출력하므로 `jq` 같은 도구로 파이프 처리할 수 있습니다. 기존 `logs controller`, `logs agent`, `logs prometheus`, `logs grafana`는 타임스탬프가 있는 서비스 로그를 계속 조회하며 `--tail`도 사용할 수 있습니다.
+
+Helper는 현재 manager Docker context에서 실행 중인 Controller task를 찾고, `docker exec`로 파일을 읽습니다. 기본적으로 현재 Docker daemon이 해당 task를 실행하는 노드여야 합니다. Controller가 다른 노드(worker 포함)에 있으면 그 노드의 Docker context를 만들고 **파일 조회용으로만** 지정하십시오.
+
+```sh
+# user와 control-node를 실제 SSH 계정과 Controller 호스트로 바꿉니다.
+docker context create kpl-control --docker "host=ssh://user@control-node"
+sh scripts/swarm.sh logs access --context kpl-control
+sh scripts/swarm.sh logs auth --context kpl-control --tail 500
+```
+
+호출자의 Docker context는 manager에 연결된 상태로 유지합니다. 위 두 명령의 `--context`는 노드 확인과 파일 조회에만 적용되며, task 탐색은 manager에서 수행합니다. 선택한 daemon이 task의 실제 실행 노드인지 검사합니다. 웹 로그 기능이 포함된 Controller가 실행 중이어야 하며, 파일 부재·task 실행 불가·잘못된 노드는 오류로 안내합니다. 컨테이너를 새로 띄우거나 stack을 변경하지 않습니다. 실시간 추적이나 회전된 백업 조회는 Controller 노드에서 파일을 직접 확인하십시오.
 
 ## Dashboard 내장 시각화
 

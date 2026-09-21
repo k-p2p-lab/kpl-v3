@@ -15,7 +15,7 @@ Usage: sh scripts/swarm.sh [--env-file PATH] COMMAND [NODE... | SELECTOR]
   publish [--platforms CSV]  Build and push the configured image tag
   check                Check the loaded deployment configuration and cluster
   access               Show control URLs and selected Agent metrics URLs
-  logs [COMPONENT]     Show the last 100 timestamped service log lines
+  logs [COMPONENT] [--tail N|all] [--context NAME]  Show service or web logs
   scenario [FILE]      Print a scenario (default: examples/swarm-smoke.yaml)
   deploy [NODE... | SELECTOR]  Deploy; bare deploy reuses existing Agent labels
   status               Show services, Agent tasks and selected nodes
@@ -36,7 +36,11 @@ KPL_IMAGE_PULL_TIMEOUT sets the tag pull timeout in seconds (default: 300).
 KPL_IMAGE_BUILD_TIMEOUT and KPL_IMAGE_PUSH_TIMEOUT default to 1800 and 600 seconds.
 KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
-Log components: controller (default), agent, prometheus, grafana.
+Log components: controller (default), agent, prometheus, grafana, access, auth.
+Logs default to the last 100 lines; --tail all prints all available lines.
+Access/auth print JSONL from the running Controller (rotated backups excluded).
+For access/auth, --context selects its node's Docker daemon for file reads only;
+service/task discovery still uses the caller's manager Docker context.
 Removal preserves experiment/monitoring volumes and the external Peer network.
 Full remove does not wait for clean task exits or verify standalone Peer cleanup.
 EOF
@@ -72,10 +76,39 @@ case "$command_name" in
         exit
         ;;
     logs)
-        [ "$#" -le 1 ] || fail 'Usage: logs [controller|agent|prometheus|grafana]'
-        log_component=${1:-controller}
-        case "$log_component" in controller|agent|prometheus|grafana) ;; *) fail 'Unknown log component.' ;; esac
-        set --
+        log_component=controller
+        log_tail=100
+        log_context=''
+        if [ "$#" -gt 0 ]; then
+            case "$1" in
+                --*) ;;
+                *) log_component=$1; shift ;;
+            esac
+        fi
+        case "$log_component" in controller|agent|prometheus|grafana|access|auth) ;; *) fail 'Unknown log component.' ;; esac
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --tail)
+                    [ "$#" -ge 2 ] || fail '--tail needs a positive line count or all.'
+                    log_tail=$2
+                    case "$log_tail" in
+                        all) ;;
+                        ''|0*|*[!0-9]*) fail '--tail needs a positive integer without leading zeros, or all.' ;;
+                        *) [ "$log_tail" -gt 0 ] 2>/dev/null || fail 'Log line count is out of range.' ;;
+                    esac
+                    shift 2 ;;
+                --context)
+                    [ "$#" -ge 2 ] || fail '--context needs a Docker context name.'
+                    log_context=$2
+                    case "$log_context" in ''|-*) fail 'Invalid Docker context name.' ;; esac
+                    shift 2 ;;
+                *) fail "Unknown logs option: $1" ;;
+            esac
+        done
+        case "$log_component:$log_context" in
+            access:*|auth:*|*:) ;;
+            *) fail '--context is only supported for access/auth file reads.' ;;
+        esac
         ;;
     publish)
         publish_platforms=''
@@ -467,7 +500,44 @@ wait_tasks() {
 
 case "$command_name" in
     logs)
-        dock service logs --tail 100 --timestamps "${KPL_STACK_NAME}_$log_component"
+        case "$log_component" in
+            access|auth)
+                service_exists "${KPL_STACK_NAME}_controller" || fail 'Controller service does not exist; deploy the stack before reading web logs.'
+                log_tasks=$(dock service ps --quiet --no-trunc --filter desired-state=running "${KPL_STACK_NAME}_controller") || fail 'Cannot list Controller tasks.'
+                log_container=''
+                log_node=''
+                for log_task in $log_tasks; do
+                    case "$log_task" in ''|*[!a-zA-Z0-9]*) fail 'Docker returned an invalid Controller task ID.' ;; esac
+                    log_record=$(dock inspect --type task --format '{{.NodeID}}|{{.Status.State}}|{{if .Status.ContainerStatus}}{{.Status.ContainerStatus.ContainerID}}{{end}}' "$log_task") || fail 'Cannot inspect Controller task; retry after it settles.'
+                    task_node=${log_record%%|*}; log_rest=${log_record#*|}
+                    task_state=${log_rest%%|*}; task_container=${log_rest#*|}
+                    [ "$task_state" = running ] || continue
+                    for log_field in "$task_node" "$task_container"; do
+                        case "$log_field" in ''|*[!a-zA-Z0-9]*) fail 'Docker returned invalid Controller task metadata.' ;; esac
+                    done
+                    [ "$log_record" = "$task_node|running|$task_container" ] || fail 'Docker returned incomplete Controller task metadata.'
+                    [ -z "$log_container" ] || fail 'Multiple Controller tasks are running; retry after the service update settles.'
+                    log_node=$task_node
+                    log_container=$task_container
+                done
+                [ -n "$log_container" ] || fail 'No running Controller task; start the Controller before reading web logs.'
+                log_dock() {
+                    if [ -n "$log_context" ]; then dock --context "$log_context" "$@"; else dock "$@"; fi
+                }
+                log_daemon_node=$(log_dock info --format '{{.Swarm.NodeID}}') || fail 'Cannot connect to the Docker daemon selected for web logs.'
+                [ "$log_daemon_node" = "$log_node" ] || fail "Controller runs on Swarm node $log_node. Use logs $log_component --context NAME with a Docker context connected to that node."
+                # The manager supplied this exact task's container ID. Do not
+                # guess a local container name or start a helper service.
+                log_dock exec "$log_container" sh -c '
+                    if [ ! -f "$1" ]; then
+                        printf "KPL Swarm: Web log file is missing: %s. Deploy a Controller image with web logging enabled.\n" "$1" >&2
+                        exit 1
+                    fi
+                    if [ "$2" = all ]; then cat "$1"; else tail -n "$2" "$1"; fi
+                ' kpl-web-log "/var/lib/kpl/data/logs/$log_component.jsonl" "$log_tail" || fail 'Cannot read Controller web logs; check the error above and retry if the task restarted.'
+                ;;
+            *) dock service logs --tail "$log_tail" --timestamps "${KPL_STACK_NAME}_$log_component" ;;
+        esac
         ;;
     status)
         dock stack services "$KPL_STACK_NAME"

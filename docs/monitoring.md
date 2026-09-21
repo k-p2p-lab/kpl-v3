@@ -44,11 +44,27 @@ For a local Controller, follow both files with:
 tail -F data/logs/access.jsonl data/logs/auth.jsonl
 ```
 
-For Swarm, run the following inside the Controller container (or read the same files through its data volume):
+For Swarm, use the manager helper to print the latest 100 lines as raw JSONL:
 
 ```sh
-tail -F /var/lib/kpl/data/logs/access.jsonl /var/lib/kpl/data/logs/auth.jsonl
+sh scripts/swarm.sh logs access
+sh scripts/swarm.sh logs auth
+sh scripts/swarm.sh logs access --tail 500
+sh scripts/swarm.sh logs auth --tail all > auth.jsonl
 ```
+
+`--tail` accepts a positive integer or `all`. These commands read the current file only; rotated `.1` through `.5` backups remain in the Controller volume. Output is a snapshot and can be piped to tools such as `jq`. Existing `logs controller`, `logs agent`, `logs prometheus`, and `logs grafana` continue to read timestamped service logs and also accept `--tail`.
+
+The helper finds the running Controller task through the current manager Docker context, then reads its file with `docker exec`. By default the selected Docker daemon must host that task. If the Controller runs on another node (including a worker), create a Docker context for that node and pass it **only for file reads**:
+
+```sh
+# Replace user and control-node with your SSH login and Controller host.
+docker context create kpl-control --docker "host=ssh://user@control-node"
+sh scripts/swarm.sh logs access --context kpl-control
+sh scripts/swarm.sh logs auth --context kpl-control --tail 500
+```
+
+Keep the caller's Docker context connected to a manager; `--context` on these two commands selects the daemon for the node check and file read, while task discovery stays on the manager. The helper verifies that the selected daemon is the task's actual node. It requires a running Controller with web logging enabled and reports missing files, unavailable tasks or a wrong node as errors. It does not start containers or change the stack. For continuous following or rotated backups, access the files directly on the Controller node.
 
 ## Built-in Dashboard visualization
 

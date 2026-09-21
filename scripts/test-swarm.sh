@@ -27,6 +27,13 @@ event() { printf '%s\n' "$1" >> "$s/events"; }
 if [ -n "${KPL_TEST_EXPECT_CONTEXT:-}" ] && [ "${DOCKER_CONTEXT:-}" != "$KPL_TEST_EXPECT_CONTEXT" ]; then
     die 'The selected Docker context was changed'
 fi
+log_context=''
+if [ "$1" = --context ]; then
+    log_context=$2
+    [ "$log_context" = controller-node ] || die 'Unknown Docker context'
+    shift 2
+    case "$1 ${2:-}" in 'info --format'|'exec '*) ;; *) die 'Remote context used outside web log reads' ;; esac
+fi
 for last do :; done
 case "$1 ${2:-}" in
     'build --tag')
@@ -67,7 +74,8 @@ case "$1 ${2:-}" in
         esac ;;
     'info --format')
         case "$3" in
-            '{{.Swarm.NodeID}}') printf '%s\n' "${KPL_TEST_SELF_ID:-control1}" ;;
+            '{{.Swarm.NodeID}}')
+                if [ -n "$log_context" ]; then printf '%s\n' "${KPL_TEST_LOG_CONTEXT_NODE:-worker1}"; else printf '%s\n' "${KPL_TEST_SELF_ID:-control1}"; fi ;;
             '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}') printf 'active true\n' ;;
             *) die "$@" ;;
         esac ;;
@@ -106,6 +114,9 @@ case "$1 ${2:-}" in
         [ "${KPL_TEST_EMPTY_HISTORY:-0}" = 0 ] || exit 0
         case "$last" in
             "${stack}_controller")
+                case "$*" in
+                    *desired-state=running*) printf '%s\n' "${KPL_TEST_LOG_TASKS-taskC}"; exit 0 ;;
+                esac
                 # Pausing placement preserves the running slot's old task and
                 # introduces an unassigned replacement ahead of it in history.
                 if [ -f "$s/controller-stopped" ]; then printf 'pendingC\n'; fi
@@ -122,11 +133,28 @@ case "$1 ${2:-}" in
             *) die "$@" ;;
         esac ;;
     'service logs')
-        [ "$#" = 6 ] && [ "$3 $4 $5" = '--tail 100 --timestamps' ] || die "$@"
+        [ "$#" = 6 ] && [ "$3" = --tail ] && [ "$5" = --timestamps ] || die "$@"
         case "$6" in "${stack}_controller"|"${stack}_agent"|"${stack}_prometheus"|"${stack}_grafana") ;; *) die "$@" ;; esac
         printf 'mock service log for %s\n' "$6" ;;
+    'exec '*)
+        [ "$#" = 8 ] && [ "$2 $3 $4 $6" = 'containerC sh -c kpl-web-log' ] || die "$@"
+        case "$7" in /var/lib/kpl/data/logs/access.jsonl|/var/lib/kpl/data/logs/auth.jsonl) ;; *) die "$@" ;; esac
+        if [ "${KPL_TEST_LOG_EXEC_FAIL:-0}" = 1 ]; then printf 'mock Controller container stopped\n' >&2; exit 1; fi
+        # Execute the real reader with a fixture file; never use the real daemon
+        # or Controller data path. This verifies tail/all and missing-file errors.
+        sh -c "$5" "$6" "$s/logs/${7##*/}" "$8" ;;
     'inspect --type')
         [ "$3" = task ] || die "$@"
+        if [ "$5" = '{{.NodeID}}|{{.Status.State}}|{{if .Status.ContainerStatus}}{{.Status.ContainerStatus.ContainerID}}{{end}}' ]; then
+            case "$last" in
+                taskC) printf '%s|running|containerC\n' "${KPL_TEST_CONTROLLER_NODE:-control1}" ;;
+                pendingC) printf '|pending|\n' ;;
+                failedC) printf 'control1|failed|oldContainer\n' ;;
+                malformedC) printf 'control1|running|\n' ;;
+                *) die "$@" ;;
+            esac
+            exit 0
+        fi
         state=running; pid=42; code=0; issue=ok
         case "$last" in
             pendingC)
@@ -302,6 +330,7 @@ reset_case() {
     export KPL_DOCKER_TIMEOUT=3 KPL_CONTROLLER_STOP_TIMEOUT=3 KPL_AGENT_STOP_TIMEOUT=3
     export KPL_TEST_REPO_ROOT=$root
     unset KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
+    unset KPL_TEST_CONTROLLER_NODE KPL_TEST_LOG_CONTEXT_NODE KPL_TEST_LOG_TASKS KPL_TEST_LOG_EXEC_FAIL
     unset KPL_TEST_SLOW_STOP_INSPECT KPL_TEST_SERVICE_RM_FAIL KPL_TEST_STACK_RM_FAIL KPL_TEST_REMOVAL_PENDING KPL_TEST_NODE_UPDATE_FAIL
     unset KPL_TEST_SELF_ID KPL_TEST_NODE_IDS KPL_TEST_LABEL_NODES KPL_TEST_NODE_LS_FAIL KPL_TEST_NODE_INSPECT_FAIL
     unset KPL_PEER_SUBNET KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_TEST_BUILD_FAIL KPL_TEST_PUSH_FAIL KPL_TEST_EXPECT_CONTEXT DOCKER_CONTEXT KPL_TEST_NETWORK_SUBNET KPL_TEST_CONTROL_ADDR KPL_TEST_WORKER1_ADDR KPL_TEST_WORKER2_ADDR KPL_HTTP_PORT KPL_AGENT_METRICS_PORT PROMETHEUS_PORT GRAFANA_PORT
@@ -809,6 +838,94 @@ for component in agent prometheus grafana; do
     grep -Fxq "service logs --tail 100 --timestamps lab_$component" "$KPL_TEST_STATE/calls"
 done
 no_mutation
+run logs agent --tail 25
+grep -Fxq 'service logs --tail 25 --timestamps lab_agent' "$KPL_TEST_STATE/calls"
+run logs --tail all
+grep -Fxq 'service logs --tail all --timestamps lab_controller' "$KPL_TEST_STATE/calls"
+no_mutation
+
+# Web files are read from the manager-verified Controller task, with raw JSONL
+# stdout suitable for piping and no changes to services, containers or volumes.
+web_log_fixtures() {
+    mkdir "$KPL_TEST_STATE/logs"
+    for component in access auth; do
+        awk -v event="$component" 'BEGIN { for (i=1; i<=150; i++) printf "{\"event\":\"%s\",\"sequence\":%d}\n", event, i }' > "$KPL_TEST_STATE/logs/$component.jsonl"
+    done
+}
+for component in access auth; do
+    reset_case
+    web_log_fixtures
+    export DOCKER_CONTEXT=test-manager KPL_TEST_EXPECT_CONTEXT=test-manager
+    run logs "$component"
+    tail -n 100 "$KPL_TEST_STATE/logs/$component.jsonl" > "$scratch/expected"
+    cmp "$scratch/expected" "$KPL_TEST_STATE/output"
+    grep -Fxq 'service ps --quiet --no-trunc --filter desired-state=running lab_controller' "$KPL_TEST_STATE/calls"
+    run logs "$component" --tail 2
+    tail -n 2 "$KPL_TEST_STATE/logs/$component.jsonl" > "$scratch/expected"
+    cmp "$scratch/expected" "$KPL_TEST_STATE/output"
+    run logs "$component" --tail all
+    cmp "$KPL_TEST_STATE/logs/$component.jsonl" "$KPL_TEST_STATE/output"
+    : > "$KPL_TEST_STATE/logs/$component.jsonl"
+    run logs "$component"
+    [ ! -s "$KPL_TEST_STATE/output" ]
+    no_mutation
+done
+
+# A remote Controller can be on a worker; only its file read uses the explicit
+# context. A stale configured control node must not override actual placement.
+reset_case
+web_log_fixtures
+export KPL_TEST_CONTROLLER_NODE=worker1 DOCKER_CONTEXT=test-manager KPL_TEST_EXPECT_CONTEXT=test-manager
+reject logs access
+grep -Fq 'Controller runs on Swarm node worker1' "$KPL_TEST_STATE/output"
+! grep -q '^exec ' "$KPL_TEST_STATE/calls"
+run logs access --context controller-node --tail 3
+tail -n 3 "$KPL_TEST_STATE/logs/access.jsonl" > "$scratch/expected"
+cmp "$scratch/expected" "$KPL_TEST_STATE/output"
+grep -Fxq -- '--context controller-node info --format {{.Swarm.NodeID}}' "$KPL_TEST_STATE/calls"
+grep -q '^--context controller-node exec containerC ' "$KPL_TEST_STATE/calls"
+no_mutation
+reset_case
+export KPL_TEST_LOG_CONTEXT_NODE=worker2
+reject logs auth --context controller-node
+! grep -q 'exec containerC ' "$KPL_TEST_STATE/calls"
+no_mutation
+
+# Task startup/failure, ambiguous updates, missing files and daemon errors are
+# explicit failures, never a fallback to another container or ordinary logs.
+for fault in KPL_TEST_EMPTY_STACK=1 KPL_TEST_EMPTY_HISTORY=1 KPL_TEST_LOG_TASKS=pendingC KPL_TEST_LOG_TASKS=failedC KPL_TEST_LOG_TASKS=malformedC KPL_TEST_FOREIGN=1 KPL_TEST_INSPECT_FAIL=1; do
+    reset_case
+    export "$fault"
+    reject logs access
+    ! grep -q '^exec ' "$KPL_TEST_STATE/calls"
+    no_mutation
+done
+reset_case
+export KPL_TEST_LOG_TASKS='taskC taskC'
+reject logs auth
+grep -Fq 'Multiple Controller tasks are running' "$KPL_TEST_STATE/output"
+! grep -q '^exec ' "$KPL_TEST_STATE/calls"
+no_mutation
+reset_case
+web_log_fixtures
+export KPL_TEST_LOG_TASKS='pendingC failedC taskC'
+run logs auth --tail 1
+tail -n 1 "$KPL_TEST_STATE/logs/auth.jsonl" > "$scratch/expected"
+cmp "$scratch/expected" "$KPL_TEST_STATE/output"
+no_mutation
+reset_case
+reject logs auth
+grep -Fq 'Web log file is missing' "$KPL_TEST_STATE/output"
+no_mutation
+reset_case
+export KPL_TEST_LOG_EXEC_FAIL=1
+reject logs access
+grep -Fq 'Cannot read Controller web logs' "$KPL_TEST_STATE/output"
+no_mutation
+reset_case
+reject logs access --context nonexistent
+grep -Fq 'Cannot connect to the Docker daemon selected for web logs' "$KPL_TEST_STATE/output"
+no_mutation
 
 # Login uses only the image's registry authority; Docker Hub retains Docker's
 # default login flow, with no password argv and no short command timeout.
@@ -976,7 +1093,7 @@ no_mutation
 [ ! -e "$KPL_TEST_STATE/config-public-urls" ]
 
 # New helper flags and arity are also validated before contacting Docker.
-for arguments in 'nodes --all' 'login unexpected' 'publish --platforms' 'publish --unknown' 'publish --platforms linux/amd64 extra' 'check extra' 'access extra' 'logs unknown' 'logs --follow' 'scenario --unknown'; do
+for arguments in 'nodes --all' 'login unexpected' 'publish --platforms' 'publish --unknown' 'publish --platforms linux/amd64 extra' 'check extra' 'access extra' 'logs unknown' 'logs --follow' 'logs access --tail' 'logs auth --tail -1' 'logs auth --tail 0' 'logs auth --tail 01' 'logs auth --tail 1x' 'logs access --tail 999999999999999999999999999' 'logs access --context' 'logs access --context --tail' 'logs controller --context controller-node' 'logs auth extra' 'scenario --unknown'; do
     reset_case
     # Intentional splitting of fixed argument fixtures.
     reject $arguments

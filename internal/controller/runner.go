@@ -37,6 +37,7 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	webLogs                *webLogs
 	auth                   *browserAuth
 	config                 ServerConfig
 	state                  *state
@@ -88,6 +89,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	return &Server{
+		webLogs:                newWebLogs(config.DataDir),
 		auth:                   newBrowserAuth(),
 		config:                 config,
 		state:                  newState(config.DataDir),

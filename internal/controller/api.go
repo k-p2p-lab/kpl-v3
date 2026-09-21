@@ -43,6 +43,12 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	for _, log := range []*rotatingWebLog{s.webLogs.access, s.webLogs.auth} {
+		if err := log.prepare(); err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("prepare web audit log %s: %w", log.name, err)
+		}
+	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	// Agents must still be able to deliver final Peer events after run cancellation.
@@ -113,7 +119,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 }
 
 func (s *Server) Handler(ctx context.Context) http.Handler {
-	return s.withMiddleware(s.withAuthentication(s.routes(ctx)))
+	return s.withMiddleware(s.withWebLogging(s.withAuthentication(s.routes(ctx))))
 }
 
 func (s *Server) routes(ctx context.Context) http.Handler {

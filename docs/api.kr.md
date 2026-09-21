@@ -4,6 +4,8 @@
 
 Controller의 대시보드와 운영 API는 로그인 세션으로 보호합니다. 아래 [인증](#인증)에서 공개 모니터링 경로와 내부 서비스 인증을 구분합니다.
 
+Controller는 웹 접근과 인증 시도를 `<data-dir>/logs/access.jsonl`, `auth.jsonl`에 보존합니다. 비밀번호·쿠키·인증 헤더·쿼리는 기록하지 않습니다. 필드·회전·조회 방법은 [웹 접근·인증 로그](monitoring.kr.md#웹-접근인증-로그)를 참고하십시오.
+
 ## Controller endpoint
 
 | Method | Path | 설명 |

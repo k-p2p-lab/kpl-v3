@@ -23,6 +23,33 @@ Swarm publishes the Prometheus and Grafana ports on the control node. It also pu
 
 The Dashboard header links to Prometheus and Grafana in new tabs. It preserves the current Dashboard scheme and host and substitutes the configured published ports. Direct access and SSH tunnels work when those browser-facing ports match the configured values. If a proxy changes the scheme/path or local forwarding uses different ports, open the actual monitoring addresses separately.
 
+## Web access and authentication logs
+
+The Controller automatically writes one JSON object per line under `<data-dir>/logs`. Local runs use `data/logs`; Swarm uses `/var/lib/kpl/data/logs` in the persistent `controller-data` volume.
+
+| File | Records |
+|---|---|
+| `access.jsonl` | Dashboard/static-file/API requests, redirects, failures, and SSE connection open/close |
+| `auth.jsonl` | Successful and failed logins, logout attempts, missing/expired-session access and same-origin rejections |
+
+Each record includes UTC `timestamp`, `event`, a server-generated `requestId`, `remoteIp`, HTTP `method` and `path`, response `status`, body `bytes`, `durationMs`, `userAgent`, `authentication` (`anonymous`, `session`, or `internal`), and `user` when known. Authentication records include `outcome` and a reason such as `invalid_credentials`, `rate_limited`, `invalid_request`, `origin_denied`, or `login_required`. A failed login records the submitted username when the JSON request is valid. Access and authentication entries share the request ID. SSE writes `sse_open` immediately when the response starts and `sse_close` when it ends.
+
+Passwords, session cookies, Authorization headers, request/response bodies, Referer and URL query strings are excluded. Untrusted text is length-limited and JSON-escaped. `remoteIp` comes from the actual connection, without trusting client-supplied `Forwarded` or `X-Forwarded-For`; behind a reverse proxy this is the proxy's address. Successful authenticated Agent/Peer traffic and successful health/metrics/Prometheus-target checks are omitted to avoid per-event disk logging during experiments. Their errors and unauthorized attempts are still logged.
+
+Each file rotates before exceeding **10 MiB**, retaining the current file plus **five backups** (`.1` newest through `.5` oldest), up to approximately **120 MiB combined**. Startup appends to existing logs. The directory uses mode `0700` and files `0600`. Startup rejects an unusable log path; a later write error is reported in the Controller's ordinary service log without breaking HTTP requests, and subsequent writes retry. Records are appended without an in-memory queue; they are not individually fsynced. Include `logs` in Controller-volume backups when retaining access history. These files are not served by the Dashboard or included in experiment ZIPs.
+
+For a local Controller, follow both files with:
+
+```sh
+tail -F data/logs/access.jsonl data/logs/auth.jsonl
+```
+
+For Swarm, run the following inside the Controller container (or read the same files through its data volume):
+
+```sh
+tail -F /var/lib/kpl/data/logs/access.jsonl /var/lib/kpl/data/logs/auth.jsonl
+```
+
 ## Built-in Dashboard visualization
 
 **Metrics** places all 11 cluster, delivery, bandwidth and observation cards in one horizontal row. Scroll sideways or use the **Previous metrics / Next metrics** arrow buttons. Hover over a card to expand that card horizontally and reveal its detailed values and explanation; only one card expands at a time. Long details scroll vertically within the expanded card.

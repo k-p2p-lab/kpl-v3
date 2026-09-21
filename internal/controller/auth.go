@@ -122,11 +122,13 @@ func (s *Server) withAuthentication(next http.Handler) http.Handler {
 			return
 		}
 		if internalAuthPath(r) && s.config.Token != "" && auth.Equal(r.Header.Get("Authorization"), "Bearer "+s.config.Token) {
+			setWebIdentity(r, "internal", "")
 			next.ServeHTTP(w, r)
 			return
 		}
 		session := s.auth.session(r)
 		if session == nil {
+			recordWebAuth(r, "", "failure", "login_required", "")
 			w.Header().Set("Cache-Control", "no-store")
 			if (r.URL.Path == "/" || r.URL.Path == "/index.html") && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -135,8 +137,10 @@ func (s *Server) withAuthentication(next http.Handler) http.Handler {
 			}
 			return
 		}
+		setWebIdentity(r, "session", s.config.User)
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && (!sameOrigin(r) || r.Header.Get("X-KPL-Request") != "dashboard") {
+			recordWebAuth(r, "", "failure", "origin_denied", s.config.User)
 			writeError(w, http.StatusForbidden, "same-origin request required")
 			return
 		}
@@ -161,20 +165,24 @@ func (s *Server) withAuthentication(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	recordWebAuth(r, "login", "failure", "invalid_request", "")
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
 		return
 	}
 	if !sameOrigin(r) {
+		recordWebAuth(r, "login", "failure", "origin_denied", "")
 		writeError(w, http.StatusForbidden, "same-origin request required")
 		return
 	}
 	if err := auth.Validate(s.config.User, s.config.Password); err != nil {
+		recordWebAuth(r, "login", "failure", "not_configured", "")
 		writeError(w, http.StatusServiceUnavailable, "login is not configured")
 		return
 	}
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
+		recordWebAuth(r, "login", "failure", "unsupported_media_type", "")
 		writeError(w, http.StatusUnsupportedMediaType, "application/json required")
 		return
 	}
@@ -192,6 +200,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid login request")
 		return
 	}
+	recordWebAuth(r, "login", "failure", "invalid_credentials", credentials.User)
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -207,6 +216,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	attempt := s.auth.failures[host]
 	if attempt.count >= 10 {
 		w.Header().Set("Retry-After", "300")
+		recordWebAuth(r, "login", "failure", "rate_limited", credentials.User)
 		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
 		return
 	}
@@ -215,6 +225,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !validUser || !validPassword {
 		if len(s.auth.failures) >= sessionLimit && attempt.count == 0 {
 			w.Header().Set("Retry-After", "300")
+			recordWebAuth(r, "login", "failure", "rate_limited", credentials.User)
 			writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
 			return
 		}
@@ -242,11 +253,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(s.auth.sessions) >= sessionLimit {
+		recordWebAuth(r, "login", "failure", "session_capacity", credentials.User)
 		writeError(w, http.StatusServiceUnavailable, "session capacity reached; try again later")
 		return
 	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
+		recordWebAuth(r, "login", "failure", "session_creation_failed", credentials.User)
 		writeError(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
@@ -254,6 +267,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	session := &browserSession{expires: now.Add(sessionLifetime), done: make(chan struct{})}
 	s.auth.sessions[sha256.Sum256([]byte(value))] = session
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: value, Path: "/", HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode, MaxAge: int(sessionLifetime.Seconds()), Expires: session.expires})
+	setWebIdentity(r, "session", s.config.User)
+	recordWebAuth(r, "login", "success", "", s.config.User)
 	writeJSON(w, http.StatusOK, map[string]any{"user": s.config.User, "expiresAt": session.expires})
 }
 
@@ -276,6 +291,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.revoke(r)
+	recordWebAuth(r, "logout", "success", "", s.config.User)
 	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	w.WriteHeader(http.StatusNoContent)
 }

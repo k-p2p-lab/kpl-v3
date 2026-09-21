@@ -23,6 +23,33 @@ Swarm은 Prometheus/Grafana 포트를 control 노드에 게시합니다. 각 Age
 
 대시보드 상단 메뉴는 Prometheus와 Grafana를 새 탭으로 엽니다. 현재 Dashboard의 scheme과 호스트를 유지하고 설정된 게시 포트로 바꿉니다. 브라우저가 사용하는 포트가 설정값과 같으면 직접 접속과 SSH 터널에서 동작합니다. Proxy가 scheme/path를 바꾸거나 로컬 forwarding에 다른 포트를 쓰면 실제 모니터링 주소를 별도로 여십시오.
 
+## 웹 접근·인증 로그
+
+Controller는 `<data-dir>/logs` 아래에 한 줄당 JSON 객체 하나를 자동 기록합니다. 로컬 기본 경로는 `data/logs`, Swarm에서는 영속 `controller-data` volume의 `/var/lib/kpl/data/logs`입니다.
+
+| 파일 | 기록 대상 |
+|---|---|
+| `access.jsonl` | 대시보드·정적 파일·API 접근, 리다이렉트, 실패 응답, SSE 연결 시작·종료 |
+| `auth.jsonl` | 로그인 성공·실패, 로그아웃 시도, 세션 부재·만료로 거절된 접근과 동일 출처 검사 거절 |
+
+UTC `timestamp`, `event`, 서버가 생성한 `requestId`, `remoteIp`, HTTP `method`·`path`, 응답 `status`, 본문 `bytes`, 처리 시간 `durationMs`, `userAgent`, 인증 방식 `authentication`(`anonymous`·`session`·`internal`)과 확인 가능한 `user`를 기록합니다. 인증 기록에는 `outcome`과 `invalid_credentials`, `rate_limited`, `invalid_request`, `origin_denied`, `login_required` 등의 이유가 포함됩니다. 유효한 JSON 로그인 요청에서는 실패하더라도 입력한 계정명을 남깁니다. 같은 요청의 접근·인증 기록은 request ID로 연결하며, SSE는 응답 시작 즉시 `sse_open`, 종료 시 `sse_close`를 남깁니다.
+
+비밀번호, 세션 쿠키, Authorization 헤더, 요청·응답 본문, Referer와 URL 쿼리는 기록하지 않습니다. 입력 문자열의 길이를 제한하고 JSON escaping을 적용합니다. `remoteIp`는 실제 연결 주소이며 클라이언트가 보낸 `Forwarded`·`X-Forwarded-For`를 신뢰하지 않습니다. reverse proxy 뒤에서는 proxy 주소가 기록됩니다. 실험 중 이벤트마다 디스크에 쓰지 않도록 인증에 성공한 정상 Agent·Peer 통신과 정상 health·metrics·Prometheus target 점검은 제외합니다. 해당 요청의 오류와 인증 실패는 기록합니다.
+
+각 파일은 **10 MiB**를 넘기기 전에 회전하며 현재 파일과 **백업 5개**(`.1`이 최신, `.5`가 가장 오래됨), 두 종류 합계 약 **120 MiB**까지 보관합니다. 재시작해도 기존 파일에 이어 씁니다. 디렉터리는 `0700`, 파일은 `0600` 권한입니다. 시작 시 로그 경로를 사용할 수 없으면 오류로 종료합니다. 실행 중 쓰기 실패는 Controller의 일반 서비스 로그에 알리고 HTTP 요청 처리는 유지하며 이후 요청에서 기록을 재시도합니다. 메모리 큐 없이 파일에 append하지만 건마다 fsync하지는 않습니다. 접근 기록을 보존하려면 Controller volume 백업에 `logs`를 포함하십시오. 대시보드에서 이 파일을 제공하거나 실험 ZIP에 넣지는 않습니다.
+
+로컬 Controller에서는 다음과 같이 두 파일을 확인합니다.
+
+```sh
+tail -F data/logs/access.jsonl data/logs/auth.jsonl
+```
+
+Swarm에서는 Controller 컨테이너 안에서 다음 명령을 실행하거나 데이터 volume의 같은 파일을 확인합니다.
+
+```sh
+tail -F /var/lib/kpl/data/logs/access.jsonl /var/lib/kpl/data/logs/auth.jsonl
+```
+
 ## Dashboard 내장 시각화
 
 **Metrics**는 클러스터·전달·대역폭·관측 지표 카드 11개를 가로 한 행에 표시합니다. 가로로 스크롤하거나 **Previous metrics / Next metrics** 화살표 버튼으로 이동하십시오. 카드에 마우스를 올리면 해당 카드 하나만 가로로 넓어지면서 상세 수치와 설명을 보여 줍니다. 긴 상세 내용은 펼친 카드 안에서 세로로 스크롤합니다.

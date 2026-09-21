@@ -4,6 +4,8 @@ English | [Korean](api.kr.md)
 
 The dashboard and operational APIs require a login session. See [authentication](#authentication) for public monitoring exceptions and internal service authentication.
 
+The Controller persists web access and authentication attempts in `<data-dir>/logs/access.jsonl` and `auth.jsonl`. Passwords, cookies, authorization headers and query strings are excluded. See [web access and authentication logs](monitoring.md#web-access-and-authentication-logs) for fields, rotation and retrieval.
+
 ## Controller endpoints
 
 | Method | Path | Description |

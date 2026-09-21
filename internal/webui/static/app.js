@@ -596,7 +596,7 @@ function resultSourceSize(run) {
   const size = Number.isSafeInteger(bytes) && bytes >= 0 ? (bytes === 0 ? "0 B" : formatBytes(bytes)) : "";
   if (!size) return '<span class="download-size" title="Source file sizes could not be read at the last refresh.">Source · —</span>';
   const live = isPendingRun(run);
-  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events and observations. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source" : "Source"} · ${escapeHTML(size)}</span>`;
+  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events and observations. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source" : "Source "}${escapeHTML(size)}</span>`;
 }
 
 function runSourceSize(run) {
@@ -1078,7 +1078,7 @@ function savedResultRow(run) {
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""}${resultSourceSize(run)}</span></td>
+    <td class="result-name"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span></td>
     <td><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
     <td>${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td>${escapeHTML(formatResultTime(run.finishedAt))}</td>

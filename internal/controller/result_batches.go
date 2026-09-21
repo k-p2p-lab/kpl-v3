@@ -40,7 +40,7 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 	defer s.analysisJobMu.Unlock()
 	// Membership cannot change through admission or another deletion while
 	// these locks are held. Read members before persistMu: batchMembers takes it.
-	members, err := s.batchMembers(ctx, id)
+	members, err := s.allBatchMembers(ctx, id)
 	if err != nil && !errors.Is(err, errResultNotFound) {
 		return nil, err
 	}

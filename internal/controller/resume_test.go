@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,17 +35,38 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 	t.Helper()
 	f := &resumeFixture{agent: &lifecycleTestAgent{firstCreate: make(chan struct{}), nodes: make(map[string]model.Node)}, creates: make(chan string, 100)}
 	f.fail.Store(true)
+	var fenceMu sync.Mutex
+	fences := make(map[string]uint64)
 	f.api = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/nodes" {
 			raw, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(raw))
 			var request model.CreateNodeRequest
 			_ = json.Unmarshal(raw, &request)
+			fenceMu.Lock()
+			fenced := request.Generation <= fences[request.RunID]
+			fenceMu.Unlock()
+			if fenced {
+				http.Error(w, "run generation is fenced", http.StatusConflict)
+				return
+			}
 			f.creates <- request.RunID
 			attempt := f.createCount.Add(1)
 			if f.fail.Load() || attempt == f.failAt.Load() {
 				http.Error(w, "injected create failure", http.StatusInternalServerError)
 				return
+			}
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/runs/") {
+			runID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/runs/"), "/nodes")
+			generation, _ := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+			f.agent.mu.Lock()
+			succeeds := f.agent.fenceStatus == 0
+			f.agent.mu.Unlock()
+			if succeeds {
+				fenceMu.Lock()
+				fences[runID] = max(fences[runID], generation)
+				fenceMu.Unlock()
 			}
 		}
 		f.agent.serveHTTP(w, r)

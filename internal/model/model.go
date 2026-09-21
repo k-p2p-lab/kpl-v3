@@ -113,25 +113,26 @@ type PublishRequest struct {
 }
 
 type Experiment struct {
-	ID            string            `json:"id"`
-	BatchID       string            `json:"batchId,omitempty"`
-	Iteration     int               `json:"iteration,omitempty"`
-	Repetitions   int               `json:"repetitions,omitempty"`
-	Name          string            `json:"name"`
-	State         string            `json:"state"`
-	Seed          int64             `json:"seed"`
-	Phase         int               `json:"phase"`
-	TotalPhases   int               `json:"totalPhases"`
-	PhaseName     string            `json:"phaseName,omitempty"`
-	ActiveJobs    int               `json:"activeJobs"`
-	CompletedJobs int               `json:"completedJobs"`
-	FailedJobs    int               `json:"failedJobs"`
-	CanceledJobs  int               `json:"canceledJobs"`
-	StartedAt     time.Time         `json:"startedAt"`
-	FinishedAt    time.Time         `json:"finishedAt,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	ScenarioYAML  string            `json:"-"`
-	Timing        *ExperimentTiming `json:"timing,omitempty"`
+	PreviousRunIDs []string          `json:"previousRunIds,omitempty"`
+	ID             string            `json:"id"`
+	BatchID        string            `json:"batchId,omitempty"`
+	Iteration      int               `json:"iteration,omitempty"`
+	Repetitions    int               `json:"repetitions,omitempty"`
+	Name           string            `json:"name"`
+	State          string            `json:"state"`
+	Seed           int64             `json:"seed"`
+	Phase          int               `json:"phase"`
+	TotalPhases    int               `json:"totalPhases"`
+	PhaseName      string            `json:"phaseName,omitempty"`
+	ActiveJobs     int               `json:"activeJobs"`
+	CompletedJobs  int               `json:"completedJobs"`
+	FailedJobs     int               `json:"failedJobs"`
+	CanceledJobs   int               `json:"canceledJobs"`
+	StartedAt      time.Time         `json:"startedAt"`
+	FinishedAt     time.Time         `json:"finishedAt,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	ScenarioYAML   string            `json:"-"`
+	Timing         *ExperimentTiming `json:"timing,omitempty"`
 }
 
 type Edge struct {

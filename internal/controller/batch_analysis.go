@@ -127,7 +127,32 @@ func (s *Server) loadBatchAnalysis(id string) (*batchAnalysisJob, error) {
 	return job, nil
 }
 
+// Prior attempts remain downloadable, but only the latest attempt of each
+// iteration participates in continuation and batch statistics.
+func currentBatchMembers(members []savedResult) []savedResult {
+	previous := make(map[string]bool)
+	for _, member := range members {
+		for _, id := range member.PreviousRunIDs {
+			if id != member.ID {
+				previous[id] = true
+			}
+		}
+	}
+	current := make([]savedResult, 0, len(members))
+	for _, member := range members {
+		if !previous[member.ID] {
+			current = append(current, member)
+		}
+	}
+	return current
+}
+
 func (s *Server) batchMembers(ctx context.Context, id string) ([]savedResult, error) {
+	members, err := s.allBatchMembers(ctx, id)
+	return currentBatchMembers(members), err
+}
+
+func (s *Server) allBatchMembers(ctx context.Context, id string) ([]savedResult, error) {
 	if !validResultID(id) {
 		return nil, errResultNotFound
 	}
@@ -173,6 +198,7 @@ func (s *Server) batchMembers(ctx context.Context, id string) ([]savedResult, er
 	return members, nil
 }
 func batchMembership(members []savedResult) string {
+	members = currentBatchMembers(members)
 	// Ignore display-only download sizes and job statuses, and normalize order.
 	canonical := make([]savedResult, 0, len(members))
 	for _, m := range members {

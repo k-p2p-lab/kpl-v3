@@ -106,6 +106,11 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 func (s *Server) reserveRepeatedResults(experiments []model.Experiment, raw []byte) (resultErr error) {
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	return s.reserveRepeatedResultsLocked(experiments, raw)
+}
+
+// Caller holds cancelMu and persistMu. Used by retry admission as well.
+func (s *Server) reserveRepeatedResultsLocked(experiments []model.Experiment, raw []byte) (resultErr error) {
 	if err := os.MkdirAll(s.config.DataDir, 0o755); err != nil {
 		return err
 	}

@@ -31,6 +31,7 @@ var (
 )
 
 type savedResult struct {
+	PreviousRunIDs         []string             `json:"previousRunIds,omitempty"`
 	BatchAnalysis          *batchAnalysisStatus `json:"batchAnalysis,omitempty"`
 	Analysis               *analysisJobStatus   `json:"analysis,omitempty"`
 	ID                     string               `json:"id"`

@@ -520,7 +520,11 @@ function renderBatchEstimates(runs) {
     const run = pending.find(member => member.state === "running") || pending[0];
     const timing = pending.find(member => member.timing?.batchEstimatedFinishAt)?.timing;
     const stopping = state.pendingStops.has(id);
-    const completed = members.filter(member => member.state === "completed").length;
+    // After a Controller restart, completed iterations exist only in Saved
+    // results. Merge by ID so live updates win without double-counting them.
+    const known = new Map((state.savedResults || []).filter(member => member.batchId === id && !state.deletedResultIDs?.has(member.id)).map(member => [member.id, member]));
+    for (const member of members) known.set(member.id, member);
+    const completed = currentBatchRuns([...known.values()]).filter(member => member.state === "completed").length;
     const remaining = stopping ? "Stopping…" : timing?.batchOverdue ? "Delayed run · estimate may extend" : formatEstimateRemaining(timing?.batchRemainingSeconds);
     summaries.push(`<article class="run-batch-estimate${timing?.batchOverdue ? " overdue" : ""}" data-batch-estimate="${escapeHTML(id)}">
       <div class="run-batch-estimate-heading"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span>${formatNumber(completed)} / ${formatNumber(run.repetitions)} completed</span></div>
@@ -533,7 +537,7 @@ function renderBatchEstimates(runs) {
 }
 
 function renderRuns(runs) {
-  runs = runs.filter((run) => !state.deletedResultIDs?.has(run.id));
+  runs = currentBatchRuns(runs.filter((run) => !state.deletedResultIDs?.has(run.id)));
   const activeGroups = new Set(runs.filter(isPendingRun).map(run => run.batchId || run.id));
   for (const key of state.pendingStops) {
     if (!activeGroups.has(key)) state.pendingStops.delete(key);
@@ -977,7 +981,12 @@ async function refreshSavedResults() {
   }
 }
 
-function savedResultBatches(results) {
+function currentBatchRuns(runs) {
+  const previous = new Set(runs.flatMap(run => run.previousRunIds || []));
+  return runs.filter(run => !previous.has(run.id));
+}
+
+function savedResultBatches(results, includeSingles = false) {
   const groups = new Map();
   for (const run of results) {
     if (!run.batchId) continue;
@@ -986,11 +995,14 @@ function savedResultBatches(results) {
     batch.runs.push(run);
     batch.expected = Math.max(batch.expected, run.repetitions || 1);
   }
-  return [...groups.values()].filter(batch => batch.expected > 1).map(batch => ({ ...batch,
-    completed: batch.runs.filter(run => run.state === "completed").length,
-    active: batch.runs.some(isPendingRun),
-    job: batch.runs.find(run => run.batchAnalysis)?.batchAnalysis,
-  }));
+  return [...groups.values()].filter(batch => includeSingles || batch.expected > 1 || batch.runs.some(run => run.previousRunIds?.length)).map(batch => {
+    const runs = currentBatchRuns(batch.runs), current = new Set(runs.map(run => run.id));
+    return { ...batch, runs, previousRuns: batch.runs.filter(run => !current.has(run.id)),
+      completed: runs.filter(run => run.state === "completed").length,
+      active: batch.runs.some(isPendingRun),
+      job: batch.runs.find(run => run.batchAnalysis)?.batchAnalysis,
+    };
+  });
 }
 
 function hasRunStarted(run) {
@@ -1003,21 +1015,47 @@ function remainingBatchRuns(batch) {
   return batch.runs.filter(run => run.iteration > lastAttempt && !hasRunStarted(run) && ["canceled", "interrupted"].includes(run.state));
 }
 
-async function resumeSavedBatch(id) {
+function retryBatchRuns(batch) {
+  if (batch.active || batch.runs.some(run => !Number.isInteger(run.iteration) || run.iteration < 1 || run.iteration > batch.expected || run.state === "unreadable")) return [];
+  if (new Set(batch.runs.map(run => run.iteration)).size !== batch.runs.length) return [];
+  return batch.runs.filter(run => ["failed", "interrupted", "canceled"].includes(run.state)).sort((a, b) => a.iteration - b.iteration);
+}
+
+function retryBatchButton(batch, locked = false) {
+  const runs = retryBatchRuns(batch);
+  if (!runs.length) return "";
+  const resuming = state.pendingResumes?.has(batch.id);
+  const analyzing = ["queued", "running"].includes(batch.job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
+  const label = batch.expected > 1 ? `Retry from run ${runs[0].iteration} (${runs.length})` : "Retry experiment";
+  return `<button type="button" class="secondary-button batch-resume-button" data-retry-batch="${escapeHTML(batch.id)}" title="Clean up previous Peers, then restart unfinished runs from their first phase. Completed runs are kept. Previous attempts remain downloadable." aria-label="${escapeHTML(`${label}: ${batch.name}`)}" ${locked || analyzing || resuming || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : label}</button>`;
+}
+
+async function resumeSavedBatch(id, retry = false) {
   if (state.pendingResumes.has(id)) return;
-  const batch = savedResultBatches(state.savedResults || []).find(batch => batch.id === id);
-  const remaining = batch ? remainingBatchRuns(batch) : [];
+  const batch = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === id);
+  const remaining = batch ? (retry ? retryBatchRuns(batch) : remainingBatchRuns(batch)) : [];
   if (!remaining.length) return;
   state.pendingResumes.add(id);
   renderSavedResults();
   try {
-    await api(`/api/v1/result-batches/${encodeURIComponent(id)}/resume`, { method: "POST" });
-    const ids = new Set(remaining.map(run => run.id));
-    for (const run of [...(state.savedResults || []), ...(state.snapshot?.experiments || [])]) {
-      if (ids.has(run.id)) { run.state = "queued"; run.error = ""; run.finishedAt = ""; }
+    const first = await api(`/api/v1/result-batches/${encodeURIComponent(id)}/${retry ? "retry" : "resume"}`, { method: "POST" });
+    if (retry) {
+      // The new ID belongs to the queued retry. Old attempts keep their state
+      // and logs; do not optimistically turn those IDs back into running work.
+      if (!first?.id || first.batchId !== id) throw new Error("Unexpected retry response. Refresh saved results to check the batch.");
+      if (!(state.savedResults || []).some(run => run.id === first.id)) state.savedResults.push(first);
+      if (state.snapshot) {
+        state.snapshot.experiments ||= [];
+        if (!state.snapshot.experiments.some(run => run.id === first.id)) state.snapshot.experiments.push(first);
+      }
+    } else {
+      const ids = new Set(remaining.map(run => run.id));
+      for (const run of [...(state.savedResults || []), ...(state.snapshot?.experiments || [])]) {
+        if (ids.has(run.id)) { run.state = "queued"; run.error = ""; run.finishedAt = ""; }
+      }
     }
     renderResultViews();
-    showToast(`Continuing ${remaining.length} remaining ${remaining.length === 1 ? "run" : "runs"}. Previous attempted runs are preserved.`);
+    showToast(retry ? `Queued ${remaining.length} unfinished ${remaining.length === 1 ? "run" : "runs"} from run ${remaining[0].iteration}. Previous Peers are cleaned up before execution.` : `Continuing ${remaining.length} remaining ${remaining.length === 1 ? "run" : "runs"}. Previous attempted runs are preserved.`);
     await refreshSavedResults();
   } catch (error) {
     showToast(error.message);
@@ -1043,7 +1081,7 @@ function savedResultBatch(batch) {
   const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
   const resuming = state.pendingResumes?.has(batch.id);
   const remaining = remainingBatchRuns(batch);
-  const analyzing = ["queued", "running"].includes(job?.state) || batch.runs.some(run => ["queued", "running"].includes(run.analysis?.state));
+  const analyzing = ["queued", "running"].includes(job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
   const locked = resuming || batch.runs.some(resultLocked);
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
@@ -1051,12 +1089,14 @@ function savedResultBatch(batch) {
       <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span></span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
+        ${retryBatchButton(batch, locked)}
         ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
         <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
         <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
       </span>
     </summary>
     ${savedResultTable(batch.runs, `batch:${batch.id}`, `Runs in ${batch.name} · ${batch.id}`)}
+    ${batch.previousRuns?.length ? `<p class="results-help">Previous attempts · ${batch.previousRuns.length} saved ${batch.previousRuns.length === 1 ? "record" : "records"}, excluded from batch progress and mean.</p>${savedResultTable(batch.previousRuns, `previous:${batch.id}`, `Previous attempts in ${batch.name}`)}` : ""}
   </details>`;
 }
 
@@ -1084,7 +1124,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1139,6 +1179,8 @@ function renderSavedResults() {
 }
 
 function savedResultRow(run) {
+  const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
+  const retry = singleBatch && !singleBatch.previousRuns.length ? retryBatchButton(singleBatch, resultLocked(run)) : "";
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
@@ -1146,7 +1188,7 @@ function savedResultRow(run) {
     <td><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
     <td>${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td>${escapeHTML(formatResultTime(run.finishedAt))}</td>
-    <td><div class="result-actions">${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
+    <td><div class="result-actions">${retry}${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
   </tr>`;
 }
 
@@ -1724,6 +1766,12 @@ $("#scenarioForm").addEventListener("submit", (event) => event.preventDefault())
 for (const close of document.querySelectorAll("[data-scenario-close]")) close.addEventListener("click", closeScenarioEditor);
 
 document.addEventListener("click", async (event) => {
+  const retryButton = event.target.closest("[data-retry-batch]");
+  if (retryButton) {
+    event.preventDefault();
+    if (!retryButton.disabled) await resumeSavedBatch(retryButton.dataset.retryBatch, true);
+    return;
+  }
   const resumeButton = event.target.closest("[data-resume-batch]");
   if (resumeButton) {
     event.preventDefault();

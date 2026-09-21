@@ -233,3 +233,109 @@ test('a rejected continuation restores the button and leaves the remainder uncha
   assert.deepEqual(Array.from(state.savedResults,run=>run.state),['completed','failed','canceled','canceled']);
   assert.match(element('#savedResultsRows').innerHTML,/data-resume-batch="batch"[^>]*>Continue remaining \(2\)/);
 });
+
+test('Retry from run includes failed attempts and all unfinished iterations but preserves completed runs',()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  let batch=api.savedResultBatches(state.savedResults)[0];
+  assert.deepEqual(Array.from(api.retryBatchRuns(batch),run=>run.id),['failed','third','fourth']);
+  assert.match(element('#savedResultsRows').innerHTML,/data-retry-batch="batch"[^>]*>Retry from run 2 \(3\)/);
+  assert.match(element('#savedResultsRows').innerHTML,/Continue remaining \(2\)/);
+  for (const status of ['interrupted','canceled']) {
+    state.savedResults[1].state=status;
+    state.savedResults[1].startedAt='0001-01-01T00:00:00Z';
+    api.renderSavedResults();
+    assert.match(element('#savedResultsRows').innerHTML,/Retry from run 2 \(3\)/);
+  }
+  state.savedResults[2].state='completed';
+  state.savedResults[3].state='completed';
+  api.renderSavedResults();
+  assert.match(element('#savedResultsRows').innerHTML,/Retry from run 2 \(1\)/);
+  state.savedResults[1].state='completed';
+  api.renderSavedResults();
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-retry-batch=/);
+});
+
+test('Retry experiment is available for a saved single failure and an interrupted last iteration',()=>{
+  const {api,state,element}=fixture([{id:'single',batchId:'single',iteration:1,repetitions:1,state:'failed'}]);
+  assert.match(element('#savedResultsRows').innerHTML,/data-retry-batch="single"[^>]*>Retry experiment/);
+  state.savedResults=resumableRuns().map(run=>({...run,state:run.iteration===4?'interrupted':'completed'}));
+  api.renderSavedResults();
+  assert.match(element('#savedResultsRows').innerHTML,/Retry from run 4 \(1\)/);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-resume-batch=/);
+});
+
+test('Retry prevents duplicate or competing continuation requests and keeps old attempts immutable',async()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  const before=JSON.stringify(state.savedResults);
+  let resolve,calls=0,toast='';
+  api.api=(path,options)=>{
+    calls++;
+    assert.equal(path,'/api/v1/result-batches/batch/retry');
+    assert.equal(options.method,'POST');
+    return new Promise(yes=>{resolve=yes;});
+  };
+  api.refreshSavedResults=async()=>{};
+  api.showToast=message=>{toast=message;};
+  const retry=api.resumeSavedBatch('batch',true);
+  assert.match(element('#savedResultsRows').innerHTML,/data-retry-batch="batch"[^>]*disabled[^>]*>Continuing…/);
+  await api.resumeSavedBatch('batch',true);
+  await api.resumeSavedBatch('batch');
+  assert.equal(calls,1);
+  resolve({id:'new-second',name:'Series',batchId:'batch',iteration:2,repetitions:4,state:'queued',previousRunIds:['failed']});
+  await retry;
+  assert.equal(JSON.stringify(state.savedResults.slice(0,4)),before);
+  assert.equal(state.savedResults[4].id,'new-second');
+  assert.equal(api.savedResultBatches(state.savedResults)[0].active,true);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-retry-batch=/);
+  assert.match(toast,/Queued 3 unfinished runs from run 2/);
+});
+
+test('Retry failure restores controls and historical attempts do not inflate batch counts or repeat targets',async()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  const before=JSON.stringify(state.savedResults);
+  let toast='';
+  api.api=async()=>{throw new Error('Agent unavailable');};
+  api.showToast=message=>{toast=message;};
+  await api.resumeSavedBatch('batch',true);
+  assert.equal(toast,'Agent unavailable');
+  assert.equal(JSON.stringify(state.savedResults),before);
+  assert.equal(state.pendingResumes.size,0);
+  assert.match(element('#savedResultsRows').innerHTML,/Retry from run 2 \(3\)/);
+  state.savedResults.push({id:'new-second',name:'Series',batchId:'batch',iteration:2,repetitions:4,state:'completed',previousRunIds:['failed']});
+  api.renderSavedResults();
+  const batch=api.savedResultBatches(state.savedResults)[0];
+  assert.equal(batch.runs.length,4);
+  assert.equal(batch.completed,2);
+  assert.deepEqual(Array.from(batch.previousRuns,run=>run.id),['failed']);
+  assert.deepEqual(Array.from(api.retryBatchRuns(batch),run=>run.id),['third','fourth']);
+  const html=element('#savedResultsRows').innerHTML;
+  assert.match(html,/4 runs · 2 \/ 4 completed/);
+  assert.match(html,/Previous attempts · 1 saved record/);
+  for(const run of state.savedResults) assert.equal(html.split(`data-result-download="${run.id}"`).length-1,1);
+});
+
+test('Retry is blocked while work is active or metadata is invalid',()=>{
+  for (const status of ['queued','running','unreadable']) {
+    const runs=resumableRuns(); runs[2].state=status;
+    const {element}=fixture(runs);
+    assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-retry-batch=/);
+  }
+  const runs=resumableRuns(); runs[2].iteration=2;
+  const {element}=fixture(runs);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-retry-batch=/);
+});
+
+
+test('Retry after a Controller restart accepts an empty live snapshot',async()=>{
+  const {api,state}=fixture(resumableRuns());
+  state.snapshot={experiments:null};
+  let toast='';
+  api.api=async()=>({id:'retry',batchId:'batch',iteration:2,repetitions:4,state:'queued',previousRunIds:['failed']});
+  api.refreshSavedResults=async()=>{};
+  api.renderResultViews=()=>{};
+  api.showToast=message=>{toast=message;};
+  await api.resumeSavedBatch('batch',true);
+  assert.equal(state.snapshot.experiments.length,1);
+  assert.equal(state.snapshot.experiments[0].id,'retry');
+  assert.match(toast,/Queued 3 unfinished runs/);
+});

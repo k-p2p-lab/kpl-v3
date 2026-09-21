@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,11 +17,11 @@ import (
 	"github.com/k-p2p-lab/v3/internal/scenario"
 )
 
-var errBatchNotResumable = errors.New("batch has no remaining unstarted runs after a failure")
+var errBatchNotResumable = errors.New("batch has no eligible runs to continue")
 
-func (s *Server) handleBatchResume(ctx context.Context) http.HandlerFunc {
+func (s *Server) handleBatchResume(ctx context.Context, retry bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		experiment, err := s.ResumeScenarioBatch(ctx, r.PathValue("batchID"))
+		experiment, err := s.resumeScenarioBatch(ctx, r.PathValue("batchID"), retry)
 		if err != nil {
 			switch {
 			case errors.Is(err, errResultNotFound):
@@ -41,6 +42,17 @@ func (s *Server) handleBatchResume(ctx context.Context) http.HandlerFunc {
 // iteration numbers, seeds and attempted results remain part of the same batch.
 // The scheduler retries prior Peer cleanup before starting any remaining run.
 func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.Experiment, error) {
+	return s.resumeScenarioBatch(parent, id, false)
+}
+
+// RetryScenarioBatch restarts unfinished iterations from their first phase,
+// preserving completed iterations, the batch ID, iteration numbers and seeds.
+// Fresh IDs isolate retries from old Agent fences, late events and saved logs.
+func (s *Server) RetryScenarioBatch(parent context.Context, id string) (model.Experiment, error) {
+	return s.resumeScenarioBatch(parent, id, true)
+}
+
+func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bool) (model.Experiment, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	if s.shuttingDown {
@@ -51,10 +63,11 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 	}
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
-	members, err := s.batchMembers(parent, id)
+	allMembers, err := s.allBatchMembers(parent, id)
 	if err != nil {
 		return model.Experiment{}, err
 	}
+	members := currentBatchMembers(allMembers)
 	sort.Slice(members, func(i, j int) bool { return members[i].Iteration < members[j].Iteration })
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
@@ -62,33 +75,41 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 	hasFailure, lastAttempt, expected := false, 0, 0
 	seen := make(map[int]bool)
 	batch := &repeatBatch{}
-	for _, member := range members {
+	for _, member := range allMembers {
 		if s.resultDeletionBusyLocked(member.ID) {
 			return model.Experiment{}, errResultBusy
 		}
 		if job := s.analysisJobs[member.ID]; job != nil && (job.status.State == "queued" || job.status.State == "running") {
 			return model.Experiment{}, fmt.Errorf("%w: run analysis is still active", errResultBusy)
 		}
+		batch.members = append(batch.members, member.ID)
+		if member.State != "completed" && (!member.StartedAt.IsZero() || member.State == "failed" || retry) {
+			batch.cleanupRuns = append(batch.cleanupRuns, member.ID)
+		}
+		// Keep cleanup ancestry even when an older attempt's result is deleted.
+		batch.cleanupRuns = append(batch.cleanupRuns, member.PreviousRunIDs...)
+	}
+	minimum := 2
+	if retry {
+		minimum = 1
+	}
+	for _, member := range members {
 		if expected == 0 {
 			expected = member.Repetitions
 		}
-		if expected < 2 || expected > maxScenarioRepetitions || member.Repetitions != expected || member.Iteration < 1 || member.Iteration > expected || seen[member.Iteration] || member.State == "unreadable" {
+		if expected < minimum || expected > maxScenarioRepetitions || member.Repetitions != expected || member.Iteration < 1 || member.Iteration > expected || seen[member.Iteration] || member.State == "unreadable" {
 			return model.Experiment{}, fmt.Errorf("%w: inconsistent batch metadata", errBatchNotResumable)
 		}
 		seen[member.Iteration] = true
-		batch.members = append(batch.members, member.ID)
 		if !member.StartedAt.IsZero() || member.State == "failed" || member.State == "completed" {
 			lastAttempt = max(lastAttempt, member.Iteration)
-			if member.State != "completed" {
-				batch.cleanupRuns = append(batch.cleanupRuns, member.ID)
-			}
 		}
 		hasFailure = hasFailure || member.State == "failed" || member.State == "interrupted" && !member.StartedAt.IsZero()
 	}
 	if job := s.batchAnalysisJobs[id]; job != nil && (job.status.State == "queued" || job.status.State == "running") {
 		return model.Experiment{}, fmt.Errorf("%w: batch analysis is still active", errResultBusy)
 	}
-	if !hasFailure {
+	if !retry && !hasFailure {
 		return model.Experiment{}, errBatchNotResumable
 	}
 
@@ -106,7 +127,14 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 	}()
 	var raw []byte
 	for _, member := range members {
-		if member.Iteration <= lastAttempt || !member.StartedAt.IsZero() || (member.State != "canceled" && member.State != "interrupted") {
+		if retry {
+			if member.State == "completed" {
+				continue
+			}
+			if member.State != "failed" && member.State != "canceled" && member.State != "interrupted" {
+				return model.Experiment{}, errBatchNotResumable
+			}
+		} else if member.Iteration <= lastAttempt || !member.StartedAt.IsZero() || (member.State != "canceled" && member.State != "interrupted") {
 			continue
 		}
 		root, err := openResultDirectory(runs, member.ID)
@@ -122,20 +150,22 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 		if err := json.Unmarshal(metadata, &original); err != nil {
 			return model.Experiment{}, err
 		}
-		if original.ID != member.ID || original.BatchID != id || !original.StartedAt.IsZero() {
+		if original.ID != member.ID || original.BatchID != id || original.Iteration != member.Iteration || original.Repetitions != expected || !retry && !original.StartedAt.IsZero() {
 			return model.Experiment{}, errBatchNotResumable
 		}
-		for _, name := range []string{"events.jsonl", "observations.jsonl"} {
-			file, err := openResultFile(root, name)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				return model.Experiment{}, err
-			}
-			_ = file.file.Close()
-			if file.size != 0 {
-				return model.Experiment{}, fmt.Errorf("%w: run %s already has observations", errBatchNotResumable, member.ID)
+		if !retry {
+			for _, name := range []string{"events.jsonl", "observations.jsonl"} {
+				file, err := openResultFile(root, name)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return model.Experiment{}, err
+				}
+				_ = file.file.Close()
+				if file.size != 0 {
+					return model.Experiment{}, fmt.Errorf("%w: run %s already has observations", errBatchNotResumable, member.ID)
+				}
 			}
 		}
 		yaml, err := readResumeFile(root, "scenario.yaml", scenarioYAMLLimit)
@@ -150,7 +180,15 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 		next := original
 		next.State, next.Error, next.PhaseName = "queued", "", ""
 		next.Phase, next.ActiveJobs, next.CompletedJobs, next.FailedJobs, next.CanceledJobs = 0, 0, 0, 0, 0
-		next.FinishedAt, next.Timing = time.Time{}, nil
+		next.StartedAt, next.FinishedAt, next.Timing = time.Time{}, time.Time{}, nil
+		if retry {
+			var nonce [16]byte
+			if _, err := cryptorand.Read(nonce[:]); err != nil {
+				return model.Experiment{}, err
+			}
+			next.ID = fmt.Sprintf("run-%s-%x", time.Now().UTC().Format("20060102T150405Z"), nonce)
+			next.PreviousRunIDs = append(append([]string{}, original.PreviousRunIDs...), original.ID)
+		}
 		next.ScenarioYAML = string(yaml)
 		originals, pending = append(originals, original), append(pending, next)
 	}
@@ -164,14 +202,23 @@ func (s *Server) ResumeScenarioBatch(parent context.Context, id string) (model.E
 	if err := parent.Err(); err != nil {
 		return model.Experiment{}, err
 	}
-	// Publish every queued manifest before admitting work. Roll back a partial
-	// write failure; no worker or in-memory state is exposed before this succeeds.
-	for i, experiment := range pending {
-		if err := writeAnalysisJSON(roots[i], "experiment.json", experiment); err != nil {
-			for j := 0; j < i; j++ {
-				err = errors.Join(err, writeAnalysisJSON(roots[j], "experiment.json", originals[j]))
-			}
+	if retry {
+		if err := s.reserveRepeatedResultsLocked(pending, raw); err != nil {
 			return model.Experiment{}, err
+		}
+		for _, experiment := range pending {
+			batch.members = append(batch.members, experiment.ID)
+		}
+	} else {
+		// Publish every queued manifest before admitting work. Roll back a partial
+		// write failure; no worker or in-memory state is exposed before this succeeds.
+		for i, experiment := range pending {
+			if err := writeAnalysisJSON(roots[i], "experiment.json", experiment); err != nil {
+				for j := 0; j < i; j++ {
+					err = errors.Join(err, writeAnalysisJSON(roots[j], "experiment.json", originals[j]))
+				}
+				return model.Experiment{}, err
+			}
 		}
 	}
 	plan := newTimingPlan(spec)
@@ -213,7 +260,15 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
 	}
+	seen := make(map[string]bool)
 	for _, runID := range runIDs {
+		if !validResultID(runID) {
+			return fmt.Errorf("invalid cleanup run ID %q", runID)
+		}
+		if seen[runID] {
+			continue
+		}
+		seen[runID] = true
 		if err := ctx.Err(); err != nil {
 			return err
 		}

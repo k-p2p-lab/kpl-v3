@@ -32,6 +32,7 @@ Controller의 대시보드와 운영 API는 로그인 세션으로 보호합니�
 | `DELETE` | `/api/v1/results/{id}` | 비활성 저장 결과 삭제. 진행 중 배치·다운로드 보호 |
 | `DELETE` | `/api/v1/result-batches/{batchId}` | 그룹의 모든 저장 run과 평균 분석 삭제. 전체 구성원의 활성 상태·다운로드를 먼저 검사 |
 | `POST` | `/api/v1/result-batches/{batchId}/resume` | 실패 또는 시작 후 interrupted 회차를 제외하고 미시작 회차만 재개. 배치·회차 ID 유지. 첫 queued run과 `202`, 진행 중·재개 불가 시 `409`, 없는 배치면 `404`. 로그인 세션과 `X-KPL-Request: dashboard` 필요. |
+| `POST` | `/api/v1/result-batches/{batchId}/retry` | 이전 Peer를 정리한 뒤 저장된 미완료 회차를 첫 phase부터 재실행. 완료 회차·배치 ID·회차 번호·seed 유지, 새 run ID 사용. 실패·중단·취소, 단일 실험과 마지막 회차 실패 포함. 첫 queued run과 `202`, 진행 중·재개 불가 시 `409`, 없는 배치면 `404`. 로그인 세션과 `X-KPL-Request: dashboard` 필요. |
 | `GET` | `/api/v1/experiments/{id}/analysis` | 저장 이벤트·관측치를 분석한 그래프 데이터와 집계 JSON |
 | `GET` / `POST` | `/api/v1/analysis-jobs/{id}` | 백그라운드 분석 상태 조회 / 접수. 중복 요청 재사용, `?refresh=1`로 새 snapshot 분석 |
 | `GET` / `HEAD` | `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` | 서버에 보관된 완료 분석 JSON 다운로드. 작업 미완료·다른 attempt는 `409` |
@@ -55,6 +56,10 @@ Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있
 `POST /api/v1/experiments`는 첫 run의 experiment 객체와 `202`를 반환합니다. `{scenario, repetitions}`를 제출하려면 `Content-Type: application/json`을 사용하십시오. `scenario`는 YAML 문자열이며 `repetitions`를 생략하면 기본값은 `1`입니다. 다른 content type은 원시 YAML로 처리합니다. 원시 YAML과 JSON에서 해석한 `scenario` 문자열의 한도는 각각 1 MiB입니다. JSON 요청 본문은 escape를 고려해 `6 * 1 MiB + 64 KiB`까지 허용합니다. 요청 본문 자체가 한도를 넘으면 `413`, 해석한 YAML 문자열이 한도를 넘거나 scenario/repetition이 유효하지 않으면 `400`입니다.
 
 반복 제출은 매 iteration에 별도 run ID와 결과 기록을 예약하고 `batchId`, `iteration`, `repetitions`를 공유합니다. 순차 실행하며 실패하거나 취소된 iteration은 대기 중인 나머지 실행도 취소합니다. 반복 배치가 진행 중일 때 구성원 하나를 중지하면 해당 배치를 취소합니다. `repetitions > 1`에서는 마지막을 포함한 매 iteration이 최종 상태를 기록하기 전에 Peer를 fence하고 제거합니다. 자연스럽게 성공한 단일 실행만 YAML에 `stop-all`이 없을 때 Peer를 남겨둘 수 있습니다.
+
+`POST /api/v1/result-batches/{batchId}/retry`는 저장된 미완료 회차를 회차 순서대로 수동 재실행합니다. 예를 들어 10회 중 4회차가 실패했다면 완료된 1~3회차는 유지하고 4~10회차를 각 회차의 첫 phase부터 다시 실행합니다. 뒤쪽 회차 중 이미 완료된 회차도 유지합니다. 실패·중단(재시작 후 미시작으로 남은 기록 포함)·취소 기록을 대상으로 합니다. 시나리오와 seed를 유지하면서 새 run ID를 부여하며 experiment/result 메타데이터의 `previousRunIds`에 이전 시도 ID를 기록합니다. 기존 로그는 **Previous attempts**에서 다운로드할 수 있고, 회차별 가장 최근의 저장된 시도만 배치 진행률과 평균에 반영합니다. 기존 `/resume`은 시도한 회차를 건너뛰고 미시작 잔여 회차만 재개합니다.
+
+두 이어하기 모드는 접수한 HTTP 요청과 독립적으로 Controller에서 실행합니다. 새 회차 실행 전에 이전 Peer를 fence·제거하고 Agent 상태를 갱신합니다. 정리가 실패하거나 정리 중 사용자가 정지하면 대기 회차를 `canceled`로 기록하고 experiment 메타데이터에 이유를 남기며 새 회차는 시작하지 않습니다. Agent·정리 오류를 해결한 뒤 다시 이어하기를 실행할 수 있습니다. 실행·최종 정리·다운로드·개별 및 배치 분석이 진행 중이면 접수를 거절하며, 완료된 회차 기록은 덮어쓰지 않습니다.
 
 `GET /api/v1/experiments`, Dashboard snapshot/SSE와 최초 제출 응답의 실시간 experiment 객체에는 `timing`이 포함될 수 있습니다. 필드는 `estimatedFinishAt`(UTC), 음수가 아닌 `remainingSeconds`, `basis`(`scenario` 또는 `observed-runs`), `observedRuns`, `overdue`입니다. 진행 중인 반복 Run에는 `batchEstimatedFinishAt`, `batchRemainingSeconds`, `batchOverdue`도 포함됩니다(0·false인 선택 필드는 생략 가능). 대기 Run의 종료 시각에는 같은 배치의 선행 Run 시간이 포함됩니다. 완료·실패·취소된 Run이나 시간 정보가 부족한 경우 `timing`을 생략하며 결과 manifest에 저장하지 않습니다. 계산 방식과 불확실성은 [예상 종료 시각](scenario-library.kr.md#예상-종료-시각)을 참고하십시오.
 

@@ -66,3 +66,21 @@ test('finish rendering escapes names and rejects invalid timestamps',()=>{
   assert.match(api.formatEstimateRemaining(90061),/1d 1h 2m/);
   assert.equal(api.formatEstimateRemaining(NaN),'Estimating…');
 });
+
+
+test('continuation after restart includes saved successes once in the live batch summary',()=>{
+  const {api,state,element}=fixture();
+  const completed={id:'first',batchId:'group',iteration:1,repetitions:3,state:'completed'};
+  state.savedResults=[completed,{id:'failed',batchId:'group',iteration:2,repetitions:3,state:'failed'}];
+  const live=[
+    {id:'retry',batchId:'group',iteration:2,repetitions:3,state:'running',previousRunIds:['failed'],timing:timing()},
+    {id:'third',batchId:'group',iteration:3,repetitions:3,state:'queued',timing:timing()},
+  ];
+  api.renderRuns(live);
+  assert.match(element('#runBatchEstimates').innerHTML,/1 \/ 3 completed/);
+  api.renderRuns([completed,...live]);
+  assert.match(element('#runBatchEstimates').innerHTML,/1 \/ 3 completed/);
+  state.savedResults.push({...live[0],state:'completed'});
+  api.renderRuns(live);
+  assert.match(element('#runBatchEstimates').innerHTML,/1 \/ 3 completed/,'live state must override a stale saved result');
+});

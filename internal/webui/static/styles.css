@@ -327,11 +327,11 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 .result-name { width: 34%; min-width: 15rem; white-space: normal; overflow-wrap: anywhere; }
 .result-name strong { display: block; font-weight: 650; }
 .result-id { display: block; margin-top: 0.3rem; color: var(--muted); font-size: 0.7rem; }
+.result-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.15rem 0.65rem; }
 .result-actions { display: grid; grid-template-columns: max-content minmax(max-content, 1fr) max-content; align-items: baseline; gap: 0.15rem 0.85rem; }
 .result-actions > .result-images-button { grid-column: 1; grid-row: 1; white-space: nowrap; }
 .result-actions > :is(.download-link, .download-unavailable) { grid-column: 2; grid-row: 1; }
 .result-actions > .delete-result-button { grid-column: 3; grid-row: 1; white-space: nowrap; }
-.result-actions > .download-size { grid-column: 2; grid-row: 2; }
 .download-size { line-height: 1.4; color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .download-size.live { color: var(--amber); }
 .delete-result-button { line-height: 1.4; border: 0; padding: 0.35rem 0; color: var(--red); background: transparent; font-size: 0.78rem; }
@@ -478,7 +478,8 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 
 
 
-.result-images-button { display: inline-flex; align-items: center; justify-content: center; width: 10.5rem; flex-shrink: 0; font-variant-numeric: tabular-nums; min-height: 2rem; padding: .3rem .65rem; border: 1px solid var(--line); border-radius: .4rem; color: var(--cyan); background: var(--surface-raised); font-size: .8rem; }
+.result-images-button { display: inline-flex; align-items: center; justify-self: start; line-height: 1.4; padding: 0.35rem 0; border: 0; color: var(--cyan); background: transparent; font-size: 0.78rem; font-weight: 650; font-variant-numeric: tabular-nums; text-underline-offset: 0.2em; }
+.result-images-button:hover:not(:disabled) { color: #62e4df; text-decoration: underline; }
 .result-images-dialog { width: min(76rem, calc(100% - 2rem)); }
 .result-images-shell { padding: 1.4rem; }
 .result-images-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: start; justify-content: space-between; gap: 1rem; padding: .5rem 0; background: var(--surface-raised); }

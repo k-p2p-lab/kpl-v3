@@ -811,7 +811,7 @@ func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID stri
 		}
 	}
 	if current, exists := s.state.nodes[node.ID]; !exists ||
-		current.State != model.NodeStopping && current.State != model.NodeStopped && current.LastSeen.Before(node.LastSeen) {
+		current.State != model.NodeStopping && current.State != model.NodeStopped && current.State != model.NodeFailed && current.LastSeen.Before(node.LastSeen) {
 		// A delayed create response can carry a later Agent clock than a
 		// Controller stop request. Timestamps must not undo that lifecycle.
 		s.state.nodes[node.ID] = node

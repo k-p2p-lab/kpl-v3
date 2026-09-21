@@ -48,13 +48,13 @@ Registry는 주소와 설정된 topic 참여 정보만 제공하며 전달 결�
 
 ## 갱신과 노드 수명
 
-Peer는 약 2초마다 상태를 보고하고 Agent가 현재 snapshot을 전달합니다. 네트워크·스케줄링·보고 실패로 지연이 추가됩니다. stopping·stopped·starting·failed endpoint에는 관계 선을 표시하지 않습니다. stopping·stopped 원은 숨깁니다. starting Peer는 황색 **Starting**, failed Peer는 **Issue**로 구분합니다.
+Peer는 약 2초마다 상태를 보고하고 Agent가 현재 snapshot을 전달합니다. 네트워크·스케줄링·보고 실패로 지연이 추가됩니다. stopping·stopped·starting·failed endpoint에는 관계 선을 표시하지 않습니다. stopping·stopped·failed 원과 연결선은 숨깁니다. starting Peer는 황색 **Starting**으로 표시합니다. 실패 피어의 진단 정보는 노드 조회와 저장 실험 기록에 유지합니다.
 
 컨테이너 정리가 정상 완료되면 Agent는 Peer 식별자, 종료 상태, 수명 시각, 토픽 레이블을 축약 기록으로 보존하고 과거 연결·routing/mesh·스코어와 큰 설정 메타데이터는 메모리에서 해제합니다. Agent 전체 상태와 노드 조회에는 이 축약 종료 기록이 계속 포함되며, 실행 중인 Peer와 실패한 프로세스는 상세 정보를 유지합니다.
 
 정기 heartbeat는 실행 중이거나 실패한 Peer와 Controller가 아직 수신 확인하지 않은 정상 종료 기록을 전송하며, 큰 보고는 제한된 크기의 JSON batch로 나눕니다. 정상 종료 기록은 수신 확인 뒤 정기 보고에서 생략하지만 전체 인벤토리에는 남습니다. 재등록은 이 수신 확인을 초기화하므로 Controller 재시작 후 보존 이력을 다시 전송합니다. Controller는 부분 heartbeat에서 빠진 노드를 종료로 해석하지 않습니다. [Heartbeat 계약](api.kr.md#내부-cluster-endpoint)을 참고하십시오.
 
-Dashboard가 연결되지 않아도 Controller snapshot에 종료 상태가 반영됩니다. 늦은 heartbeat나 생성 응답은 stopped Peer를 starting·ready·failed로 되돌리지 못하며, Dashboard를 다시 열면 현재 snapshot으로 그래프를 구성합니다.
+Dashboard가 연결되지 않아도 Controller snapshot에 종료 상태가 반영됩니다. 늦은 heartbeat나 생성 응답은 stopped 또는 failed Peer를 다시 활성 상태로 되돌리지 못합니다. failed Peer의 정리 진행과 stopped 전환은 계속 반영하며, Dashboard를 다시 열면 현재 snapshot으로 그래프를 구성합니다.
 
 오프라인 Agent와 10초 이상 오래된 Peer 보고는 선에서 제외합니다. 서로 다른 서버 시계를 직접 빼지 않도록, Controller는 동일 Agent가 기록한 두 시각으로 Peer 보고 나이를 계산한 뒤 수신 후 경과 시간을 자기 시계로 더합니다. 이는 Agent가 보고한 나이와 수신 후 시간이며 네트워크 전송 중 시간의 상한을 뜻하지 않습니다. 과거 형식에 시각 정보가 없으면 이 나이를 확정할 수 없습니다. `OverlayObservedAt`은 overlay 보고 지원 여부를 식별하는 Peer 시각으로, 브라우저·Controller 현재 시각과 직접 비교해 stale을 판정하지 않습니다.
 

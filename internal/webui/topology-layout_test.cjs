@@ -78,6 +78,18 @@ test('surviving positions and velocities persist; departure is immediate and slo
   assertContained(layout);
 });
 
+test('failed peers release layout positions and slots without disturbing surviving peers',()=>{
+  const {nodes,agents}=fixture([3,2]),memory={};
+  const before=layoutTopology(nodes,agents,memory,1000);
+  const removed=nodes[0].id,keep=nodes[1].id,position=before.positions.get(keep),slot=before.positions.get(removed).slot;
+  let layout=layoutTopology(nodes.map(node=>({...node,state:node.id===removed?'failed':node.state})),agents,memory,1000);
+  assert.equal(layout.positions.has(removed),false);
+  assert.equal(memory.pizza.slots.get(agents[0].id).has(removed),false);
+  assert.equal(layout.positions.get(keep),position);
+  layout=layoutTopology([...nodes.slice(1),{id:'replacement',agentId:agents[0].id,state:'starting'}],agents,memory,1000);
+  assert.equal(layout.positions.get('replacement').slot,slot);
+});
+
 test('identical SSE snapshots stay settled and real changes or explicit reheating restart motion',()=>{
   const {nodes,agents}=fixture([8,8,8]),memory={};
   let layout=layoutTopology(nodes,agents,memory,1000);

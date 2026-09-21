@@ -20,6 +20,8 @@ const maxScenarioRepetitions = 100
 type repeatBatch struct {
 	cancel      context.CancelFunc
 	repetitions int
+	members     []string
+	cleanupRuns []string
 }
 
 func (s *Server) cancelRepeatLocked(runID string) bool {
@@ -154,23 +156,37 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 	defer batch.cancel()
 	defer func() {
 		s.cancelMu.Lock()
-		for _, experiment := range experiments {
-			delete(s.repeatBatches, experiment.ID)
-			delete(s.cancels, experiment.ID)
+		members := batch.members
+		if len(members) == 0 {
+			for _, experiment := range experiments {
+				members = append(members, experiment.ID)
+			}
 		}
-		s.cancelMu.Unlock()
+		for _, id := range members {
+			delete(s.repeatBatches, id)
+			delete(s.cancels, id)
+		}
+		// A continuation reuses the unstarted IDs. Retire their old timing
+		// state before releasing admission to a new scheduler.
 		s.state.mu.Lock()
 		for _, experiment := range experiments {
 			delete(s.state.runTimings, experiment.ID)
 		}
 		s.state.mu.Unlock()
+		s.cancelMu.Unlock()
 	}()
+	if len(batch.cleanupRuns) > 0 {
+		if err := s.cleanupBeforeResume(ctx, batch.cleanupRuns, spec); err != nil {
+			s.cancelQueuedIterations(experiments, "Cannot continue batch: "+err.Error())
+			return
+		}
+	}
 	for index, experiment := range experiments {
 		if err := ctx.Err(); err != nil {
 			s.cancelQueuedIterations(experiments[index:], "Repetition batch was canceled before this iteration started")
 			return
 		}
-		if index > 0 {
+		if experiment.State == "queued" {
 			s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 				current.State = "running"
 				current.StartedAt = time.Now().UTC()
@@ -186,7 +202,7 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 		s.state.mu.RUnlock()
 		// A repeated run cannot advance on an unpersisted final result. Existing
 		// single-run persistence logging remains unchanged for compatibility.
-		if len(experiments) > 1 {
+		if batch.repetitions > 1 {
 			if err := s.persistExperiment(finished); err != nil {
 				finished.State = "failed"
 				finished.Error = fmt.Sprintf("persist final repetition result: %v", err)
@@ -199,7 +215,7 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 		s.state.persistMu.Unlock()
 		if finished.State != "completed" || finished.Error != "" {
 			batch.cancel()
-			s.cancelQueuedIterations(experiments[index+1:], fmt.Sprintf("Not started because iteration %d ended as %s", index+1, finished.State))
+			s.cancelQueuedIterations(experiments[index+1:], fmt.Sprintf("Not started because iteration %d ended as %s", experiment.Iteration, finished.State))
 			return
 		}
 	}

@@ -31,6 +31,7 @@ The dashboard and operational APIs require a login session. See [authentication]
 | `GET` | `/api/v1/results` | Saved experiment results, including runs from previous Controller sessions |
 | `DELETE` | `/api/v1/results/{id}` | Delete an inactive saved result; active batches and downloads are protected |
 | `DELETE` | `/api/v1/result-batches/{batchId}` | Delete all saved runs in one group and its mean analysis; preflight all members for activity/downloads |
+| `POST` | `/api/v1/result-batches/{batchId}/resume` | Continue only never-started runs after a failed/interrupted attempt; preserves the batch and iteration IDs. Returns `202` with the first queued run, `409` if busy or ineligible, and `404` for an unknown batch. Uses the login session and `X-KPL-Request: dashboard`. |
 | `GET` | `/api/v1/experiments/{id}/analysis` | Chart distributions, timelines and metrics from saved events and observations |
 | `GET` / `POST` | `/api/v1/analysis-jobs/{id}` | Inspect / submit background analysis. Duplicate requests reuse work; `?refresh=1` requests a new snapshot |
 | `GET` / `HEAD` | `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` | Download persisted analysis JSON. Unfinished or mismatched attempts return `409` |

@@ -161,3 +161,75 @@ test('series retain incomplete metadata members and remain grouped until their l
   assert.doesNotMatch(html, /<details/);
   assert.match(html, /data-result-images="unrelated"/);
 });
+
+function resumableRuns() {
+  return [
+    {id:'first',name:'Series',batchId:'batch',iteration:1,repetitions:4,state:'completed',startedAt:'2026-09-01T00:00:00Z'},
+    {id:'failed',name:'Series',batchId:'batch',iteration:2,repetitions:4,state:'failed',startedAt:'2026-09-01T00:01:00Z'},
+    {id:'third',name:'Series',batchId:'batch',iteration:3,repetitions:4,state:'canceled',startedAt:'0001-01-01T00:00:00Z'},
+    {id:'fourth',name:'Series',batchId:'batch',iteration:4,repetitions:4,state:'canceled',startedAt:'0001-01-01T00:00:00Z'},
+  ];
+}
+
+test('Continue remaining counts only unstarted runs after failure and preserves the batch', () => {
+  const {api,state,element}=fixture(resumableRuns());
+  const batch=api.savedResultBatches(state.savedResults)[0];
+  assert.deepEqual(Array.from(api.remainingBatchRuns(batch),run=>run.id),['third','fourth']);
+  assert.match(element('#savedResultsRows').innerHTML,/data-resume-batch="batch"[^>]*>Continue remaining \(2\)/);
+  state.savedResults[2].state='interrupted';
+  state.savedResults[2].startedAt='2026-09-01T00:02:00Z';
+  api.renderSavedResults();
+  assert.match(element('#savedResultsRows').innerHTML,/Continue remaining \(1\)/);
+  state.savedResults[3].state='running';
+  api.renderSavedResults();
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-resume-batch=/);
+});
+
+test('Continue remaining is absent for deliberate stop without failure and for exhausted batches',()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  state.savedResults[1].state='canceled';
+  api.renderSavedResults();
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-resume-batch=/);
+  state.savedResults[1].state='failed';
+  state.savedResults[2].state='completed';
+  state.savedResults[3].state='failed';
+  api.renderSavedResults();
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-resume-batch=/);
+});
+
+test('Continue remaining sends one POST, preserves attempted runs, and refreshes saved results',async()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  let resolve,calls=0,refreshes=0,toast='';
+  api.api=(path,options)=>{
+    calls++;
+    assert.equal(path,'/api/v1/result-batches/batch/resume');
+    assert.equal(options.method,'POST');
+    return new Promise(yes=>{resolve=yes;});
+  };
+  api.refreshSavedResults=async()=>{refreshes++;};
+  api.showToast=message=>{toast=message;};
+  const resume=api.resumeSavedBatch('batch');
+  assert.match(element('#savedResultsRows').innerHTML,/data-resume-batch="batch"[^>]*disabled[^>]*>Continuing…/);
+  await api.resumeSavedBatch('batch');
+  assert.equal(calls,1);
+  resolve({id:'third',state:'queued'});
+  await resume;
+  assert.deepEqual(Array.from(state.savedResults,run=>run.state),['completed','failed','queued','queued']);
+  assert.deepEqual(Array.from(state.savedResults,run=>run.iteration),[1,2,3,4]);
+  assert.equal(refreshes,1);
+  assert.equal(state.pendingResumes.size,0);
+  assert.match(toast,/Continuing 2 remaining runs/);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-resume-batch=/);
+});
+
+test('a rejected continuation restores the button and leaves the remainder unchanged',async()=>{
+  const {api,state,element}=fixture(resumableRuns());
+  let toast='';
+  api.api=async()=>{throw new Error('Batch is still being finalized');};
+  api.showToast=message=>{toast=message;};
+  await api.resumeSavedBatch('batch');
+  assert.equal(state.pendingResumes.size,0);
+  assert.equal(toast,'Batch is still being finalized');
+  assert.deepEqual(Array.from(state.savedResults,run=>run.state),['completed','failed','canceled','canceled']);
+  assert.match(element('#savedResultsRows').innerHTML,/data-resume-batch="batch"[^>]*>Continue remaining \(2\)/);
+});

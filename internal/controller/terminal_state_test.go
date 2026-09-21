@@ -35,7 +35,7 @@ func TestStoppedPeerCannotBeRevivedByLaterHeartbeat(t *testing.T) {
 }
 
 func TestDelayedCreateResponseCannotUndoStopWithClockSkew(t *testing.T) {
-	for _, terminal := range []string{model.NodeStopping, model.NodeStopped} {
+	for _, terminal := range []string{model.NodeStopping, model.NodeStopped, model.NodeFailed} {
 		t.Run(terminal, func(t *testing.T) {
 			server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 			now := time.Now().UTC()
@@ -67,5 +67,29 @@ func TestFailedCleanupCanStillComplete(t *testing.T) {
 		if got := server.state.nodes[node.ID]; got.State != state || got.Error != node.Error {
 			t.Fatalf("cleanup transition to %s rejected: %+v", state, got)
 		}
+	}
+}
+
+func TestFailedPeerCannotBeRevivedByLaterLiveHeartbeat(t *testing.T) {
+	for _, lateState := range []string{model.NodeStarting, model.NodeReady} {
+		t.Run(lateState, func(t *testing.T) {
+			server := New(ServerConfig{DataDir: t.TempDir()}, nil)
+			agent, err := server.state.registerAgent(model.Agent{ID: "agent", URL: "http://agent", Capacity: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failed := model.Node{ID: "failed", State: model.NodeFailed, Error: "peer process exited"}
+			if err := server.state.heartbeat(model.AgentHeartbeat{Agent: agent, Nodes: []model.Node{failed}}); err != nil {
+				t.Fatal(err)
+			}
+			agent.LastSeen = agent.LastSeen.Add(time.Second)
+			late := model.Node{ID: failed.ID, State: lateState, LastSeen: agent.LastSeen}
+			if err := server.state.heartbeat(model.AgentHeartbeat{Agent: agent, Nodes: []model.Node{late}}); err != nil {
+				t.Fatal(err)
+			}
+			if got := server.state.nodes[failed.ID]; got.State != model.NodeFailed || got.Error != failed.Error {
+				t.Fatalf("late report revived failed peer: %+v", got)
+			}
+		})
 	}
 }

@@ -31,6 +31,7 @@ Controller의 대시보드와 운영 API는 로그인 세션으로 보호합니�
 | `GET` | `/api/v1/results` | 이전 Controller 실행에서 저장한 실험을 포함하는 결과 목록 |
 | `DELETE` | `/api/v1/results/{id}` | 비활성 저장 결과 삭제. 진행 중 배치·다운로드 보호 |
 | `DELETE` | `/api/v1/result-batches/{batchId}` | 그룹의 모든 저장 run과 평균 분석 삭제. 전체 구성원의 활성 상태·다운로드를 먼저 검사 |
+| `POST` | `/api/v1/result-batches/{batchId}/resume` | 실패 또는 시작 후 interrupted 회차를 제외하고 미시작 회차만 재개. 배치·회차 ID 유지. 첫 queued run과 `202`, 진행 중·재개 불가 시 `409`, 없는 배치면 `404`. 로그인 세션과 `X-KPL-Request: dashboard` 필요. |
 | `GET` | `/api/v1/experiments/{id}/analysis` | 저장 이벤트·관측치를 분석한 그래프 데이터와 집계 JSON |
 | `GET` / `POST` | `/api/v1/analysis-jobs/{id}` | 백그라운드 분석 상태 조회 / 접수. 중복 요청 재사용, `?refresh=1`로 새 snapshot 분석 |
 | `GET` / `HEAD` | `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` | 서버에 보관된 완료 분석 JSON 다운로드. 작업 미완료·다른 attempt는 `409` |

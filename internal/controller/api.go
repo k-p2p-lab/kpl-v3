@@ -146,6 +146,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/experiments", s.handleExperiments(ctx))
 	mux.HandleFunc("/api/v1/results", s.handleResults)
 	mux.HandleFunc("/api/v1/results/", s.handleResultAction)
+	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/resume", s.handleBatchResume(ctx))
 	mux.HandleFunc("/api/v1/result-batches/", s.handleResultBatchAction)
 	mux.HandleFunc("/api/v1/experiments/", s.handleExperimentAction)
 	mux.HandleFunc("/api/v1/analysis-jobs/", s.handleAnalysisJob(ctx))

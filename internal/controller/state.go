@@ -194,6 +194,10 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			// a late report, including one carrying an old cleanup failure.
 			if old.State == model.NodeStopped && node.State != model.NodeStopped {
 				node = old
+			} else if old.State == model.NodeFailed && node.State != model.NodeFailed && node.State != model.NodeStopping && node.State != model.NodeStopped {
+				// A failed process cannot restart under the same node ID. Keep
+				// accepting cleanup progress, but reject delayed live reports.
+				node = old
 			} else if old.State == model.NodeStopping && node.State != model.NodeStopping && node.State != model.NodeStopped && node.State != model.NodeFailed {
 				// A heartbeat assembled before DELETE must not undo the stop.
 				node = old

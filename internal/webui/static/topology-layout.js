@@ -49,7 +49,7 @@ function seedTopologyPosition(group, slot, id) {
 
 function layoutTopology(nodes, agents, memory, width) {
   // width affects the camera in the caller; geometry never changes on resize.
-  const live = new Map(nodes.filter((node) => node.state !== "stopping" && node.state !== "stopped").map((node) => [node.id, node]));
+  const live = new Map(nodes.filter((node) => !["stopping", "stopped", "failed"].includes(node.state)).map((node) => [node.id, node]));
   const agentIDs = [...new Set(agents.map((agent) => agent.id))];
   for (const id of [...new Set([...live.values()].map((node) => node.agentId))].sort()) if (!agentIDs.includes(id)) agentIDs.push(id);
   const engine = memory.pizza || (memory.pizza = { positions: new Map(), slots: new Map(), radius: 0, alpha: 1, tick: 0, signature: "", edgeInput: null });

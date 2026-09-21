@@ -8,7 +8,7 @@ const state = {
   scenarioValidating: false, scenarioValidation: null, scenarioValidationVersion: 0,
   scenarioDeletingId: null, pendingScenarioDeleteId: null, scenarioLoadVersion: 0, scenarioSubmitting: false, scenarioEditorVersion: 0,
   agentNumbers: loadAgentNumbers(),
-  pendingStops: new Set(), deletedResultIDs: new Set(),
+  pendingStops: new Set(), pendingResumes: new Set(), deletedResultIDs: new Set(),
   pendingDelete: null, deletingResultId: null, loginRedirecting: false,
   detailPanelObserver: null,
   topology: {
@@ -144,7 +144,7 @@ function agentNumber(id) {
 }
 
 function topologyData(nodes, edges) {
-  const visibleNodes = nodes.filter((node) => node.state !== "stopping" && node.state !== "stopped");
+  const visibleNodes = nodes.filter((node) => !["stopping", "stopped", "failed"].includes(node.state));
   const ids = new Set(visibleNodes.map((node) => node.id));
   return { nodes: visibleNodes, edges: edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
 }
@@ -569,6 +569,7 @@ function isPendingRun(run) {
 }
 
 function resultLocked(run) {
+  if (run.batchId && state.pendingResumes?.has(run.batchId)) return true;
   if (isPendingRun(run)) return true;
   return Boolean(run.batchId && [...(state.savedResults || []), ...(state.snapshot?.experiments || [])].some((other) => other.batchId === run.batchId && isPendingRun(other)));
 }
@@ -967,6 +968,40 @@ function savedResultBatches(results) {
   }));
 }
 
+function hasRunStarted(run) {
+  return Boolean(run.startedAt && !String(run.startedAt).startsWith("0001-"));
+}
+
+function remainingBatchRuns(batch) {
+  if (batch.active || !batch.runs.some(run => run.state === "failed" || run.state === "interrupted" && hasRunStarted(run))) return [];
+  const lastAttempt = Math.max(0, ...batch.runs.filter(run => hasRunStarted(run) || ["completed", "failed"].includes(run.state)).map(run => run.iteration || 0));
+  return batch.runs.filter(run => run.iteration > lastAttempt && !hasRunStarted(run) && ["canceled", "interrupted"].includes(run.state));
+}
+
+async function resumeSavedBatch(id) {
+  if (state.pendingResumes.has(id)) return;
+  const batch = savedResultBatches(state.savedResults || []).find(batch => batch.id === id);
+  const remaining = batch ? remainingBatchRuns(batch) : [];
+  if (!remaining.length) return;
+  state.pendingResumes.add(id);
+  renderSavedResults();
+  try {
+    await api(`/api/v1/result-batches/${encodeURIComponent(id)}/resume`, { method: "POST" });
+    const ids = new Set(remaining.map(run => run.id));
+    for (const run of [...(state.savedResults || []), ...(state.snapshot?.experiments || [])]) {
+      if (ids.has(run.id)) { run.state = "queued"; run.error = ""; run.finishedAt = ""; }
+    }
+    renderResultViews();
+    showToast(`Continuing ${remaining.length} remaining ${remaining.length === 1 ? "run" : "runs"}. Previous attempted runs are preserved.`);
+    await refreshSavedResults();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.pendingResumes.delete(id);
+    renderSavedResults();
+  }
+}
+
 function savedResultTable(runs, key, label = "Saved experiment results") {
   return `<div class="table-wrap" data-result-table="${escapeHTML(key)}"><table aria-label="${escapeHTML(label)}">
     <thead><tr><th scope="col">Experiment / ID</th><th scope="col">State</th><th scope="col">Started (local)</th><th scope="col">Finished (local)</th><th scope="col">Actions</th></tr></thead>
@@ -981,14 +1016,18 @@ function savedResultBatch(batch) {
   const excluded = batch.runs.length - batch.completed;
   const missing = Math.max(0, batch.expected - batch.runs.length);
   const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
-  const locked = batch.runs.some(resultLocked);
+  const resuming = state.pendingResumes?.has(batch.id);
+  const remaining = remainingBatchRuns(batch);
+  const analyzing = ["queued", "running"].includes(job?.state) || batch.runs.some(run => ["queued", "running"].includes(run.analysis?.state));
+  const locked = resuming || batch.runs.some(resultLocked);
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
       <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span></span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
-        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
+        ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
+        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
         <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
       </span>
     </summary>
@@ -1020,7 +1059,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1660,6 +1699,12 @@ $("#scenarioForm").addEventListener("submit", (event) => event.preventDefault())
 for (const close of document.querySelectorAll("[data-scenario-close]")) close.addEventListener("click", closeScenarioEditor);
 
 document.addEventListener("click", async (event) => {
+  const resumeButton = event.target.closest("[data-resume-batch]");
+  if (resumeButton) {
+    event.preventDefault();
+    if (!resumeButton.disabled) await resumeSavedBatch(resumeButton.dataset.resumeBatch);
+    return;
+  }
   const deleteBatchButton = event.target.closest("[data-delete-batch]");
   if (deleteBatchButton) {
     event.preventDefault();

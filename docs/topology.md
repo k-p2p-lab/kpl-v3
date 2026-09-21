@@ -48,13 +48,13 @@ The registry supplies addresses and configured topic participation; it does not 
 
 ## Freshness and lifecycle
 
-Peers send status about every two seconds; Agents forward their current snapshots. Network, scheduling, and status failures add delay. Stopping, stopped, starting, and failed endpoints have no displayed relationship lines. Stopping/stopped Peer circles are hidden; starting Peers appear in amber as **Starting**, and failed Peers remain visible as **Issue**.
+Peers send status about every two seconds; Agents forward their current snapshots. Network, scheduling, and status failures add delay. Stopping, stopped, starting, and failed endpoints have no displayed relationship lines. Stopping, stopped, and failed Peer circles and their incident lines are hidden. Starting Peers appear in amber as **Starting**. Failed Peer diagnostics remain available through node inspection and saved experiment records.
 
 After successful container cleanup, the Agent keeps a compact record with the Peer identity, terminal state, lifecycle timestamps, and topic labels. It releases old connections, routing/mesh memberships, scores, and bulky configuration metadata from memory. Full Agent status and node inspection still include the compact terminal record; active Peers and failed processes retain full diagnostics.
 
 Periodic heartbeats send active/failed Peers and successful exits that the Controller has not yet acknowledged, splitting large reports into bounded JSON batches. After acknowledgement, a successful exit is omitted from subsequent periodic reports but remains in the full inventory. Re-registration resets these acknowledgements so retained history is reported again after a Controller restart. The Controller does not treat omission from a partial heartbeat as an exit; see the [heartbeat contract](api.md#internal-cluster-endpoints).
 
-Controller snapshots reflect these exits even when no Dashboard is connected. Late heartbeats and create responses cannot turn a stopped Peer back into starting/ready/failed, and reopening the Dashboard uses this current snapshot.
+Controller snapshots reflect these exits even when no Dashboard is connected. Late heartbeats and create responses cannot revive a stopped or failed Peer; failed Peers can still progress through cleanup to stopped, and reopening the Dashboard uses this current snapshot.
 
 Offline Agents and Peer status older than ten seconds are excluded from lines. To avoid comparing clocks on different servers, the Controller derives Peer-report age from two timestamps produced by the same Agent, then advances that age on its own clock after receiving the heartbeat. This is the age reported by the Agent plus time since receipt, not a bound on time spent in transit. Missing legacy timestamps cannot establish that age. `OverlayObservedAt` identifies a supported overlay snapshot; it is the Peer's clock and is not compared directly with browser/Controller time to declare staleness.
 

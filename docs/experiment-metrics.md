@@ -10,7 +10,7 @@ In **Run experiment**, paste the YAML and set **Runs** beside **Run** to an inte
 
 For more than one iteration, the Controller cancels or drains background jobs according to the scenario's exit policy, fences and removes that iteration's Peers, and refreshes Agent state before starting the next iteration. An execution or cleanup failure cancels all remaining iterations. **Stop batch** on any running or queued member cancels the active iteration and the remaining queue. Other independently submitted experiments can still run concurrently; keep them stopped when comparing repetitions.
 
-The scenario YAML is unchanged in every iteration. An explicit nonzero `seed` is reused; zero or an omitted seed creates a new recorded seed per iteration. Reusing a seed repeats sampling inputs, but Docker timing, eligible populations, and network execution can still differ. Queues are not resumed after a Controller restart. Retained `queued` or `running` records are displayed as `interrupted`.
+The scenario YAML is unchanged in every iteration. An explicit nonzero `seed` is reused; zero or an omitted seed creates a new recorded seed per iteration. Reusing a seed repeats sampling inputs, but Docker timing, eligible populations, and network execution can still differ. Queues are not automatically resumed after a Controller restart. Retained `queued` or `running` records are displayed as `interrupted`.
 
 API clients can POST `application/json` to `/api/v1/experiments`:
 
@@ -19,6 +19,13 @@ API clients can POST `application/json` to `/api/v1/experiments`:
 ```
 
 The response is the first experiment; `/api/v1/snapshot` and the SSE stream include all iterations. Existing raw YAML requests still start one experiment. Reads and mutations use the login session; mutation requests also include `X-KPL-Request: dashboard`.
+
+### Continue the remaining runs after a failure
+
+In **Saved results**, use **Continue remaining (N)** on a stopped series to resume its never-started runs. Previously completed, failed, and otherwise attempted runs are preserved and are not repeated. The original batch ID, run IDs, iteration numbers, total repetitions, saved YAML, and per-run seeds are retained; for example, a failure at Run 2 of 5 continues with Runs 3–5. This does not add replacement runs to reach five successes. Batch means continue to include only completed runs.
+
+Continuation also works from saved results after a Controller restart. It requires a failed run, or an interrupted run that had started, and retained unstarted members. The Controller retries cleanup of previous unsuccessful runs on its registered Agents before starting the remainder. If cleanup fails, no remaining run starts; its error is shown and **Continue remaining** can be retried. A later experiment failure stops the remainder again. Concurrent continuation requests, active batches, downloads, and running analysis jobs block admission. **Stop batch** also cancels a continuation during cleanup. Closing the browser does not cancel accepted work.
+
 
 ## Delivery under churn: session-window-v1
 

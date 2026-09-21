@@ -183,11 +183,11 @@ test('the carousel resets finished runs without changing snapshots or cluster co
 
 test('source sizes show original bytes for terminal, live and unreadable metadata', () => {
   const api = context();
-  assert.match(api.resultSourceSize({id:'saved',state:'completed',sourceBytes:1536,downloadBytes:16}), />Source · 1.5 KiB<\/span>/);
-  assert.match(api.resultSourceSize({id:'live',state:'running',sourceBytes:5*1024*1024}), />Live source · 5 MiB<\/span>/);
-  assert.match(api.resultSourceSize({id:'queued',state:'queued',sourceBytes:1024}), />Live source · 1 KiB<\/span>/);
-  assert.match(api.resultSourceSize({id:'bad-metadata',state:'unreadable',sourceBytes:100}), />Source · 100 B<\/span>/);
-  assert.match(api.resultSourceSize({id:'zero',state:'completed',sourceBytes:0}), />Source · 0 B<\/span>/);
+  assert.match(api.resultSourceSize({id:'saved',state:'completed',sourceBytes:1536,downloadBytes:16}), />Source 1.5 KiB<\/span>/);
+  assert.match(api.resultSourceSize({id:'live',state:'running',sourceBytes:5*1024*1024}), />Live source 5 MiB<\/span>/);
+  assert.match(api.resultSourceSize({id:'queued',state:'queued',sourceBytes:1024}), />Live source 1 KiB<\/span>/);
+  assert.match(api.resultSourceSize({id:'bad-metadata',state:'unreadable',sourceBytes:100}), />Source 100 B<\/span>/);
+  assert.match(api.resultSourceSize({id:'zero',state:'completed',sourceBytes:0}), />Source 0 B<\/span>/);
   for (const sourceBytes of [undefined,null,-1,'1536',NaN,Infinity,1.5]) {
     assert.match(api.resultSourceSize({id:'missing',state:'completed',sourceBytes,downloadBytes:1024}), />Source · —<\/span>/);
   }
@@ -196,8 +196,8 @@ test('source sizes show original bytes for terminal, live and unreadable metadat
 test('experiment cards use saved source bytes with the current run state', () => {
   const state = {savedResults:[{id:'run',state:'running',active:true,sourceBytes:1536}]};
   const api = context({state});
-  assert.match(api.runSourceSize({id:'run',state:'running'}), />Live source · 1.5 KiB<\/span>/);
-  assert.match(api.runSourceSize({id:'run',state:'completed'}), />Source · 1.5 KiB<\/span>/);
+  assert.match(api.runSourceSize({id:'run',state:'running'}), />Live source 1.5 KiB<\/span>/);
+  assert.match(api.runSourceSize({id:'run',state:'completed'}), />Source 1.5 KiB<\/span>/);
   assert.equal(api.runSourceSize({id:'missing',state:'completed'}), '');
 });
 
@@ -216,10 +216,10 @@ test('result refresh displays source bytes immediately without ZIP requests or e
     fetch:()=>{heads++;throw new Error('unexpected ZIP request');}});
   api.api = async path => {assert.equal(path,'/api/v1/results');requests++;return [{...run,sourceBytes:requests*1536}];};
   await api.refreshSavedResults();
-  assert.match(element('#runList').innerHTML, />Source · 1.5 KiB<\/span>/);
-  assert.match(element('#savedResultsRows').innerHTML, />Source · 1.5 KiB<\/span>/);
+  assert.match(element('#runList').innerHTML, />Source 1.5 KiB<\/span>/);
+  assert.match(element('#savedResultsRows').innerHTML, />Source 1.5 KiB<\/span>/);
   await api.refreshSavedResults();
-  assert.match(element('#savedResultsRows').innerHTML, />Source · 3 KiB<\/span>/);
+  assert.match(element('#savedResultsRows').innerHTML, />Source 3 KiB<\/span>/);
   assert.equal(requests,2);
   assert.equal(heads,0);
   assert.equal(timers.size,0,'idle results scheduled size polling');
@@ -234,6 +234,7 @@ test('relationship layers do not misclassify legacy transport and preserve the i
     {source:'one',target:'two',protocol:'kademlia',reportedBy:['one']},
     {source:'one',target:'stopped',protocol:'kademlia'},
     {source:'one',target:'stopping',protocol:'kademlia'},
+    {source:'one',target:'failed',protocol:'kademlia'},
     {source:'one',target:'missing',protocol:'kademlia'},
     {source:'one',target:'one',protocol:'kademlia'},
   ];
@@ -243,7 +244,7 @@ test('relationship layers do not misclassify legacy transport and preserve the i
   const transport = api.filterTopologyEdges(nodes, edges, {transport:true});
   assert.equal(transport.length,1);
   assert.equal(transport[0].protocol,'transport');
-  assert.deepEqual(plain(api.topologyData(nodes,edges).nodes.map(n=>n.id)),['one','two','failed']);
+  assert.deepEqual(plain(api.topologyData(nodes,edges).nodes.map(n=>n.id)),['one','two']);
   assert.equal(JSON.stringify({nodes,edges}),original);
 });
 
@@ -683,16 +684,16 @@ test('telemetry updates preserve SVG identity and focus while refreshing scores 
 });
 
 
-test('fresh and reconnected snapshots hide completed exits and distinguish starting from issues', () => {
+test('fresh and reconnected snapshots hide failed and stopped peers while retaining starting peers', () => {
   const nodes=[peer('ended','a','stopped'),peer('leaving','a','stopping'),peer('joining','a','starting'),peer('failed','a','failed'),peer('healthy')];
   const check=({ids,render})=>{
     render(nodes,[]);
     const svg=ids.get('topology');
-    assert.deepEqual(svg.querySelectorAll('.topology-peer').map(el=>el.dataset.nodeId).sort(),['failed','healthy','joining']);
+    assert.deepEqual(svg.querySelectorAll('.topology-peer').map(el=>el.dataset.nodeId).sort(),['healthy','joining']);
     const nodeCircle=id=>svg.querySelectorAll('.topology-peer').find(el=>el.dataset.nodeId===id).querySelectorAll('.topology-node')[0];
     assert.ok(nodeCircle('joining').classList.contains('starting'));
     assert.equal(nodeCircle('joining').classList.contains('issue'),false);
-    assert.ok(nodeCircle('failed').classList.contains('issue'));
+    assert.equal(svg.querySelectorAll('.topology-peer').some(el=>el.dataset.nodeId==='failed'),false);
     assert.ok(nodeCircle('healthy').classList.contains('worker'));
   };
   // A new page has never received exit events or previous snapshots.
@@ -742,4 +743,21 @@ test('collapsed topology stops rendering and motion, then reopens the latest sna
   document.emit('dashboard:panel-toggle',{detail:{id:'topology',collapsed:false}});
   assert.equal(state.topology.motion.enabled,false);
   assert.equal(frames.queue.size,0);
+});
+
+test('failed peers leave no selected node, edges, positions or animation frames',()=>{
+  const {ids,state,frames,render}=uiFixture();
+  const nodes=[peer('one'),peer('two')], edges=[{source:'one',target:'two',protocol:'transport'}];
+  state.topology.filters.transport=true;
+  render(nodes,edges);
+  state.topology.selected='one';
+  state.topology.hovered='two';
+  render(nodes.map(node=>({...node,state:'failed'})),edges);
+  assert.equal(ids.get('topology').querySelectorAll('.topology-peer').length,0);
+  assert.equal(ids.get('topology').querySelectorAll('.topology-edge').length,0);
+  assert.equal(state.topology.selected,null);
+  assert.equal(state.topology.hovered,null);
+  assert.equal(state.topology.layout.pizza.positions.size,0);
+  assert.equal(frames.queue.size,0);
+  assert.equal(ids.get('topologyEmpty').hidden,false);
 });

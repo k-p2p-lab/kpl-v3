@@ -596,7 +596,7 @@ function resultSourceSize(run) {
   const size = Number.isSafeInteger(bytes) && bytes >= 0 ? (bytes === 0 ? "0 B" : formatBytes(bytes)) : "";
   if (!size) return '<span class="download-size" title="Source file sizes could not be read at the last refresh.">Source · —</span>';
   const live = isPendingRun(run);
-  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events and observations. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source" : "Source "}${escapeHTML(size)}</span>`;
+  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events and observations. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source " : "Source "}${escapeHTML(size)}</span>`;
 }
 
 function runSourceSize(run) {

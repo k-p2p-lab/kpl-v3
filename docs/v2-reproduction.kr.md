@@ -58,7 +58,7 @@ network:
 
 | 의미 | 대응/주의점 |
 |---|---|
-| 순차 interval | 작업 종료 후 다음 작업 전 대기, 마지막 작업 뒤 대기 없음 |
+| 순차 interval | v2는 완료 후 대기. v3는 장기 churn에서 접수·요청 지연이 누적되지 않도록 batch 시작 기준 누적 예약 시각을 사용. 늦어진 작업은 누락 없이 순서대로 따라잡으며 마지막 작업 뒤 대기는 없음. |
 | parallel join/leave | interval 무시 |
 | parallel publish | 발행자마다 독립적인 시작 지연, interval 생략 시 1초 |
 | publish/leave replicas | 후보 수로 제한, 중복 선택 없음 |

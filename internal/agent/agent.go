@@ -258,12 +258,37 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 }
 
 func (s *Server) controlLoop(ctx context.Context) {
-	registered := false
-	heartbeat := time.NewTicker(2 * time.Second)
+	// A congested event sink must not prevent the Agent from renewing its
+	// lease. Otherwise healthy capacity disappears from placement while peers
+	// continue to expire, reducing the live population during churn.
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		s.heartbeatLoop(ctx)
+	}()
+	defer func() { <-heartbeatDone }()
 	flush := time.NewTicker(500 * time.Millisecond)
-	defer heartbeat.Stop()
 	defer flush.Stop()
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-flush.C:
+			s.flushEvents(ctx)
+		case <-s.flushNow:
+			s.flushEvents(ctx)
+		}
+	}
+}
+
+func (s *Server) heartbeatLoop(ctx context.Context) {
+	registered := false
+	heartbeat := time.NewTicker(2 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
 		if !registered {
 			if err := s.register(ctx); err != nil {
 				s.logger.Warn("agent registration failed", "error", err)
@@ -281,10 +306,6 @@ func (s *Server) controlLoop(ctx context.Context) {
 					registered = false
 				}
 			}
-		case <-flush.C:
-			s.flushEvents(ctx)
-		case <-s.flushNow:
-			s.flushEvents(ctx)
 		}
 	}
 }
@@ -419,20 +440,29 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		P2PListen:     "/ip4/0.0.0.0/tcp/20000",
 		Token:         s.config.Token,
 	}
-	configPath, err := s.writePeerConfig(peerConfig)
-	if err != nil {
-		cancel()
-		s.mu.Unlock()
-		return model.Node{}, err
-	}
-	data, err := json.Marshal(peerConfig)
-	if err != nil {
-		cancel()
-		s.mu.Unlock()
-		return model.Node{}, err
-	}
-	proc := &process{node: node, configPath: configPath, cancel: cancel, done: make(chan struct{})}
+	// Reserve capacity before preparing files so duplicate creates and run
+	// fences see the in-flight peer. Keep its mutable status separate from the
+	// configuration/response, which are encoded without the state lock.
+	proc := &process{node: cloneNodeStatus(node), cancel: cancel, done: make(chan struct{})}
 	s.processes[request.ID] = proc
+	s.mu.Unlock()
+
+	// Disk stalls must not block heartbeats, lifetime stops or other admissions.
+	configPath, err := s.writePeerConfig(peerConfig)
+	var data []byte
+	if err == nil {
+		data, err = json.Marshal(peerConfig)
+	}
+	if err == nil {
+		err = processCtx.Err()
+	}
+	if err != nil {
+		cancel()
+		s.finishProcess(request.ID, proc, err, nil)
+		return model.Node{}, err
+	}
+	s.mu.Lock()
+	proc.configPath = configPath
 	s.mu.Unlock()
 	go s.runDockerProcess(processCtx, proc, data, request.Lifetime)
 	return node, nil

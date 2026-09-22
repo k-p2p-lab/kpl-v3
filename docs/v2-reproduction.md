@@ -58,7 +58,7 @@ network:
 
 | Meaning | Mapping or caveat |
 |---|---|
-| Sequential interval | Wait after an operation completes and before the next one; no wait after the final operation |
+| Sequential interval | v2 waits after completion; v3 uses cumulative batch-start deadlines to avoid admission/RPC drift during long churn. Late operations catch up in order, without skipping arrivals. No wait follows the final operation. |
 | Parallel join/leave | Ignore interval |
 | Parallel publish | Independent initial delay for each publisher; defaults to 1 second when interval is omitted |
 | Publish/leave replicas | Capped at the number of candidates, with no duplicate selections |

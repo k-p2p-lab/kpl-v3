@@ -43,7 +43,7 @@ readiness barrier는 안정적인 boot 그룹에만 적용합니다. 계속 커�
 
 내장 boot Peer는 PubSub가 비활성화되어 있으므로 DHT bootstrap만으로 worker가 GossipSub overlay에 연결되지는 않습니다. Worker가 PubSub를 시작하면 동일 run·정확한 topic의 Controller discovery registry를 즉시 조회하고 이후 3초 간격으로 다음 round를 예약합니다. [`internal/peer/discovery.go`](../internal/peer/discovery.go)는 subscriber를 우선하면서 rendezvous hash로 ready 후보의 순위를 정합니다. dial 예산은 `DHigh`에서 현재 topic peer 수를 뺀 부족분이며 transport 연결 상한으로 한 번 더 제한합니다. dial 실패 시 다음 순위 후보를 시도하고 실패 후보에는 15초 재시도 유예를 적용합니다. 느린 round는 다음 조회를 늦출 수 있습니다. 실제 GRAFT mesh는 계속 GossipSub가 선택하므로 registry 후보나 transport 연결이 곧 mesh 구성원인 것은 아닙니다.
 
-10개 노드를 모두 선택한 round에는 평균 합계 9초인 간격 아홉 개와 요청 처리 시간이 있습니다. 기본 대기 스케줄은 `180 + 30×9 + 29×10 + 30 = 770초`, 즉 **약 12분 50초**이며 bootstrap·API·정리 시간이 추가됩니다. 고정 종료 시각은 아닙니다. 후보가 적거나 없는 round는 짧아지고 느린 요청은 길어집니다.
+10개 노드를 모두 선택한 round에는 평균 합계 9초인 간격 아홉 개가 있으며 첫 요청부터 마지막 요청의 예약 시각까지 적용됩니다. 요청 처리 시간은 이 간격 안에 포함되고, 초과 지연과 마지막 요청의 처리 시간이 round를 늘릴 수 있습니다. 기본 대기 스케줄은 `180 + 30×9 + 29×10 + 30 = 770초`, 즉 **약 12분 50초**이며 bootstrap·API·정리 시간이 추가됩니다. 고정 종료 시각은 아닙니다. 후보가 적거나 없는 round는 짧아지고 느린 요청은 길어집니다.
 
 ## 발행 대상과 측정 의미
 
@@ -87,7 +87,7 @@ PubSub `join`/`leave`는 **Peer 생성·종료 기록이 아닙니다**. 측정 
 | 설정 | 효과 |
 |---|---|
 | Worker join의 `count` | 총 생성 예산을 바꿉니다. 마지막 수집 구간까지 join이 이어지도록 충분히 크게 유지합니다. |
-| Worker `interval.mean` | 작게 하면 도착 시도 빈도가 높아집니다. Docker 처리와 용량 대기 시간은 별도입니다. |
+| Worker `interval.mean` | 작게 하면 예약 도착 빈도가 높아집니다. 간격은 누적 예약 시각을 사용하고 늦어진 접수는 순서대로 따라잡지만, 지속적인 Docker·용량 병목은 실제 도착률을 제한합니다. |
 | Worker lifetime의 `xm` / `alpha` | 수명과 기대 노드 수를 바꿉니다. `alpha > 1`이면 평균수명은 `alpha × xm / (alpha - 1)`입니다. |
 | Agent capacity | 접수 한도이며 예약 CPU/RAM이 아닙니다. 높이기 전에 호스트 부하를 측정합니다. |
 | Warm-up `duration` | 첫 발행 전 churn 시간을 바꿉니다. 수렴 검사가 아닌 시간 대기입니다. |

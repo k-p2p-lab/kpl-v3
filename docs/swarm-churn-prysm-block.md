@@ -14,7 +14,7 @@ English | [Korean](swarm-churn-prysm-block.kr.md)
 
 Only delay differs between worker profiles. Balanced placement spreads each cohort across available Agents, so cohorts are not physical hosts. Network shaping covers outbound P2P TCP, including DHT, and excludes Controller HTTP/telemetry. Configured egress delays are not RTTs, and packet loss is not application delivery loss.
 
-Pareto lifetime `xm: 120s`, `alpha: 2.5` has mean **200s**. The three sequential producers use exponential mean `0.3s` gaps, preserving an ideal aggregate rate of **10 joins/s** before creation and capacity waits. The stationary expectation is **667 workers/cohort, about 2,000 workers plus 10 boots**. This is not a concurrency cap or measured capacity guarantee. Lifetime includes startup after successful container creation.
+Pareto lifetime `xm: 120s`, `alpha: 2.5` has mean **200s**. The three sequential producers use exponential mean `0.3s` gaps, preserving an ideal aggregate rate of **10 joins/s** on the cumulative arrival schedule. Request processing consumes the sampled intervals; capacity stalls can still delay arrivals, which catch up in order without being skipped. The stationary expectation is **667 workers/cohort, about 2,000 workers plus 10 boots**. This is not a concurrency cap or measured capacity guarantee. Lifetime includes startup after successful container creation.
 
 **40 free slots cannot sustain this rate.** Provision headroom and measure host load, or change the shared `&churn` interval: mean `10s` gives an ideal 60 workers plus 10 boots; mean `30s` gives 20 workers plus 10 boots. Aliases inherit this setting. Capacity waiting can distort arrival rates and cohort balance. The three budgets sum to 10,000; they are not 10,000 each.
 

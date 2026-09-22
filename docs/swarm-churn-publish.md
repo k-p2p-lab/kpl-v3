@@ -43,7 +43,7 @@ Only the stable boot group has a readiness barrier. A worker `wait-ready` barrie
 
 DHT bootstrapping does not itself connect these workers into a GossipSub overlay because the built-in boot Peers have PubSub disabled. Once a worker starts PubSub, it immediately queries the Controller's same-run, exact-topic discovery registry and schedules further rounds every three seconds. In [`internal/peer/discovery.go`](../internal/peer/discovery.go), rendezvous hashing ranks ready candidates, preferring subscribers. The dial budget is the deficit between `DHigh` and the current topic peer count, further limited by the transport connection cap. Failed dials advance to later candidates and enter a 15-second retry delay; slow rounds can delay the next poll. GossipSub still selects the actual GRAFT mesh; a registry candidate or transport connection is not automatically a mesh member.
 
-A full 10-node round has nine sampled gaps, averaging about 9 seconds before request overhead. The nominal waits total `180 + 30×9 + 29×10 + 30 = 770 seconds`, or **about 12 minutes 50 seconds**, plus bootstrap, API, and cleanup time. It is not a deadline: empty or small rounds shorten it, and slow requests lengthen it.
+A full 10-node round has nine sampled gaps, averaging about 9 seconds from its first to last scheduled request. Request processing consumes these gaps; only overruns and the final request can extend the round. The nominal waits total `180 + 30×9 + 29×10 + 30 = 770 seconds`, or **about 12 minutes 50 seconds**, plus bootstrap, API, and cleanup time. It is not a deadline: empty or small rounds shorten it, and slow requests lengthen it.
 
 ## Who Publishes and What Is Measured
 
@@ -87,7 +87,7 @@ Download before `sudo sh scripts/swarm.sh remove` takes the web services offline
 | Setting | Effect |
 |---|---|
 | Worker join `count` | Changes the total creation budget. Keep it high enough that joins continue through the last collection period. |
-| Worker `interval.mean` | A smaller value raises attempted arrivals; Docker and capacity waits still add time. |
+| Worker `interval.mean` | A smaller value raises scheduled arrivals. Intervals use cumulative deadlines; slow admissions catch up in order, but sustained Docker/capacity bottlenecks still limit the actual rate. |
 | Worker lifetime `xm` / `alpha` | Changes session lengths and expected population. For `alpha > 1`, mean lifetime is `alpha × xm / (alpha - 1)`. |
 | Agent capacity | Changes admission limits, not reserved CPU/RAM. Measure host load before raising it. |
 | Warm-up `duration` | Changes how long churn runs before the first publication. It is a timed wait, not a convergence test. |

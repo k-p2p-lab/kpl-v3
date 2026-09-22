@@ -206,7 +206,9 @@ Background-job behavior at the natural end of the phase list is controlled by to
 
 For v2 compatibility, a `publish` phase with no `interval` has a special default: with `parallel: true`, every operation gets a `1s` phase-start offset; sequential publish uses zero delay. This rule is independent of `await`.
 
-Sequential `join`, `publish`, and `leave` run the first operation immediately, then wait for a sampled interval between operations. Parallel `join` and `leave` ignore `interval`. Parallel `publish` uses each sampled interval as that operation's independent offset from the batch start, before acquiring a concurrency slot; offsets are not cumulative and capacity can delay dispatch further.
+Sequential `join`, `publish`, and `leave` run the first operation immediately, then schedule each operation at the batch start plus the sum of preceding sampled intervals. Request/admission time consumes the interval instead of extending it. If dispatch falls behind, remaining operations execute in order without extra waiting until they catch up; arrivals are not skipped. Cancellation and errors still stop dispatch, and Agent capacity still limits admission. Parallel `join` and `leave` ignore `interval`. Parallel `publish` uses each sampled interval as that operation's independent offset from the batch start, before acquiring a concurrency slot; offsets are not cumulative and capacity can delay dispatch further.
+
+For sequential joins, the Controller logs `churn join schedule delayed` when dispatch is at least one second late, at most once every ten seconds per job execution. The log includes the run, group, operation number, scheduled time, and delay. This exposes sustained capacity or API bottlenecks; the schedule cannot guarantee Docker startup or readiness times under overload. Agent heartbeats run independently of event forwarding, so a slow telemetry request does not pause lease renewal.
 
 `wait` durations and readiness/job timeouts must be positive. An omitted join `lifetime` means no automatic leave, while an explicitly sampled `0s` lifetime stops the new node immediately, matching v2.
 

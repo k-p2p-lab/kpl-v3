@@ -378,6 +378,8 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 			return err
 		}
 	}
+	scheduled := time.Now()
+	var lastScheduleWarning time.Time
 	return runOperations(ctx, phase.Count, phase.Parallel, phase.Parallelism, delays, false, func(operationCtx context.Context, i int) error {
 		request := requests[i]
 		var placementRNG *rand.Rand
@@ -387,6 +389,16 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 		agent, err := s.acquireAgentWithPlacement(operationCtx, request.ID, agentID, placementRNG)
 		if err != nil {
 			return err
+		}
+		if !phase.Parallel {
+			if i > 0 {
+				scheduled = scheduled.Add(delays[i-1])
+			}
+			now := time.Now()
+			if lag := now.Sub(scheduled); lag >= time.Second && (lastScheduleWarning.IsZero() || now.Sub(lastScheduleWarning) >= 10*time.Second) {
+				s.logger.Warn("churn join schedule delayed", "runId", runID, "generation", generation, "group", phase.Group, "job", phase.Job, "operation", i+1, "count", phase.Count, "agentId", agent.ID, "scheduledAt", scheduled.UTC(), "delay", lag)
+				lastScheduleWarning = now
+			}
 		}
 		var node model.Node
 		if err := s.callAgent(operationCtx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node); err != nil {
@@ -1089,17 +1101,25 @@ func runOperations(ctx context.Context, count int, parallel bool, parallelism in
 	// A batch with one dispatch slot has stable request order. Parallel join
 	// and leave ignore interval; their serial dispatch must do so as well.
 	if !parallel || parallelism == 1 && !delayParallel {
+		// Intervals describe arrival times, not idle time after each request.
+		// Keep a monotonic deadline so admission/RPC latency does not accumulate
+		// across a long churn stream. Late operations still execute in order;
+		// they catch up without dropping arrivals or bypassing capacity checks.
+		next := time.Now()
 		for i := 0; i < count; i++ {
+			if !parallel {
+				if err := sleepContext(ctx, time.Until(next)); err != nil {
+					return err
+				}
+			}
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			if err := operation(ctx, i); err != nil {
 				return err
 			}
-			if !parallel && i+1 < count && i < len(delays) {
-				if err := sleepContext(ctx, delays[i]); err != nil {
-					return err
-				}
+			if !parallel && i < len(delays) {
+				next = next.Add(delays[i])
 			}
 		}
 		return nil

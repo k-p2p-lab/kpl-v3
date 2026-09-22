@@ -17,7 +17,14 @@ import (
 
 func TestAgentRunDrainsTelemetryWhoseBodyCompletesDuringShutdown(t *testing.T) {
 	forwarded := make(chan model.TraceEvent, 4)
+	registered := make(chan struct{}, 1)
 	controller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/agents/register" {
+			select {
+			case registered <- struct{}{}:
+			default:
+			}
+		}
 		if r.URL.Path == "/api/v1/events/batch" {
 			var batch model.EventBatch
 			if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
@@ -57,6 +64,16 @@ func TestAgentRunDrainsTelemetryWhoseBodyCompletesDuringShutdown(t *testing.T) {
 			t.Error("Agent did not finish after test cleanup")
 		}
 	}()
+	// Run binds its port before Docker checks/cleanup, so a successful dial
+	// does not mean HTTP is serving yet. Wait for registration before starting
+	// the request deadline; race-instrumented Docker helpers exit more slowly.
+	select {
+	case <-registered:
+	case err := <-done:
+		t.Fatalf("Agent failed before registration: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Agent did not finish startup")
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		connection, err = net.DialTimeout("tcp", address, 100*time.Millisecond)

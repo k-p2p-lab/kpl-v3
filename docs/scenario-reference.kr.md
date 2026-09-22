@@ -206,7 +206,9 @@ phase 목록이 자연스럽게 끝났을 때 background job을 처리하는 방
 
 v2 호환을 위해 `interval`을 생략한 `publish` phase에는 특수 기본값을 적용합니다. `parallel: true`이면 각 작업에 phase 시작 기준 `1s` offset을 주며, 순차 publish의 delay는 `0`입니다. 이 규칙은 `await` 값과 무관합니다.
 
-순차 `join`, `publish`, `leave`는 첫 작업을 즉시 실행하고 작업 사이에 sample된 interval만큼 기다립니다. 병렬 `join`과 `leave`는 `interval`을 무시합니다. 병렬 `publish`는 각 sample interval을 batch 시작 기준의 독립적인 offset으로 사용하고 그 후 동시 실행 slot을 확보합니다. Offset은 누적하지 않으며 동시 실행 용량에 따라 dispatch가 더 늦어질 수 있습니다.
+순차 `join`, `publish`, `leave`는 첫 작업을 즉시 실행하고, 이후 작업은 batch 시작 시각에 앞서 sample된 interval을 누적한 시각에 예약합니다. 요청 처리·접수 대기 시간은 interval 안에 포함되며 매번 추가되지 않습니다. 예약보다 늦어진 작업은 건너뛰지 않고 순서대로 실행하며 원래 일정에 따라잡을 때까지 추가로 쉬지 않습니다. 취소·오류는 여전히 실행을 중단하며 Agent 용량 제한도 적용됩니다. 병렬 `join`과 `leave`는 `interval`을 무시합니다. 병렬 `publish`는 각 sample interval을 batch 시작 기준의 독립적인 offset으로 사용하고 그 후 동시 실행 slot을 확보합니다. Offset은 누적하지 않으며 동시 실행 용량에 따라 dispatch가 더 늦어질 수 있습니다.
+
+순차 join이 예약보다 1초 이상 늦어지면 Controller는 job 실행별 최대 10초에 한 번 `churn join schedule delayed`를 기록합니다. 실행 ID, 그룹, 작업 번호, 예약 시각, 지연 시간이 포함됩니다. 지속적인 용량·API 병목을 확인할 수 있지만 과부하 상황의 Docker 시작·ready 시각까지 보장하지는 않습니다. Agent heartbeat는 이벤트 전송과 독립적으로 실행하므로 느린 telemetry 요청이 생존 신호 전송을 막지 않습니다.
 
 `wait` duration과 readiness/job timeout은 양수여야 합니다. join의 `lifetime`을 생략하면 자동 leave를 하지 않지만 명시적으로 sample된 `0s` lifetime은 v2와 같이 새 노드를 즉시 종료합니다.
 

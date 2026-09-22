@@ -46,13 +46,14 @@ type runMetricAccumulator struct {
 	bandwidth                        bandwidthAccumulator
 	onBandwidth                      func(bandwidthInterval)
 	// The state read lock permits concurrent dashboard/Prometheus readers.
-	summaryMu      sync.Mutex
-	revision       uint64
-	cachedRevision uint64
-	cachedAt       time.Time
-	cachedRun      string
-	cachedMetrics  model.Metrics
-	cachedSamples  []propagationSample
+	summaryMu        sync.Mutex
+	revision         uint64
+	cachedRevision   uint64
+	cachedAt         time.Time
+	cachedRun        string
+	cachedMetrics    model.Metrics
+	cachedSamples    []propagationSample
+	cachedHistograms map[propagationSeriesKey]*propagationHistogram
 }
 
 func newRunMetricAccumulator() *runMetricAccumulator {
@@ -239,11 +240,16 @@ func (a *runMetricAccumulator) summarize(runID string, asOf ...time.Time) (model
 func (a *runMetricAccumulator) liveSummary(runID string, now time.Time) (model.Metrics, []propagationSample) {
 	a.summaryMu.Lock()
 	defer a.summaryMu.Unlock()
+	return a.liveSummaryLocked(runID, now)
+}
+
+func (a *runMetricAccumulator) liveSummaryLocked(runID string, now time.Time) (model.Metrics, []propagationSample) {
 	if !a.cachedAt.IsZero() && a.cachedRun == runID && !now.Before(a.cachedAt) &&
 		a.cachedRevision == a.revision && (now.Sub(a.cachedAt) < snapshotInterval || a.cachedMetrics.PendingPublications == 0) {
 		return a.cachedMetrics, a.cachedSamples
 	}
 	a.cachedMetrics, a.cachedSamples = a.summarize(runID, now)
+	a.cachedHistograms = nil
 	a.cachedRevision, a.cachedAt, a.cachedRun = a.revision, now, runID
 	return a.cachedMetrics, a.cachedSamples
 }

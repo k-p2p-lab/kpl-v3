@@ -322,7 +322,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.state.inventory().Agents)
+	writeJSON(w, http.StatusOK, s.state.agentInventory())
 }
 
 func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
@@ -392,18 +392,20 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "runId query parameter is required")
 		return
 	}
-	snapshot := s.state.snapshot()
 	type bootstrapNode struct {
 		NodeID    string   `json:"nodeId"`
 		PeerID    string   `json:"peerId"`
 		Addresses []string `json:"addresses"`
 	}
 	var result []bootstrapNode
-	for _, node := range snapshot.Nodes {
+	s.state.mu.RLock()
+	for node := range s.state.activeNodesLocked() {
 		if node.RunID == runID && node.Role == "boot" && node.State == model.NodeReady && node.PeerID != "" && len(node.Addresses) > 0 {
-			result = append(result, bootstrapNode{NodeID: node.ID, PeerID: node.PeerID, Addresses: node.Addresses})
+			result = append(result, bootstrapNode{NodeID: node.ID, PeerID: node.PeerID, Addresses: append([]string(nil), node.Addresses...)})
 		}
 	}
+	s.state.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].NodeID < result[j].NodeID })
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -431,7 +433,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	result := make([]discoveryNode, 0)
 	now := time.Now().UTC()
 	s.state.mu.RLock()
-	for _, node := range s.state.nodes {
+	for node := range s.state.activeNodesLocked() {
 		if node.ID == requesterNodeID || node.RunID != runID || node.State != model.NodeReady ||
 			node.PeerID == "" || len(node.Addresses) == 0 ||
 			!agentIsOnline(s.state.agents[node.AgentID], now) ||
@@ -461,7 +463,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.state.inventory().Events)
+	writeJSON(w, http.StatusOK, s.state.recentEvents())
 }
 
 func (s *Server) handleEventBatch(w http.ResponseWriter, r *http.Request) {
@@ -514,7 +516,7 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			writeJSON(w, http.StatusOK, s.state.inventory().Experiments)
+			writeJSON(w, http.StatusOK, s.state.experimentInventory())
 		case http.MethodPost:
 			// Cancel a slow upload immediately during shutdown; canceling a
 			// request context alone does not unblock a server-side body Read.

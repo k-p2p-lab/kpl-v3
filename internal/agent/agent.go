@@ -317,6 +317,32 @@ func (s *Server) snapshot() model.AgentHeartbeat {
 	return s.snapshotWithHistory(true)
 }
 
+func (s *Server) snapshotAgent() model.Agent {
+	hostname, _ := os.Hostname()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agentStatusLocked(hostname)
+}
+
+// Caller holds mu. Registration needs only the lease/capacity, not copies of
+// every departed peer's status. Inventory acknowledgments remain independent.
+func (s *Server) agentStatusLocked(hostname string) model.Agent {
+	return model.Agent{
+		ID:          s.config.ID,
+		Name:        s.config.Name,
+		URL:         strings.TrimRight(s.config.AdvertiseURL, "/"),
+		MetricsURL:  s.config.MetricsURL,
+		Hostname:    hostname,
+		Version:     "v3-dev",
+		Capacity:    s.config.Capacity,
+		ActiveNodes: s.capacityUsedLocked(),
+		State:       model.AgentOnline,
+		Labels:      s.config.Labels,
+		StartedAt:   s.startedAt,
+		LastSeen:    time.Now().UTC(),
+	}
+}
+
 func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartbeat {
 	hostname, _ := os.Hostname()
 	s.mu.RLock()
@@ -325,20 +351,7 @@ func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartb
 		capacity = min(capacity, max(0, s.config.Capacity))
 	}
 	h := model.AgentHeartbeat{
-		Agent: model.Agent{
-			ID:          s.config.ID,
-			Name:        s.config.Name,
-			URL:         strings.TrimRight(s.config.AdvertiseURL, "/"),
-			MetricsURL:  s.config.MetricsURL,
-			Hostname:    hostname,
-			Version:     "v3-dev",
-			Capacity:    s.config.Capacity,
-			ActiveNodes: s.capacityUsedLocked(),
-			State:       model.AgentOnline,
-			Labels:      s.config.Labels,
-			StartedAt:   s.startedAt,
-			LastSeen:    time.Now().UTC(),
-		},
+		Agent: s.agentStatusLocked(hostname),
 		Nodes: make([]model.Node, 0, capacity),
 	}
 	for _, proc := range s.processes {

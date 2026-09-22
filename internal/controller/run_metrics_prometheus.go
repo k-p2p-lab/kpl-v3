@@ -55,6 +55,36 @@ type propagationHistogram struct {
 	buckets map[float64]uint64
 }
 
+// Immutable histograms share the summary's revision/deadline cache. Scraping
+// settled experiments must not replay every historical delivery into buckets.
+// New events (including late gap fills) still invalidate the exact summary.
+func (a *runMetricAccumulator) livePrometheusSummary(runID string, now time.Time) (model.Metrics, map[propagationSeriesKey]*propagationHistogram) {
+	a.summaryMu.Lock()
+	defer a.summaryMu.Unlock()
+	result, samples := a.liveSummaryLocked(runID, now)
+	if a.cachedHistograms == nil {
+		a.cachedHistograms = make(map[propagationSeriesKey]*propagationHistogram)
+		for _, sample := range samples {
+			histogram := a.cachedHistograms[sample.key]
+			if histogram == nil {
+				histogram = &propagationHistogram{buckets: make(map[float64]uint64, len(propagationBounds))}
+				for _, bound := range propagationBounds {
+					histogram.buckets[bound] = 0
+				}
+				a.cachedHistograms[sample.key] = histogram
+			}
+			histogram.count++
+			histogram.sum += sample.seconds
+			for _, bound := range propagationBounds {
+				if sample.seconds <= bound {
+					histogram.buckets[bound]++
+				}
+			}
+		}
+	}
+	return result, a.cachedHistograms
+}
+
 func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 	metrics := make([]model.Metrics, 0)
 	definitions := make(map[string]string)
@@ -76,18 +106,11 @@ func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		if runID == "" {
 			continue
 		}
-		result, samples := accumulator.liveSummary(runID, asOf)
+		result, cached := accumulator.livePrometheusSummary(runID, asOf)
 		definitions[runID] = result.Definition
 		metrics = append(metrics, result)
-		for _, sample := range samples {
-			histogram := initHistogram(runPropagationKey{runID, sample.key.agentID, sample.key.topic})
-			histogram.count++
-			histogram.sum += sample.seconds
-			for _, bound := range propagationBounds {
-				if sample.seconds <= bound {
-					histogram.buckets[bound]++
-				}
-			}
+		for key, histogram := range cached {
+			histograms[runPropagationKey{runID, key.agentID, key.topic}] = histogram
 		}
 	}
 	for _, node := range c.state.nodes {

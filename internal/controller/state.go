@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,7 @@ type state struct {
 	persistMu       sync.Mutex
 	agents          map[string]model.Agent
 	nodes           map[string]model.Node
+	activeNodeIDs   map[string]struct{}
 	reservations    map[string]string
 	agentSnapshots  map[string]time.Time
 	nodeReportTimes map[string]time.Time
@@ -53,6 +55,50 @@ func newState(dataDir string) *state {
 	return s
 }
 
+// Keep terminal history available to inventory/results without making every
+// discovery request, heartbeat and dashboard refresh scan all departed peers.
+// Callers hold mu. A nil index also supports a state assembled before indexing.
+func (s *state) setNodeLocked(node model.Node) {
+	if s.activeNodeIDs == nil {
+		s.activeNodeIDs = make(map[string]struct{})
+		for id, current := range s.nodes {
+			if nodeHasLiveState(current) {
+				s.activeNodeIDs[id] = struct{}{}
+			}
+		}
+	}
+	s.nodes[node.ID] = node
+	if nodeHasLiveState(node) {
+		s.activeNodeIDs[node.ID] = struct{}{}
+	} else {
+		delete(s.activeNodeIDs, node.ID)
+	}
+}
+
+func nodeHasLiveState(node model.Node) bool {
+	return node.State != model.NodeStopped && node.State != model.NodeFailed
+}
+
+// The returned iterator is consumed while holding mu. IDs reference the
+// authoritative record; the index does not retain old overlays or metadata.
+func (s *state) activeNodesLocked() iter.Seq[model.Node] {
+	return func(yield func(model.Node) bool) {
+		if s.activeNodeIDs == nil {
+			for _, node := range s.nodes {
+				if nodeHasLiveState(node) && !yield(node) {
+					return
+				}
+			}
+			return
+		}
+		for id := range s.activeNodeIDs {
+			if node, exists := s.nodes[id]; exists && nodeHasLiveState(node) && !yield(node) {
+				return
+			}
+		}
+	}
+}
+
 func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 	if strings.TrimSpace(agent.ID) == "" || strings.TrimSpace(agent.URL) == "" {
 		return model.Agent{}, fmt.Errorf("agent id and url are required")
@@ -75,12 +121,12 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 				delete(s.reservations, nodeID)
 			}
 		}
-		for nodeID, node := range s.nodes {
+		for _, node := range s.nodes {
 			if node.AgentID == agent.ID && node.State != model.NodeStopped && node.State != model.NodeFailed {
 				node.State = model.NodeFailed
 				node.Error = "Agent instance restarted"
 				node.LastSeen = now
-				s.nodes[nodeID] = node
+				s.setNodeLocked(node)
 			}
 		}
 		delete(s.agentSnapshots, agent.ID)
@@ -203,7 +249,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 				node = old
 			}
 		}
-		s.nodes[node.ID] = node
+		s.setNodeLocked(node)
 		if s.reservations[node.ID] == h.Agent.ID {
 			delete(s.reservations, node.ID)
 			releasedReservations++
@@ -216,7 +262,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		// Other chunks and previously acknowledged records remain part of
 		// this Agent's inventory. Omission cannot free their capacity.
 		observedActive = 0
-		for _, node := range s.nodes {
+		for node := range s.activeNodesLocked() {
 			if node.AgentID == h.Agent.ID && s.reservations[node.ID] != h.Agent.ID && node.State != model.NodeStopping && node.State != model.NodeStopped && node.State != model.NodeFailed {
 				observedActive++
 			}
@@ -230,17 +276,19 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			h.Agent.ActiveNodes++
 		}
 	}
-	for id, node := range s.nodes {
-		if node.AgentID != h.Agent.ID {
-			continue
-		}
-		if _, found := seen[id]; !h.Partial && !found && node.State != model.NodeStopped {
-			if s.reservations[id] == h.Agent.ID {
+	if !h.Partial {
+		for id, node := range s.nodes {
+			if node.AgentID != h.Agent.ID {
 				continue
 			}
-			node.State = model.NodeStopped
-			node.LastSeen = now
-			s.nodes[id] = node
+			if _, found := seen[id]; !found && node.State != model.NodeStopped {
+				if s.reservations[id] == h.Agent.ID {
+					continue
+				}
+				node.State = model.NodeStopped
+				node.LastSeen = now
+				s.setNodeLocked(node)
+			}
 		}
 	}
 	if stale {
@@ -401,6 +449,36 @@ func (s *state) persistEventsLocked(runID string, events []model.TraceEvent) err
 	return f.Close()
 }
 
+// Narrow REST endpoints must not materialize or sort the entire Peer history.
+func (s *state) agentInventory() []model.Agent {
+	s.mu.RLock()
+	var agents []model.Agent
+	for _, agent := range s.agents {
+		agents = append(agents, agent)
+	}
+	s.mu.RUnlock()
+	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+	return agents
+}
+
+func (s *state) experimentInventory() []model.Experiment {
+	s.mu.RLock()
+	var experiments []model.Experiment
+	for _, experiment := range s.experiments {
+		experiments = append(experiments, experiment)
+	}
+	s.estimateRunFinishesLocked(experiments, time.Now().UTC())
+	s.mu.RUnlock()
+	sort.Slice(experiments, func(i, j int) bool { return experimentBefore(experiments[i], experiments[j]) })
+	return experiments
+}
+
+func (s *state) recentEvents() []model.TraceEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]model.TraceEvent(nil), s.events...)
+}
+
 func (s *state) inventory() model.Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -408,12 +486,24 @@ func (s *state) inventory() model.Snapshot {
 }
 
 func (s *state) inventoryLocked() model.Snapshot {
+	return s.inventoryForViewLocked(false)
+}
+
+func (s *state) inventoryForViewLocked(dashboard bool) model.Snapshot {
 	result := model.Snapshot{GeneratedAt: time.Now().UTC()}
 	for _, agent := range s.agents {
 		result.Agents = append(result.Agents, agent)
 	}
-	for _, node := range s.nodes {
-		result.Nodes = append(result.Nodes, node)
+	if dashboard {
+		for node := range s.activeNodesLocked() {
+			if node.State != model.NodeStopping {
+				result.Nodes = append(result.Nodes, node)
+			}
+		}
+	} else {
+		for _, node := range s.nodes {
+			result.Nodes = append(result.Nodes, node)
+		}
 	}
 	for _, experiment := range s.experiments {
 		result.Experiments = append(result.Experiments, experiment)
@@ -452,8 +542,16 @@ func experimentBefore(a, b model.Experiment) bool {
 }
 
 func (s *state) snapshot() model.Snapshot {
+	return s.snapshotForView(false)
+}
+
+func (s *state) dashboardSnapshot() model.Snapshot {
+	return s.snapshotForView(true)
+}
+
+func (s *state) snapshotForView(dashboard bool) model.Snapshot {
 	s.mu.RLock()
-	result := s.inventoryLocked()
+	result := s.inventoryForViewLocked(dashboard)
 	agents := make(map[string]model.Agent, len(result.Agents))
 	for _, agent := range result.Agents {
 		agents[agent.ID] = agent

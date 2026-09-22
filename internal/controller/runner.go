@@ -829,7 +829,7 @@ func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID stri
 		current.State != model.NodeStopping && current.State != model.NodeStopped && current.State != model.NodeFailed && current.LastSeen.Before(node.LastSeen) {
 		// A delayed create response can carry a later Agent clock than a
 		// Controller stop request. Timestamps must not undo that lifecycle.
-		s.state.nodes[node.ID] = node
+		s.state.setNodeLocked(node)
 	}
 	s.state.mu.Unlock()
 	s.state.notify()
@@ -844,7 +844,7 @@ func (s *Server) markNodeStoppingAndReleaseCapacity(nodeID string) {
 		releaseCapacity = true
 		node.State = model.NodeStopping
 		node.LastSeen = time.Now().UTC()
-		s.state.nodes[nodeID] = node
+		s.state.setNodeLocked(node)
 	}
 	if _, reserved := s.state.reservations[nodeID]; reserved {
 		delete(s.state.reservations, nodeID)

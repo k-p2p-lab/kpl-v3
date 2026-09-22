@@ -17,7 +17,7 @@ const heartbeatBodyLimit = 10 << 20
 func (s *Server) register(ctx context.Context) error {
 	s.heartbeatMu.Lock()
 	defer s.heartbeatMu.Unlock()
-	if err := s.postJSON(ctx, "/api/v1/agents/register", s.snapshot().Agent, nil); err != nil {
+	if err := s.postJSON(ctx, "/api/v1/agents/register", s.snapshotAgent(), nil); err != nil {
 		return err
 	}
 	s.mu.Lock()

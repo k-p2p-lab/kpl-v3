@@ -105,7 +105,7 @@ func (s *Server) dashboardStreamSnapshot() (*dashboardFrame, error) {
 	}
 	// This is the start of the read, so a concurrent notification stays pending.
 	generatedAt := time.Now()
-	frame, err := newDashboardFrame(s.state.snapshot(), generatedAt)
+	frame, err := newDashboardFrame(s.state.dashboardSnapshot(), generatedAt)
 	if err == nil {
 		s.dashboardFrame = frame
 	}

@@ -54,12 +54,35 @@ func MarshalEventBatchPrefix(agentID string, events []TraceEvent) ([]byte, int, 
 // ValidateEventSizes checks every event before admitting any part of a batch.
 // A body below the input limit can still expand past it when JSON is re-encoded.
 func (batch EventBatch) ValidateEventSizes() error {
-	for pending := batch.Events; len(pending) > 0; {
-		_, count, err := MarshalEventBatchPrefix(batch.AgentID, pending)
-		if err != nil {
-			return err
+	if len(batch.Events) == 0 {
+		return nil
+	}
+	agent, err := json.Marshal(batch.AgentID)
+	if err != nil {
+		return err
+	}
+	overhead := len(`{"agentId":`) + len(agent) + len(`,"events":[]}`)
+	if overhead > MaxEventBatchBytes {
+		return fmt.Errorf("event batch envelope exceeds %d bytes", MaxEventBatchBytes)
+	}
+	// Validate each event against a single-event envelope. Encoder reuses its
+	// scratch space and the writer discards bytes: validation must not allocate
+	// a second full wire batch on both the Agent and Controller ingest paths.
+	encoder := json.NewEncoder(eventSizeLimit(MaxEventBatchBytes - overhead))
+	for i := range batch.Events {
+		if err := encoder.Encode(&batch.Events[i]); err != nil {
+			return fmt.Errorf("encode telemetry event: %w", err)
 		}
-		pending = pending[count:]
 	}
 	return nil
+}
+
+type eventSizeLimit int
+
+func (limit eventSizeLimit) Write(data []byte) (int, error) {
+	// Encoder appends one newline that is not part of an event in a batch.
+	if len(data)-1 > int(limit) {
+		return 0, fmt.Errorf("encoded telemetry event exceeds %d-byte batch limit", MaxEventBatchBytes)
+	}
+	return len(data), nil
 }

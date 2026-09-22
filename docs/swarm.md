@@ -30,6 +30,31 @@ Peers communicate using overlay IPv4 addresses on TCP 20000; Peer control HTTP u
 
 A single Linux node can run the same stack and attachable overlay for development or a smaller experiment. Start with an active Swarm manager, set `KPL_MIN_AGENTS=1` in the `init` command below, and use `deploy --all`. The Controller, monitoring services, Agent, and Peers then share that host's resources. Follow the same registry, kernel, authentication, and cleanup requirements. The smoke scenario can run there, but cross-host distribution and connectivity need at least two Agent nodes.
 
+## Bash completion
+
+From the repository directory, enable the shortcut and completion in the current Bash session:
+
+```bash
+source scripts/activate-swarm.sh
+```
+
+This creates a `swarm` shell function that runs this checkout's `scripts/swarm.sh`, forwarding arguments unchanged. It continues to use that checkout after changing directories. Press Tab to complete commands, supported options, `init`/`configure` setting names, scenario/config paths, node IDs/hostnames, and Docker context names. Below, `<Tab>` means pressing Tab, not typing those characters:
+
+```text
+swarm lo<Tab>
+swarm logs auth --<Tab>
+swarm logs auth --context <Tab>
+swarm deploy --<Tab>
+swarm add-node worker-<Tab>
+swarm configure KPL_IMAGE_<Tab>
+swarm configure KPL_CONTROL_NODE_ID=<Tab>
+swarm --env-file .env.<Tab>
+```
+
+No `bash-completion` package is required. Node/context candidates use read-only Docker queries in the caller's current Docker context, with a one-second timeout (one further second before forced termination) and a five-second cache. Docker failures produce no dynamic candidates; command/option/path completion still works. The helper never reads the credentials file or suggests stored passwords, and does not replace completion for `sh` or `bash`. Use the `swarm` shortcut for these completions.
+
+The activation script must be **sourced**, not executed with `sh` or `bash`. It only changes the current shell. To enable it in future terminals, add `source /absolute/path/to/kpl/v3/scripts/activate-swarm.sh` to `~/.bashrc` (quote a path containing spaces). To remove the shortcut/completion from the current shell, run `complete -r swarm` and `unset -f swarm`. Completion does not automatically elevate privileges; use your usual Docker access setup.
+
 ## First Deployment, Experiment, and Download
 
 ### 1. Configure and publish the image

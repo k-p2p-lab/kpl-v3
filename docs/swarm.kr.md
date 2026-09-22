@@ -30,6 +30,31 @@ Peer는 overlay IPv4 주소의 TCP 20000으로 통신하며 Peer 제어 HTTP는 
 
 Linux 노드 하나에서도 같은 stack과 attachable overlay로 개발 또는 작은 실험을 수행할 수 있습니다. 활성 Swarm manager를 준비하고 아래 `init` 명령의 `KPL_MIN_AGENTS=1`을 설정한 뒤 `deploy --all`을 사용하십시오. Controller, 모니터링 서비스, Agent와 Peer가 해당 호스트 자원을 공유합니다. Registry, 커널, 인증과 정리 요구사항은 동일합니다. Smoke 시나리오를 실행할 수 있지만 호스트 간 분산과 연결을 검증하려면 Agent 노드가 최소 두 개 필요합니다.
 
+## Bash 자동완성
+
+저장소 디렉터리에서 다음 명령으로 현재 Bash에 단축 명령과 자동완성을 활성화합니다.
+
+```bash
+source scripts/activate-swarm.sh
+```
+
+이 저장소의 `scripts/swarm.sh`를 실행하는 `swarm` 셸 함수가 만들어지며 인자를 그대로 전달합니다. 다른 디렉터리로 이동해도 활성화한 저장소를 계속 사용합니다. Tab으로 명령·지원 옵션, `init`/`configure` 설정 키, 시나리오·설정 파일 경로, 노드 ID·호스트명, Docker context 이름을 완성할 수 있습니다. 아래 `<Tab>`은 문자를 입력하는 것이 아니라 Tab 키를 누르는 위치입니다.
+
+```text
+swarm lo<Tab>
+swarm logs auth --<Tab>
+swarm logs auth --context <Tab>
+swarm deploy --<Tab>
+swarm add-node worker-<Tab>
+swarm configure KPL_IMAGE_<Tab>
+swarm configure KPL_CONTROL_NODE_ID=<Tab>
+swarm --env-file .env.<Tab>
+```
+
+별도 `bash-completion` 패키지는 필요하지 않습니다. 노드·context 후보는 호출자의 현재 Docker context에서 읽기 전용으로 조회하며, 조회 제한시간은 1초(종료되지 않으면 1초 뒤 강제 종료), 캐시는 5초입니다. Docker가 응답하지 않으면 동적 후보만 생략하고 명령·옵션·경로 완성은 계속 동작합니다. 자격 증명 파일을 읽거나 저장된 비밀번호 값을 제안하지 않으며, `sh`·`bash`의 기존 자동완성을 교체하지 않습니다. 자동완성은 `swarm` 단축 명령에서 사용하십시오.
+
+활성화 스크립트는 `sh`나 `bash`로 실행하지 말고 반드시 **source**로 불러옵니다. 현재 셸에만 적용됩니다. 새 터미널에도 적용하려면 `~/.bashrc`에 `source /저장소/절대경로/kpl/v3/scripts/activate-swarm.sh`를 추가하십시오(공백이 있는 경로는 따옴표로 감쌉니다). 현재 셸에서 해제하려면 `complete -r swarm`, `unset -f swarm`을 실행합니다. 자동으로 권한을 높이지 않으므로 Docker 접근 권한은 기존 운영 방식대로 준비하십시오.
+
 ## 첫 배포부터 실험과 다운로드까지
 
 ### 1. 설정과 이미지 게시

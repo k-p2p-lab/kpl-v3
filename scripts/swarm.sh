@@ -36,6 +36,7 @@ KPL_IMAGE_PULL_TIMEOUT sets the tag pull timeout in seconds (default: 300).
 KPL_IMAGE_BUILD_TIMEOUT and KPL_IMAGE_PUSH_TIMEOUT default to 1800 and 600 seconds.
 KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
+Bash completion: source scripts/activate-swarm.sh, then use swarm COMMAND.
 Log components: controller (default), agent, prometheus, grafana, access, auth.
 Logs default to the last 100 lines; --tail all prints all available lines.
 Access/auth print JSONL from the running Controller (rotated backups excluded).

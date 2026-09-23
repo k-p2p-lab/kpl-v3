@@ -57,5 +57,11 @@
       else if (bounds.bottom > window.innerHeight) toggle.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     });
   }
+  for (const link of document.querySelectorAll('[data-panel-link]')) {
+    link.addEventListener('click', () => {
+      const panel = panels.find(panel => panel.dataset.panel === link.dataset.panelLink);
+      if (panel && collapsed.has(panel.dataset.panel)) toggleFor(panel).click();
+    });
+  }
   arrangePairs();
 })();

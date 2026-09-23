@@ -363,3 +363,67 @@ test('queued, running and retried batch rows keep numeric execution order across
   api.renderSavedResults();
   assertOrder();
 });
+
+test('result search keeps full matching batches and treats search text literally', () => {
+  const runs = [
+    {id:'mesh-1',batchId:'mesh',name:'Churn Study',iteration:1,repetitions:2,state:'completed'},
+    {id:'mesh-2',batchId:'mesh',name:'Churn Study',iteration:2,repetitions:2,state:'queued'},
+    {id:'baseline',name:'Literal .* example',state:'completed'},
+  ];
+  const {api} = fixture(runs);
+  const ids = result => Array.from(result,run=>run.id);
+  for (const query of [' MESH-2 ', 'churn study', 'mesh']) {
+    assert.deepEqual(ids(api.filterSavedResults(runs,query,'all')),['mesh-1','mesh-2']);
+  }
+  assert.deepEqual(ids(api.filterSavedResults(runs,'.*','all')),['baseline']);
+  assert.deepEqual(ids(api.filterSavedResults(runs,'not present','all')),[]);
+  assert.deepEqual(ids(runs),['mesh-1','mesh-2','baseline']);
+});
+
+test('result status filters use current attempts and require a complete batch for Completed', () => {
+  const runs = [
+    {id:'old-failure',batchId:'recovered',iteration:1,repetitions:1,state:'failed'},
+    {id:'recovered-run',batchId:'recovered',iteration:1,repetitions:1,state:'completed',previousRunIds:['old-failure']},
+    {id:'active-done',batchId:'active',iteration:1,repetitions:2,state:'completed'},
+    {id:'active-next',batchId:'active',iteration:2,repetitions:2,state:'queued'},
+    {id:'failed-done',batchId:'failed',iteration:1,repetitions:2,state:'completed'},
+    {id:'failed-run',batchId:'failed',iteration:2,repetitions:2,state:'interrupted'},
+    {id:'unreadable',state:'unreadable'},
+  ];
+  const {api} = fixture(runs);
+  const filter = (query,status) => Array.from(api.filterSavedResults(runs,query,status),run=>run.id);
+  assert.deepEqual(filter('','completed'),['old-failure','recovered-run']);
+  assert.deepEqual(filter('','active'),['active-done','active-next']);
+  assert.deepEqual(filter('','attention'),['failed-done','failed-run','unreadable']);
+  assert.deepEqual(filter('failed-run','attention'),['failed-done','failed-run']);
+  assert.deepEqual(filter('failed-run','completed'),[]);
+});
+
+test('result filters survive refresh and can be cleared without changing saved membership', async () => {
+  const runs = [{id:'one',name:'First',state:'completed'},{id:'two',name:'Second',state:'failed'}];
+  const {api,state,element,resolve} = fixture(runs);
+  state.resultQuery='missing';
+  state.resultStatus='attention';
+  api.renderSavedResults();
+  assert.match(element('#savedResultsStatus').textContent,/No matching results/);
+  assert.equal(element('#savedResultsTable').hidden,true);
+  assert.equal(element('#clearResultFilters').hidden,false);
+  assert.equal(element('#resultFilterSummary').textContent,'0 of 2 saved runs');
+  state.resultQuery='second';
+  const refreshing=api.refreshSavedResults();
+  resolve(runs.map(run=>({...run})));
+  await refreshing;
+  assert.equal(state.resultQuery,'second');
+  assert.equal(element('#resultFilterSummary').textContent,'1 of 2 saved runs');
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML,/data-result-images="one"/);
+  assert.match(element('#savedResultsRows').innerHTML,/data-result-images="two"/);
+  let focused=0;
+  element('#resultSearch').focus=()=>focused++;
+  api.clearResultFilters();
+  assert.equal(element('#resultSearch').value,'');
+  assert.equal(element('#resultStateFilter').value,'all');
+  assert.equal(element('#clearResultFilters').hidden,true);
+  assert.equal(element('#resultFilterSummary').textContent,'2 saved runs');
+  assert.equal(state.savedResults.length,2);
+  assert.equal(focused,1);
+});

@@ -132,7 +132,7 @@
   }, { passive: true });
   track.addEventListener('transitionend', updateNavigation);
   const resize = () => {
-    track.style.setProperty('--metric-expanded', `${Math.min(432, track.clientWidth - 8)}px`);
+    track.style.setProperty('--metric-expanded', `${Math.min(480, track.clientWidth - 8)}px`);
     updateNavigation();
     if (active) reveal(active);
   };

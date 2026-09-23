@@ -3,6 +3,7 @@ const state = {
   snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, reconnectTimer: null, snapshotRenderTimer: null,
   streamWatchdogTimer: null, streamAuthAbort: null, streamFailures: 0,
   savedResults: null, resultsLoading: false, resultsError: "",
+  resultQuery: "", resultStatus: "all",
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
   selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false,
@@ -1300,8 +1301,47 @@ function updateSavedResultsList(markup) {
   restoreSavedResultFocus(focus);
 }
 
+function filterSavedResults(results, query = "", status = "all") {
+  query = query.trim().toLowerCase();
+  if (!query && status === "all") return results;
+  const key = run => run.batchId ? `batch:${run.batchId}` : `run:${run.id}`;
+  const groups = new Map();
+  for (const run of results) {
+    const id = key(run);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(run);
+  }
+  const matches = new Set();
+  for (const [id, runs] of groups) {
+    const current = currentBatchRuns(runs);
+    const textMatches = !query || runs.some(run => [run.name, run.id, run.batchId].some(value => String(value || "").toLowerCase().includes(query)));
+    const statusMatches = status === "all"
+      || status === "active" && current.some(isPendingRun)
+      || status === "completed" && current.length > 0 && current.every(run => run.state === "completed")
+      || status === "attention" && current.some(run => ["failed", "interrupted", "canceled", "unreadable"].includes(run.state));
+    if (textMatches && statusMatches) matches.add(id);
+  }
+  // Keep complete batch membership for progress, retry, delete, and analysis.
+  return results.filter(run => matches.has(key(run)));
+}
+
+function clearResultFilters() {
+  state.resultQuery = "";
+  state.resultStatus = "all";
+  $("#resultSearch").value = "";
+  $("#resultStateFilter").value = "all";
+  renderSavedResults();
+  $("#resultSearch").focus();
+}
+
 function renderSavedResults() {
   const results = state.savedResults || [];
+  const visible = filterSavedResults(results, state.resultQuery || "", state.resultStatus || "all");
+  const filtered = Boolean((state.resultQuery || "").trim()) || (state.resultStatus || "all") !== "all";
+  $("#clearResultFilters").hidden = !filtered;
+  setText($("#resultFilterSummary"), state.savedResults === null ? "" : filtered
+    ? `${formatNumber(visible.length)} of ${formatNumber(results.length)} saved runs`
+    : `${formatNumber(results.length)} saved runs`);
   const status = $("#savedResultsStatus");
   const refresh = $("#refreshResults");
   refresh.disabled = state.resultsLoading;
@@ -1312,10 +1352,11 @@ function renderSavedResults() {
   status.setAttribute("role", state.resultsError ? "alert" : "status");
   setText(status, state.resultsLoading && state.savedResults === null ? "Loading saved results…"
     : state.resultsError ? `Could not load saved results: ${state.resultsError} Use Refresh to try again.${results.length ? " Showing the last loaded list." : ""}`
+    : results.length && !visible.length ? "No matching results. Change your search or clear the filters."
     : results.length ? "" : "No saved results yet.");
   status.hidden = !status.textContent;
-  $("#savedResultsTable").hidden = results.length === 0;
-  updateSavedResultsList(savedResultsMarkup(results));
+  $("#savedResultsTable").hidden = visible.length === 0;
+  updateSavedResultsList(savedResultsMarkup(visible));
 }
 
 function savedResultRow(run) {
@@ -1324,11 +1365,11 @@ function savedResultRow(run) {
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span></td>
-    <td><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
-    <td>${escapeHTML(formatResultTime(run.startedAt))}</td>
-    <td>${escapeHTML(formatResultTime(run.finishedAt))}</td>
-    <td><div class="result-actions">${retry}${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
+    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span></td>
+    <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
+    <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
+    <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
+    <td data-label="Actions"><div class="result-actions">${retry}${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
   </tr>`;
 }
 
@@ -1895,6 +1936,15 @@ window.addEventListener("pageshow", event => {
   if (event.persisted) void api("/api/v1/auth/session").catch(() => {});
 });
 $("#refreshResults").addEventListener("click", refreshSavedResults);
+$("#resultSearch").addEventListener("input", (event) => {
+  state.resultQuery = event.target.value;
+  renderSavedResults();
+});
+$("#resultStateFilter").addEventListener("change", (event) => {
+  state.resultStatus = event.target.value;
+  renderSavedResults();
+});
+$("#clearResultFilters").addEventListener("click", clearResultFilters);
 $("#openScenario").addEventListener("click", openScenarioEditor);
 $("#refreshScenarios").addEventListener("click", refreshSavedScenarios);
 $("#newScenario").addEventListener("click", startNewScenario);

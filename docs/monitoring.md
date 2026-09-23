@@ -76,7 +76,9 @@ If a connection stalls, the Dashboard automatically closes it after 30 seconds w
 
 ## Built-in Dashboard visualization
 
-**Metrics** places all 11 cluster, delivery, bandwidth and observation cards in one horizontal row. Scroll sideways or use the **Previous metrics / Next metrics** arrow buttons. Hover over a card to expand that card horizontally and reveal its detailed values and explanation; only one card expands at a time. Long details scroll vertically within the expanded card.
+Use **Network / Experiments / Agents / Results** beneath the page heading to jump to a panel. A collapsed target opens automatically. Keyboard users can use **Skip to dashboard** to move past the header.
+
+**Metrics** places all 11 cluster, delivery, bandwidth and observation cards in one horizontal row. Scroll sideways or use the **Previous metrics / Next metrics** arrow buttons. Hover over a card to expand that card horizontally and reveal its detailed values and explanation; only one card expands at a time. Long details scroll vertically within the expanded card. On narrow mobile screens, expanded details appear below the metric value to keep the text readable.
 
 - Click or tap a card to open its details, and select it again to close them. On touch screens, swipe horizontally to move through the row.
 - Keyboard focus opens a card. Use Left/Right to move between cards and Home/End for the first/last card. Enter/Space toggles details; Escape or a click/tap outside the row closes them.
@@ -91,6 +93,12 @@ Within a repeated-run group in **Saved results**, rows are ordered by numeric **
 **Available slots** totals the free Peer capacity reported by online Agents; offline Agents contribute no available slots. Capacity is an admission count, not a CPU or memory reservation. See [Peer placement and capacity](swarm.md#distribution-and-capacity) before increasing it.
 
 **Saved results → Images** submits server background analysis and provides overview, message and repeated-run charts as PNG/CSV/ZIP. It uses saved records independently of Prometheus retention. See [result images](visualization.md) for operation and [experiment metrics](experiment-metrics.md#saved-result-research-metrics) for definitions.
+
+### Find saved results
+
+**Saved results** supports searching by experiment name, batch ID, or run ID, together with **In progress**, **Completed**, and **Needs attention** status filters. A matching run keeps its whole batch visible, including previous attempts, so progress and batch actions remain available. Status filters use current attempts: **Completed** requires every current run in the group to be complete; **Needs attention** includes failed, interrupted, canceled, or unreadable results.
+
+The displayed count is the number of visible saved runs. Filters stay selected while the result list refreshes; **Clear filters** restores the full list. On mobile, result rows become cards with labeled times and wrapping action buttons. The Agent table remains horizontally scrollable.
 
 ### Show and hide panels
 

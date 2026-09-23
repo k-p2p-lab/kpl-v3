@@ -8,7 +8,8 @@
   <link rel="icon" type="image/jpeg" href="/kpl-logo.jpg">
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body class="dashboard-page">
+  <a class="skip-link" href="#dashboardMain">Skip to dashboard</a>
   <header class="topbar">
     <div class="brand-block">
       <img class="brand-mark" src="/kpl-logo.jpg" alt="" width="42" height="42">
@@ -24,13 +25,26 @@
     </nav>
     <div class="top-actions">
       <span class="connection-state" id="connectionState"><i></i> Connecting</span>
-      <time id="updatedAt">—</time>
+      <time id="updatedAt" title="Last dashboard update">—</time>
       <button class="primary-button" id="openScenario" type="button">Run experiment</button>
       <button class="secondary-button" id="logout" type="button">Log out</button>
     </div>
   </header>
 
-  <main>
+  <main id="dashboardMain" tabindex="-1">
+    <header class="workspace-heading">
+      <div>
+        <p class="eyebrow">EXPERIMENT WORKSPACE</p>
+        <h2>Network experiments</h2>
+        <p class="workspace-intro">Monitor your cluster, follow active runs, and explore results.</p>
+      </div>
+      <nav class="workspace-nav" aria-label="Dashboard sections">
+        <a href="#network" data-panel-link="topology">Network</a>
+        <a href="#experiments" data-panel-link="experiments">Experiments</a>
+        <a href="#agents" data-panel-link="agents">Agents</a>
+        <a href="#results" data-panel-link="results">Results <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
     <section class="metrics-section" aria-labelledby="metricsHeading">
       <header class="metrics-header">
         <div class="metrics-heading">
@@ -201,7 +215,7 @@
     </details>
 
     <section class="workspace-grid">
-      <article class="panel topology-panel" data-panel="topology">
+      <article class="panel topology-panel" data-panel="topology" id="network" tabindex="-1">
         <header class="panel-header">
           <div>
             <p class="eyebrow">LIVE TOPOLOGY</p>
@@ -248,7 +262,7 @@
         </div>
       </article>
 
-      <aside class="panel run-panel" data-panel="experiments">
+      <aside class="panel run-panel" data-panel="experiments" id="experiments" tabindex="-1">
         <header class="panel-header">
           <div>
             <p class="eyebrow">EXPERIMENTS</p>
@@ -267,7 +281,7 @@
     </section>
 
     <section class="detail-grid" data-panel-pair="fleet">
-      <article class="panel agents-panel" data-panel="agents">
+      <article class="panel agents-panel" data-panel="agents" id="agents" tabindex="-1">
         <header class="panel-header">
           <div>
             <p class="eyebrow">FLEET</p>
@@ -277,7 +291,8 @@
           <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-agents-body" data-panel-toggle="agents"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-agents-body">
-          <div class="table-wrap">
+          <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Agent status table">
             <table>
               <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>Last seen</th><th>Metrics</th></tr></thead>
               <tbody id="agentRows"><tr><td colspan="8" class="empty-cell">No Agents registered.</td></tr></tbody>
@@ -286,7 +301,7 @@
         </div>
       </article>
 
-      <article class="panel events-panel" data-panel="events">
+      <article class="panel events-panel" data-panel="events" id="events" tabindex="-1">
         <header class="panel-header">
           <div>
             <p class="eyebrow">EVENT STREAM</p>
@@ -304,7 +319,7 @@
 
 
 
-    <section class="panel results-panel" data-panel="results" aria-labelledby="savedResultsHeading">
+    <section class="panel results-panel" data-panel="results" id="results" tabindex="-1" aria-labelledby="savedResultsHeading">
       <header class="panel-header">
         <div>
           <p class="eyebrow">RESULT ARCHIVE</p>
@@ -314,7 +329,24 @@
         <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-results-body" data-panel-toggle="results"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
       </header>
       <div class="panel-body" id="panel-results-body">
-        <p class="results-help">Results saved on this Controller remain available after a restart. Interrupted runs are not resumed automatically. Use Retry from run to clean up and restart unfinished runs, or Continue remaining to skip failed attempts. Downloads from running experiments are snapshots. Source sizes show the uncompressed original files at the last refresh. Expand a repeated series to view its individual runs.</p>
+        <div class="results-toolbar" role="search" aria-label="Filter saved results">
+          <label class="results-search" for="resultSearch">Search results
+            <input id="resultSearch" type="search" placeholder="Name, batch or run ID" maxlength="256" autocomplete="off" aria-controls="savedResultsRows" aria-describedby="resultFilterHint">
+          </label>
+          <label for="resultStateFilter">Status
+            <select id="resultStateFilter" aria-controls="savedResultsRows">
+              <option value="all">All statuses</option>
+              <option value="active">In progress</option>
+              <option value="completed">Completed</option>
+              <option value="attention">Needs attention</option>
+            </select>
+          </label>
+          <button class="secondary-button" id="clearResultFilters" type="button" hidden>Clear filters</button>
+        </div>
+        <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
+        <details class="results-guide"><summary>About results, retries, and downloads</summary>
+          <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
+        </details>
         <p class="results-status" id="savedResultsStatus" role="status" aria-live="polite">Loading saved results…</p>
         <div id="savedResultsTable" hidden>
           <div id="savedResultsRows" class="saved-results-list"></div>

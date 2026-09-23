@@ -673,6 +673,9 @@ function renderBatchEstimates(runs) {
 
 function renderRuns(runs) {
   runs = currentBatchRuns(runs.filter((run) => !state.deletedResultIDs?.has(run.id)));
+  const priority = run => run.state === "running" ? 0 : run.state === "queued" ? 1 : 2;
+  // Preserve the server's order within each status group, including queued iterations.
+  runs.sort((a, b) => priority(a) - priority(b));
   const activeGroups = new Set(runs.filter(isPendingRun).map(run => run.batchId || run.id));
   for (const key of state.pendingStops) {
     if (!activeGroups.has(key)) state.pendingStops.delete(key);

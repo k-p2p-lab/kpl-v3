@@ -761,3 +761,59 @@ test('failed peers leave no selected node, edges, positions or animation frames'
   assert.equal(frames.queue.size,0);
   assert.equal(ids.get('topologyEmpty').hidden,false);
 });
+
+test('Ready card and topology explain the same cluster population through churn and collapse', () => {
+  const {ids, sandbox, state, document} = uiFixture();
+  for (const name of ['renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight']) sandbox[name] = () => {};
+  let collapsed = false;
+  sandbox.isPanelCollapsed = () => collapsed;
+  const renderSnapshot = (nodes, edges = []) => {
+    state.snapshot = {
+      nodes, edges, generatedAt:'2026-09-23T00:00:00Z',
+      agents:[{id:'a', state:'online'}, {id:'b', state:'online'}],
+      experiments:[{id:'current',state:'running'}], metrics:{runId:'current'},
+    };
+    sandbox.render(state.snapshot);
+  };
+  const check = (total, ready, starting, links = 0) => {
+    assert.equal(ids.get('peerMetric').textContent, String(ready));
+    assert.equal(ids.get('peerPopulationMetric').textContent, `Topology: ${total} · Starting: ${starting}`);
+    assert.equal(ids.get('topologyLinkCount').textContent, `${total} Peers · ${ready} ready · ${starting} starting · ${links} visible links`);
+    if (!collapsed) {
+      assert.equal(document.querySelectorAll('.topology-peer').length, total);
+      if (total) {
+        assert.equal(document.querySelectorAll('.topology-hub-count')[0].textContent, String(total));
+        assert.equal(document.querySelectorAll('.topology-hub-label')[0].textContent, 'TOTAL');
+      }
+    }
+  };
+  renderSnapshot([]);
+  check(0, 0, 0);
+  const nodes = [
+    {...peer('current-ready'), runId:'current'},
+    {...peer('retained-ready','b'), runId:'previous'},
+    peer('joining','a','starting'), peer('leaving','a','stopping'),
+    peer('ended','a','stopped'), peer('failed','a','failed'),
+  ];
+  renderSnapshot(nodes);
+  check(3, 2, 1);
+  const readyNodes = nodes.map(node => node.id === 'joining' ? {...node,state:'ready'} : node);
+  renderSnapshot(readyNodes);
+  check(3, 3, 0);
+  // Layer and topic filters affect links, never either population count.
+  state.topology.filters.transport = true;
+  state.topology.filters.topic = 'unrelated-topic';
+  renderSnapshot(readyNodes, [{source:'current-ready',target:'joining',protocol:'transport'}]);
+  check(3, 3, 0, 1);
+  collapsed = true;
+  renderSnapshot(nodes);
+  check(3, 2, 1);
+  renderSnapshot(nodes.map(node => ({...node,state:'stopped'})));
+  check(0, 0, 0);
+  collapsed = false;
+  renderSnapshot(state.snapshot.nodes);
+  check(0, 0, 0);
+  // A fresh snapshot (including after reconnect) replaces the counts.
+  renderSnapshot(nodes);
+  check(3, 2, 1);
+});

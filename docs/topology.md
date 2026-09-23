@@ -4,6 +4,8 @@ English | [Korean](topology.kr.md)
 
 ## Read the graph
 
+**Ready Peers** counts nodes whose latest reported state is `ready`. The topology also shows `starting` nodes, so its total can be larger during joins/churn. Its header separates total, ready, and starting counts; the center marked **TOTAL** and the Agent-sector counts refer to all displayed Peers. The metric card also shows **Topology** (total) and **Starting** beneath its Ready count. Stopping, stopped, and failed nodes are excluded; any unrecognized visible state is counted separately as **Other**. Both displays use the same cluster snapshot, including Peers retained from other runs. Run selection, relationship layers, and topic filters do not change these population counts. These are reported lifecycle states, not a fresh reachability check.
+
 The Dashboard shows a full-width interactive topology with equally sized, wedge-shaped sectors for Agents. Agent numbers match **Agent status → No.** Each Peer has a local display number inside its Agent's sector; select it to see the full node and Peer IDs. The number helps identify a Peer on screen and does not fix its position. Display numbers can be reused after a Peer departs; use the full IDs for persistent identity.
 
 Peers settle gradually within their Agent's sector. Visible links apply spring-like forces, while repulsion and collision handling spread nearby Peers apart. Peers stay inside their assigned sector as they move. Changes to Peers or visible relationships restart the layout briefly; it stops when settled instead of adding continuous random movement. Placement is a display aid and does not change protocol behavior or experiment results.

@@ -144,8 +144,29 @@ function agentNumber(id) {
   return state.agentNumbers.get(id) || "?";
 }
 
+function isTopologyPeer(node) {
+  return node.state !== "stopping" && node.state !== "stopped" && node.state !== "failed";
+}
+
+function peerPopulation(nodes) {
+  const counts = { total: 0, ready: 0, starting: 0, other: 0 };
+  for (const node of nodes) {
+    if (!isTopologyPeer(node)) continue;
+    counts.total++;
+    if (node.state === "ready") counts.ready++;
+    else if (node.state === "starting") counts.starting++;
+    else counts.other++;
+  }
+  return counts;
+}
+
+function peerPopulationLabel(counts) {
+  return `${formatNumber(counts.total)} Peers · ${formatNumber(counts.ready)} ready · ${formatNumber(counts.starting)} starting`
+    + (counts.other ? ` · ${formatNumber(counts.other)} other` : "");
+}
+
 function topologyData(nodes, edges) {
-  const visibleNodes = nodes.filter((node) => !["stopping", "stopped", "failed"].includes(node.state));
+  const visibleNodes = nodes.filter(isTopologyPeer);
   const ids = new Set(visibleNodes.map((node) => node.id));
   return { nodes: visibleNodes, edges: edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
 }
@@ -553,10 +574,12 @@ function render(snapshot) {
   rememberAgents([...agents.map((agent) => agent.id), ...nodes.map((node) => node.agentId)]);
   const online = agents.filter((agent) => agent.state === "online").length;
   const capacity = agents.filter((agent) => agent.state === "online").reduce((sum, agent) => sum + Math.max(0, agent.capacity - agent.activeNodes), 0);
-  const ready = nodes.filter((node) => node.state === "ready").length;
+  const population = peerPopulation(nodes);
   setText($("#agentMetric"), `${online} / ${agents.length}`);
   setText($("#capacityMetric"), `Available slots: ${formatNumber(capacity)}`);
-  setText($("#peerMetric"), formatNumber(ready));
+  setText($("#peerMetric"), formatNumber(population.ready));
+  setText($("#peerPopulationMetric"), `Topology: ${formatNumber(population.total)} · Starting: ${formatNumber(population.starting)}`
+    + (population.other ? ` · Other: ${formatNumber(population.other)}` : ""));
   setText($("#connectionMetric"), `Transport links: ${formatNumber(filterTopologyEdges(nodes, edges, { transport: true }).length)}`);
   setText($("#latencyMetric"), measurement.latencySamples > 0 ? `${formatNumber(measurement.p95LatencyMs, 1)} ms` : "N/A");
   setText($("#averageLatencyMetric"), measurement.latencySamples > 0 ? `Average: ${formatNumber(measurement.averageLatencyMs, 1)} ms · Samples: ${formatNumber(measurement.latencySamples)}` : "No eligible latency samples");
@@ -1454,11 +1477,12 @@ function svgElement(tag, attributes = {}, text) {
 
 function renderTopology(nodes, edges) {
   ({ nodes, edges } = topologyData(nodes, edges));
+  const populationLabel = peerPopulationLabel(peerPopulation(nodes));
   const topology = state.topology;
   stopTopologyMotion();
   if (isPanelCollapsed("topology")) {
     const links = filterTopologyEdges(nodes, edges, topology.filters).length;
-    setText($("#topologyLinkCount"), `${formatNumber(nodes.length)} Peers · ${formatNumber(links)} visible links`);
+    setText($("#topologyLinkCount"), `${populationLabel} · ${formatNumber(links)} visible links`);
     return;
   }
   rememberAgents(nodes.map((node) => node.agentId));
@@ -1512,7 +1536,7 @@ function renderTopology(nodes, edges) {
     }
   }
   $("#topologyEmpty").hidden = nodes.length > 0;
-  setText($("#topologyLinkCount"), `${formatNumber(nodes.length)} Peers · ${formatNumber(connections.length)} visible links`);
+  setText($("#topologyLinkCount"), `${populationLabel} · ${formatNumber(connections.length)} visible links`);
   const observed = nodes.filter((node) => node.overlayObservedAt && !node.overlayObservedAt.startsWith("0001-")).length;
   setText($("#topologyReportStatus"), nodes.length && observed < nodes.length
     ? `Overlay reports: ${observed}/${nodes.length} Peers. Waiting for reports from the remaining Peers; older Peers may report transport only.`
@@ -1549,9 +1573,10 @@ function renderTopology(nodes, edges) {
     if (layout.groups.length) {
       const { cx, cy } = layout.groups[0];
       const hub = svgElement("g", { class: "topology-hub", transform: `translate(${cx} ${cy})` });
+      hub.append(svgElement("title", {}, populationLabel));
       hub.append(svgElement("circle", { r: 32 }));
       hub.append(svgElement("text", { "text-anchor": "middle", y: 2, class: "topology-hub-count" }, formatNumber(nodes.length)));
-      hub.append(svgElement("text", { "text-anchor": "middle", y: 17, class: "topology-hub-label" }, "PEERS"));
+      hub.append(svgElement("text", { "text-anchor": "middle", y: 17, class: "topology-hub-label" }, "TOTAL"));
       world.append(hub);
     }
     for (const node of nodes) {

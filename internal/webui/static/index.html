@@ -62,12 +62,12 @@
             <span class="metric-category">Cluster<span class="metric-index" aria-hidden="true">02</span></span>
             <span class="metric-label" id="metric-peers-label">Ready Peers</span>
             <strong id="peerMetric">0</strong>
-            <span class="metric-caption">Active network</span>
+            <span class="metric-caption" id="peerPopulationMetric">Topology: 0 · Starting: 0</span>
             <span class="metric-expand" aria-hidden="true">↗</span>
           </button>
           <div class="metric-detail" id="metric-peers-details" tabindex="0" role="region" aria-label="Ready Peers details" hidden>
             <p class="metric-stat" id="connectionMetric">Transport links: 0</p>
-            <p class="metric-description">Ready Peers and observed transport links across the cluster, independent of the selected run.</p>
+            <p class="metric-description">Ready counts Peers whose reported state is ready. The topology total also includes Starting Peers; stopping, stopped, and failed Peers are excluded. Both counts cover the cluster, independent of the selected run. Transport links are observed relationships.</p>
           </div>
         </article>
         <article class="metric-card" data-metric="latency" data-metric-group="delivery">
@@ -206,7 +206,7 @@
           <div>
             <p class="eyebrow">LIVE TOPOLOGY</p>
             <h2>Network overview</h2>
-            <p class="panel-note" id="topologyLinkCount">0 Peers · 0 visible links</p>
+            <p class="panel-note" id="topologyLinkCount">0 Peers · 0 ready · 0 starting · 0 visible links</p>
           </div>
           <div data-panel-expanded-only class="legend" aria-label="Node state legend">
             <span><i class="legend-dot boot"></i>Boot</span>

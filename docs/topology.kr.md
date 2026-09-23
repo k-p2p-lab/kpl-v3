@@ -2,6 +2,8 @@
 
 [English](topology.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 ## 화면 사용법
 
 **Ready Peers** 카드는 마지막 보고 상태가 `ready`인 노드를 셉니다. 토폴로지는 `starting` 노드도 표시하므로 join/churn 중에는 전체 수가 더 클 수 있습니다. 헤더에서 전체·ready·starting 수를 구분하며, 중앙의 **TOTAL**과 Agent 구역별 수는 화면에 표시되는 전체 Peer 수입니다. 메트릭 카드도 Ready 수 아래에 **Topology**(전체)와 **Starting**을 표시합니다. stopping·stopped·failed는 제외하고, 알 수 없는 표시 상태가 있으면 **Other**로 따로 집계합니다. 두 화면은 다른 run에서 남아 있는 Peer까지 포함한 동일한 클러스터 snapshot을 사용합니다. 선택한 run, 관계 레이어, topic 필터는 이 피어 수를 바꾸지 않습니다. 이 값은 보고된 수명 상태이며 실시간 통신 가능성을 별도로 검사한 결과는 아닙니다.
@@ -24,7 +26,7 @@ Peer에 마우스를 올리면 현재 표시 중인 이웃 연결을 강조하�
 
 **Pause motion**을 누르면 기존 Peer의 위치를 유지하면서 필터, 선택, 확대·축소와 화면 이동을 계속 사용할 수 있습니다. 새 Peer와 Agent 영역 변경은 즉시 반영합니다. **Resume motion**으로 배치 조정을 재개합니다.
 
-**Network overview** 헤더의 **Collapse / Expand** 버튼은 패널 전체를 숨기거나 보여 줍니다. 접힌 동안에는 배치 애니메이션을 멈추고 실시간 상태 갱신은 계속합니다. 다시 펼치면 최신 토폴로지를 표시하며 기존 동작 설정을 유지합니다. 선택 저장과 다른 패널 조작은 [패널 접기와 펼치기](monitoring.kr.md#패널-접기와-펼치기)를 참고하십시오.
+**Network overview** 헤더의 **Collapse / Expand** 버튼은 패널 전체를 숨기거나 보여 줍니다. 접힌 동안에는 배치 애니메이션을 멈추고 실시간 상태 갱신은 계속합니다. 다시 펼치면 최신 토폴로지를 표시하며 기존 동작 설정을 유지합니다. 선택 저장과 다른 패널 조작은 [패널 접기와 펼치기](dashboard.kr.md#패널-접기와-펼치기)를 참고하십시오.
 
 운영체제나 브라우저의 동작 줄이기 설정을 사용하면 기본적으로 안정화 애니메이션을 끕니다. 최초 배치와 관계 변경에는 제한된 정착 계산을 적용하고 중간 이동 과정 없이 결과를 표시합니다. **Resume motion**을 직접 선택하면 애니메이션을 켤 수 있습니다.
 
@@ -76,7 +78,7 @@ overlay 보고가 없는 이전 Peer는 Transport 선만 제공합니다. 화면
 
 Controller는 실행 중 약 5초마다 `observations.jsonl`에 그룹 상태·차수·clustering·점수 요약과 프로토콜별 그래프 표본을 저장합니다. `graphs`의 각 항목은 `protocol`, 정렬된 Node ID 배열 `nodes`, 같은 인덱스의 `groups`, 노드 인덱스 쌍 `edges`입니다. 고유 무방향 간선을 저장하며 GossipSub는 여러 토픽의 같은 Peer 쌍을 합칩니다. 실시간 간선의 `topic`과 `reportedBy`는 이 저장 형식에 포함되지 않습니다. 표본 사이 변화 전부나 평가자별 개별 점수는 보존하지 않습니다.
 
-`events.jsonl`에는 수집한 GRAFT/PRUNE 등의 전이와 [상세 RPC 메타정보](api.kr.md#상세-peer-로그)가 남지만 telemetry 유실의 영향을 받습니다. 간선이 없는 과거 요약은 새 그래프 지표를 복원할 수 없습니다. 원본은 [결과 ZIP](monitoring.kr.md#실험-결과-다운로드), 표본 축소·그래프 계산은 [연구 지표](experiment-metrics.kr.md#연구-그래프-관측)를 참고하십시오. 레이어 표시와 배치는 메인 도달 지표의 정의를 바꾸지 않습니다.
+`events.jsonl`에는 수집한 GRAFT/PRUNE 등의 전이와 [상세 RPC 메타정보](api.kr.md#상세-peer-로그)가 남지만 telemetry 유실의 영향을 받습니다. 간선이 없는 과거 요약은 새 그래프 지표를 복원할 수 없습니다. 원본은 [결과 ZIP](results.kr.md#실험-결과-다운로드), 표본 축소·그래프 계산은 [연구 지표](experiment-metrics.kr.md#연구-그래프-관측)를 참고하십시오. 레이어 표시와 배치는 메인 도달 지표의 정의를 바꾸지 않습니다.
 
 ## 개발 검증
 

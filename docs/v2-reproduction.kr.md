@@ -2,6 +2,8 @@
 
 [English](v2-reproduction.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 검토 기준은 `kpl-v2`의 실제 Controller/Peer 코드와 `exp/exp-2603_churn-02.sh`입니다. 설명 문서와 실행 코드가 다를 때는 실행 코드를 기준으로 삼았습니다. 아래 설정으로 실험의 주요 조건을 재현할 수 있으나, 과거 실행의 패킷 순서나 토폴로지가 동일해지는 것은 아닙니다.
 
 이 호환성 세부 사항은 v3에서 관리합니다. 프로젝트 공통 버전 이력과 연구 배경은 [Hub](https://github.com/k-p2p-lab/hub/blob/master/README.kr.md)를 참고하십시오.

@@ -2,6 +2,8 @@
 
 English | [Korean](visualization.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 Choose **Saved results → Images** to submit background analysis. The server reads logs, calculates graph and propagation metrics, fits distributions, and saves the result. The browser renders white-background, 1,600px PNGs. **Graph images** starts with a collapsed list of chart titles; expand a title to see its image and **PNG ↓ / CSV ↓** links. **Download analysis JSON** downloads the full server artifact.
 
 **Graph protocol** selects **GossipSub** (the default), **Kad**, or **Transport** for the graph metric images, keeping one title per metric. Each protocol has a separate image; switching within the same dialog preserves expanded titles. Common latency, propagation and bandwidth charts remain unchanged. **Download all PNG + CSV (ZIP)** includes all three protocols' separate PNGs, CSVs and chart definitions, regardless of the selected protocol or collapsed titles.
@@ -62,6 +64,6 @@ Reanalysis cannot recover message IDs, graph edges or session evidence absent fr
 
 The [background analysis API](api.md#background-analysis) defines job state/version, source snapshot time and full/compact responses. The source boundary is captured after the job acquires its computation slot, not at queue admission. Completed work keeps that boundary; use **Analyze latest snapshot** to include later-arriving logs.
 
-The server retains completed analysis JSON. The browser generates PNGs, CSVs and comparison ZIPs while the view is open. The **Download results** source ZIP, **Download analysis JSON**, and **Download all PNG + CSV (ZIP)** are different artifacts. See [analysis and image retention](monitoring.md#analysis-and-image-retention) for contents and persistence.
+The server retains completed analysis JSON. The browser generates PNGs, CSVs and comparison ZIPs while the view is open. The **Download results** source ZIP, **Download analysis JSON**, and **Download all PNG + CSV (ZIP)** are different artifacts. See [analysis and image retention](results.md#analysis-and-image-retention) for contents and persistence.
 
 [Experiment metrics](experiment-metrics.md) · [v2 coverage](v2-analysis-coverage.md) · [Bandwidth](bandwidth.md)

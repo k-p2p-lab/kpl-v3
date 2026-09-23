@@ -2,6 +2,8 @@
 
 English | [Korean](swarm-churn-publish.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 Use [`examples/swarm-churn-publish.yaml`](../examples/swarm-churn-publish.yaml) to keep workers joining and leaving while repeatedly publishing from randomly selected live workers. It extends the small [Swarm smoke test](swarm.md#first-deployment-experiment-and-download) with ongoing churn and repeated observations. It is a starting configuration, not a measured capacity guarantee or an exact replay of a v2 experiment.
 
 ## Prepare and Run
@@ -78,7 +80,7 @@ PubSub `join`/`leave` events are **not Peer creation/departure records**. The me
 
 After the run ends, confirm Peer cleanup and, when no other runs are active, zero Agent occupancy. A `completed` run can have `canceledJobs: 1`: `stop-all` intentionally cancels the unfinished join job. That counter alone is not a failure.
 
-Use **Download results** on the run or in **Saved results**. The ZIP includes the submitted scenario, run metadata, and full saved event log at the export boundary, independently of the 300-event recent buffer. It includes `metrics.json` and collected subscription-session events, but no separate complete Docker lifecycle snapshot, message payload dump, PCAP, or Prometheus/Grafana database. Running downloads are snapshots, and missing telemetry cannot be recovered by downloading. [Archive contents and retention](monitoring.md#download-experiment-results)
+Use **Download results** on the run or in **Saved results**. The ZIP includes the submitted scenario, run metadata, and full saved event log at the export boundary, independently of the 300-event recent buffer. It includes `metrics.json` and collected subscription-session events, but no separate complete Docker lifecycle snapshot, message payload dump, PCAP, or Prometheus/Grafana database. Running downloads are snapshots, and missing telemetry cannot be recovered by downloading. [Archive contents and retention](results.md#download-experiment-results)
 
 Download before `sudo sh scripts/swarm.sh remove` takes the web services offline. The data volumes and external Peer network remain. A retained `interrupted` result after restart is not resumed and does not prove Peer cleanup.
 

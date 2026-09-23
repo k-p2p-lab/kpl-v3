@@ -2,6 +2,8 @@
 
 [English](scenario-library.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 대시보드는 재사용할 검증된 YAML 시나리오를 Controller에 저장합니다. 라이브러리와 실험 결과는 서로 독립적입니다. 시나리오 저장만으로 실행되지 않고 편집한 YAML을 실행해도 자동 저장되지 않으며, 어느 한쪽을 삭제해도 다른 쪽은 삭제되지 않습니다.
 
 ## 대시보드에서 사용하기
@@ -27,38 +29,11 @@
 
 ## 예상 종료 시각
 
-**Experiment progress**의 실행 중·대기 중인 각 Run에 **Est. finish**와 대략적인 남은 시간을 표시합니다. 카드 위 요약에는 진행 중인 반복 실행 그룹별 **Group est. finish**가 표시됩니다. 종료 시각은 브라우저의 현지 시간대이며, 남은 시간은 Controller가 같은 그룹에서 먼저 실행될 Run의 대기 시간까지 포함해 계산합니다. 서로 다른 그룹은 독립적으로 실행됩니다.
-
-초기 **Scenario estimate**는 대기 시간, 반복 횟수와 샘플링한 interval을 계산하고 백그라운드 작업의 겹침, `wait-jobs`, `stop-all`, `onExit`을 반영합니다. 준비 배리어는 처음에 설정된 timeout을 시간 여유로 사용합니다. 요청 수는 설정된 최댓값을 사용하므로 실제 publish·leave 후보가 적으면 더 빨리 끝날 수 있습니다. 노드 기동, 용량 대기, 요청 처리와 정리 시간은 사전에 알 수 없습니다. 단계가 끝나면 실제 시작·종료 시각으로 예측을 갱신하고, 같은 진행 중 그룹에서 성공한 Run의 평균 단계 시간과 정리를 포함한 전체 소요 시간으로 이후 추정치를 보정합니다. 이때 **Based on N completed runs**로 보정 근거를 표시합니다.
-
-예상치는 종료 기한이 아닙니다. 시간 정보가 부족하면 **Estimating…**, 예상을 초과하면 **Taking longer than estimated**를 표시하고 뒤의 대기 Run과 그룹의 예상 시각을 늦춥니다. Run 중지·종료 후에는 해당 예측을 제거합니다. 이 값으로 자동 중지하지 않으며 Saved results에 예측을 보존하지 않습니다.
+실시간 진행 예측과 불확실성은 [실행 예상 종료 시각](experiments.kr.md#예상-종료-시각)을 참고하십시오.
 
 ## REST API
 
-요청과 응답 본문은 모두 JSON을 사용합니다. 큰 라이브러리도 가볍게 열 수 있도록 목록 응답에는 YAML을 넣지 않으므로, 편집하기 전에 개별 항목을 조회하십시오.
-
-| Method | Path | 본문 | 성공 응답 |
-|---|---|---|---|
-| `GET` | `/api/v1/scenarios` | 없음 | `id`, `name`, `createdAt`, `updatedAt` 요약 목록 |
-| `POST` | `/api/v1/scenarios` | `{ "name": "…", "yaml": "…" }` | 전체 항목과 `201` |
-| `GET` | `/api/v1/scenarios/{id}` | 없음 | `yaml`을 포함한 전체 항목 |
-| `PUT` | `/api/v1/scenarios/{id}` | `{ "name": "…", "yaml": "…" }` | 갱신된 전체 항목과 `200` |
-| `DELETE` | `/api/v1/scenarios/{id}` | 없음 | 본문 없는 `204` |
-
-조회·검증·변경 모두 로그인 세션이 필요합니다. 변경 요청의 `X-KPL-Request: dashboard` 헤더는 UI가 자동으로 전달합니다. 해석한 YAML이 1 MiB를 넘는 경우를 포함하여 유효하지 않은 입력은 `400`입니다. JSON 요청 본문은 escape된 문자를 고려해 `6 * 1 MiB + 64 KiB`까지 허용하며 이 한도를 넘으면 `413`입니다. 알 수 없는 JSON 필드와 후행 JSON 값은 거부합니다. 없거나 유효하지 않은 ID는 `404`, 저장소 오류는 `500`입니다. ID는 소문자 16진수 32자로 구성됩니다.
-
-`control-node:8080`은 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [API 인증](api.kr.md#인증)으로 `KPL_COOKIE_JAR`를 생성하십시오.
-
-```sh
-curl --fail http://control-node:8080/api/v1/scenarios
-
-curl --fail -X POST http://control-node:8080/api/v1/scenarios \
-  -H 'Content-Type: application/json' \
-  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
-  --data-binary @- <<'JSON'
-{"name":"Smoke baseline","yaml":"version: 2\nname: smoke-baseline\nphases:\n  - action: stop-all\n"}
-JSON
-```
+요청 본문, 응답, 제한과 curl 예제는 [시나리오 라이브러리 API](api.kr.md#시나리오-라이브러리)에 있습니다.
 
 ## 저장과 백업
 

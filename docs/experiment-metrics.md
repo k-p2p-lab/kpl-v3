@@ -1,31 +1,10 @@
-# Experiment Metrics and Repetition
+# Experiment Metric Definitions
 
 English | [Korean](experiment-metrics.kr.md)
 
-This guide defines the calculations implemented by v3. Main Metrics, saved research views and bandwidth use distinct definitions, specified below. For the project-wide research context, see the [Hub research guide](https://github.com/k-p2p-lab/hub/blob/master/docs/RESEARCH.md). Use [monitoring and results](monitoring.md) for Grafana, export, retention, and deletion procedures.
+[Documentation index](README.md) · [Repository](../README.md)
 
-## Run the same scenario several times
-
-In **Run experiment**, paste the YAML and set **Runs** beside **Run** to an integer from 1 to 100. The Controller queues all iterations and executes them sequentially, even if you close the browser. Each iteration gets a unique run ID, a separate result directory, and `batchId`, `iteration`, and `repetitions` in its metadata.
-
-For more than one iteration, the Controller cancels or drains background jobs according to the scenario's exit policy, fences and removes that iteration's Peers, and refreshes Agent state before starting the next iteration. An execution or cleanup failure cancels all remaining iterations. **Stop batch** on any running or queued member cancels the active iteration and the remaining queue. Other independently submitted experiments can still run concurrently; keep them stopped when comparing repetitions.
-
-The scenario YAML is unchanged in every iteration. An explicit nonzero `seed` is reused; zero or an omitted seed creates a new recorded seed per iteration. Reusing a seed repeats sampling inputs, but Docker timing, eligible populations, and network execution can still differ. Queues are not automatically resumed after a Controller restart. Retained `queued` or `running` records are displayed as `interrupted`.
-
-API clients can POST `application/json` to `/api/v1/experiments`:
-
-```json
-{"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
-```
-
-The response is the first experiment; `/api/v1/snapshot` and the SSE stream include all iterations. Existing raw YAML requests still start one experiment. Reads and mutations use the login session; mutation requests also include `X-KPL-Request: dashboard`.
-
-### Continue the remaining runs after a failure
-
-In **Saved results**, use **Continue remaining (N)** on a stopped series to resume its never-started runs. Previously completed, failed, and otherwise attempted runs are preserved and are not repeated. The original batch ID, run IDs, iteration numbers, total repetitions, saved YAML, and per-run seeds are retained; for example, a failure at Run 2 of 5 continues with Runs 3–5. This does not add replacement runs to reach five successes. Batch means continue to include only completed runs.
-
-Continuation also works from saved results after a Controller restart. It requires a failed run, or an interrupted run that had started, and retained unstarted members. The Controller retries cleanup of previous unsuccessful runs on its registered Agents before starting the remainder. If cleanup fails, no remaining run starts; its error is shown and **Continue remaining** can be retried. A later experiment failure stops the remainder again. Concurrent continuation requests, active batches, downloads, and running analysis jobs block admission. **Stop batch** also cancels a continuation during cleanup. Closing the browser does not cancel accepted work.
-
+This guide defines the calculations implemented by v3. Main Metrics, saved research views and bandwidth use distinct definitions, specified below. For the project-wide research context, see the [Hub research guide](https://github.com/k-p2p-lab/hub/blob/master/docs/RESEARCH.md). Use [monitoring](monitoring.md) for Grafana and [saved results](results.md) for export, retention, and deletion.
 
 ## Delivery under churn: session-window-v1
 
@@ -231,4 +210,12 @@ The continuous-subscription window, evidence rules, pair weighting, unknown boun
 | [Research aggregation](../internal/controller/analysis_research.go), [graphs](../internal/controller/analysis_graph.go), [origin inference](../internal/controller/analysis_origin.go) | Separate saved research definitions, sampled graphs and metadata estimates |
 | [Result export](../internal/controller/results.go) | Event-log boundary and metrics reconstruction for downloads |
 
-The [topology guide](topology.md) owns graph layers, Agent numbering, and display controls. Display changes do not alter measurement cohorts. [Monitoring and results](monitoring.md) owns saved-file retention and deletion; deleting a result releases its metric index but does not stop Peers or delete Prometheus history. The [REST API guide](api.md) defines the download and deletion endpoints.
+The [topology guide](topology.md) owns graph layers, Agent numbering, and display controls. Display changes do not alter measurement cohorts. [Saved results](results.md) owns saved-file retention and deletion; deleting a result releases its metric index but does not stop Peers or delete Prometheus history. The [REST API guide](api.md) defines the download and deletion endpoints.
+
+## Run the same scenario several times
+
+The procedure moved to [execution and repetition](experiments.md#run-the-same-scenario-several-times).
+
+### Continue the remaining runs after a failure
+
+See [recovery choices](experiments.md#recover-saved-work) for continuing the never-started remainder or retrying unfinished iterations.

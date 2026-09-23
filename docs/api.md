@@ -2,6 +2,8 @@
 
 English | [Korean](api.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 The dashboard and operational APIs require a login session. See [authentication](#authentication) for public monitoring exceptions and internal service authentication.
 
 The Controller persists web access and authentication attempts in `<data-dir>/logs/access.jsonl` and `auth.jsonl`. Passwords, cookies, authorization headers and query strings are excluded. See [web access and authentication logs](monitoring.md#web-access-and-authentication-logs) for fields, rotation and retrieval.
@@ -74,11 +76,45 @@ The Dashboard closes SSE while the document is hidden or the page is leaving, in
 
 The browser allows 30 seconds for the initial snapshot and 45 seconds between snapshots, deltas or heartbeats. A timeout closes the stalled connection and enters the same recovery path as an SSE error. The session check is aborted after 8 seconds; a failed/timed-out check still permits retry, while 401 opens the **Login required** page. Repeated failures back off from approximately 2 seconds to at most 30 seconds with jitter, resetting when data arrives. A browser `online` event cancels stale connection/probe state and reconnects immediately if visible. Hiding or leaving the page cancels both the stream and any pending session check. On the server, the 10-second write deadline applies only during each write/flush and is cleared afterward, so HTTP/2 idle streams survive until the next heartbeat.
 
-## Submit, stop, and observe runs
+## Scenario library
 
 `POST /api/v1/scenarios/validate` accepts a raw YAML body (`Content-Type: application/yaml`), limited to 1 MiB. A valid scenario returns `200` with `{valid: true, name, phases}`. Empty input, YAML syntax errors, unknown fields, invalid settings, and multiple YAML documents return `400` with `{error: "…"}`; parser diagnostics retain line numbers when available. Bodies over the limit return `413`. This endpoint uses the same parser as save/run, creates no records or jobs, and reuses the login session. Validation checks configuration, not Agent capacity or runtime connectivity.
 
+All request and response bodies use JSON. List responses omit YAML so opening a large library remains inexpensive; fetch an individual record before editing it.
+
+| Method | Path | Body | Success |
+|---|---|---|---|
+| `GET` | `/api/v1/scenarios` | — | Summary list: `id`, `name`, `createdAt`, `updatedAt` |
+| `POST` | `/api/v1/scenarios` | `{ "name": "…", "yaml": "…" }` | `201` with the complete record |
+| `GET` | `/api/v1/scenarios/{id}` | — | Complete record including `yaml` |
+| `PUT` | `/api/v1/scenarios/{id}` | `{ "name": "…", "yaml": "…" }` | `200` with the updated record |
+| `DELETE` | `/api/v1/scenarios/{id}` | — | `204` with no body |
+
+Reads, validation, and mutations require a login session. Mutations also require `X-KPL-Request: dashboard`, which the UI supplies automatically. Invalid input, including decoded YAML over 1 MiB, returns `400`. The JSON request envelope allows `6 * 1 MiB + 64 KiB` to accommodate escaped characters; exceeding that envelope returns `413`. Unknown JSON fields and trailing JSON values are rejected. A missing or invalid ID returns `404`; storage errors return `500`. IDs contain 32 lowercase hexadecimal characters.
+
+Replace `control-node:8080` with the Controller address printed by `access`. First follow [API authentication](api.md#authentication) to create `KPL_COOKIE_JAR`.
+
+```sh
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" http://control-node:8080/api/v1/scenarios
+
+curl --fail -X POST http://control-node:8080/api/v1/scenarios \
+  -H 'Content-Type: application/json' \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
+  --data-binary @- <<'JSON'
+{"name":"Smoke baseline","yaml":"version: 2\nname: smoke-baseline\nphases:\n  - action: stop-all\n"}
+JSON
+```
+
+
+## Submit, stop, and observe runs
+
 `POST /api/v1/experiments` returns `202` with the first run's experiment object. Use `Content-Type: application/json` for `{scenario, repetitions}`; `scenario` is a YAML string and omitted `repetitions` defaults to `1`. Other content types are treated as raw YAML. Raw YAML and the decoded JSON `scenario` string are limited to 1 MiB. The JSON request envelope allows `6 * 1 MiB + 64 KiB` for escaping. An oversized request envelope returns `413`; a decoded YAML string over its limit or invalid scenario/repetition returns `400`.
+
+Example JSON request body for three iterations:
+
+```json
+{"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
+```
 
 Repeated submissions reserve a separate run ID and result record for every iteration, sharing `batchId`, `iteration`, and `repetitions`. Runs execute sequentially; a failed or canceled iteration cancels the queued remainder. Stopping any member while its repetition batch is still active cancels that batch. For `repetitions > 1`, every iteration, including the last, fences and removes its Peers before finalization. Only a naturally successful single run may retain Peers when its YAML omits `stop-all`.
 
@@ -86,9 +122,9 @@ Repeated submissions reserve a separate run ID and result record for every itera
 
 Both continuation modes run on the Controller independently of the submitting HTTP request. They fence and remove prior Peers and refresh Agent state before executing a new iteration. If cleanup fails or the operator stops during cleanup, queued iterations become `canceled` with the reason in their experiment metadata, and no new iteration starts. Resolve the Agent/cleanup error and retry. Active execution, finalization, downloads and active run/batch analyses block admission; completed run records are never rewritten.
 
-Live experiment objects in `GET /api/v1/experiments`, dashboard snapshots/SSE, and the initial submission response may include `timing`: `estimatedFinishAt` (UTC), non-negative `remainingSeconds`, `basis` (`scenario` or `observed-runs`), `observedRuns`, and `overdue`. Active repeated runs also include `batchEstimatedFinishAt`, `batchRemainingSeconds`, and `batchOverdue` (optional zero/false fields). Queued finish times include earlier runs in the same batch. Completed/failed/canceled runs and estimates with insufficient timing information omit `timing`; it is not persisted in result manifests. See [estimated finish times](scenario-library.md#estimated-finish-times) for calculation and uncertainty.
+Live experiment objects in `GET /api/v1/experiments`, dashboard snapshots/SSE, and the initial submission response may include `timing`: `estimatedFinishAt` (UTC), non-negative `remainingSeconds`, `basis` (`scenario` or `observed-runs`), `observedRuns`, and `overdue`. Active repeated runs also include `batchEstimatedFinishAt`, `batchRemainingSeconds`, and `batchOverdue` (optional zero/false fields). Queued finish times include earlier runs in the same batch. Completed/failed/canceled runs and estimates with insufficient timing information omit `timing`; it is not persisted in result manifests. See [estimated finish times](experiments.md#estimated-finish-times) for calculation and uncertainty.
 
-The stop endpoint returns `202` with JSON `{"runId":"run-id","status":"stopping"}` once cancellation is requested, before cleanup completes. The Dashboard keeps the run or batch controls disabled as **Stopping…** until a snapshot confirms that no member is running or queued; acceptance does not re-enable the buttons. Observe `/api/v1/experiments` or the snapshot until the final state is recorded. A run with no remaining cancellation handle returns `404`. SSE coalesces updates to at most one full snapshot per second, shares encoding across clients, and sends an initial `event: snapshot`, subsequent full snapshots on state updates, and full snapshots every 15 seconds even without events; it does not provide event-ID replay. `/api/v1/events` contains at most the 300 most recent events across live Controller state.
+The stop endpoint returns `202` with JSON `{"runId":"run-id","status":"stopping"}` once cancellation is requested, before cleanup completes. The Dashboard keeps the run or batch controls disabled as **Stopping…** until a snapshot confirms that no member is running or queued; acceptance does not re-enable the buttons. Observe `/api/v1/experiments` or the snapshot until the final state is recorded. A run with no remaining cancellation handle returns `404`. See [Dashboard SSE](#dashboard-sse) for compact and legacy stream contracts. `/api/v1/events` contains at most the 300 most recent events across live Controller state.
 
 From the repository root, replace the host with the Controller address from `access` and first follow [authentication](#authentication) to create `KPL_COOKIE_JAR`:
 
@@ -99,17 +135,29 @@ curl -X POST http://control-node:8080/api/v1/experiments \
   --data-binary @examples/smoke.yaml
 ```
 
-The scenario library endpoints store reusable editor inputs independently of experiment results. The list omits YAML, while individual GET, POST, and PUT responses include it. See the [scenario library guide](scenario-library.md) for the UI workflow, payloads, validation limits, and storage location.
+The scenario library endpoints store reusable editor inputs independently of experiment results. The list omits YAML, while individual GET, POST, and PUT responses include it. See the [scenario library guide](scenario-library.md) for the UI workflow and storage location, and [scenario library API](#scenario-library) for payloads and validation limits.
+
+## Saved results and downloads
+
+The results API keeps newest-started-first ordering, with batch/iteration/ID tie breaks for equal start times such as queued runs.
 
 Raw events, including typed bandwidth samples, are stored at `<data-dir>/runs/<run-id>/events.jsonl`; the exact input is stored as `scenario.yaml`, experiment metadata as `experiment.json`, and collected graph samples and topology/score summaries as optional `observations.jsonl` in the same directory. The local Controller data directory defaults to `data`. In Swarm, the persistent `controller-data` volume is mounted at `/var/lib/kpl/data`, and each run's files are under `/var/lib/kpl/data/runs/<run-id>`.
 
-Use **Download results** in the Dashboard to export a run as ZIP. **Saved results** also lists files retained from previous Controller sessions; **Refresh** reloads that list. Running experiments offer **Download snapshot**, which contains the records saved when the download starts. These exports include the full saved event log, independently of the 300-event recent buffer. See [result downloads](monitoring.md#download-experiment-results) for archive contents and collection limits.
+Use **Download results** in the Dashboard to export a run as ZIP. **Saved results** also lists files retained from previous Controller sessions; **Refresh** reloads that list. Running experiments offer **Download snapshot**, which contains the records saved when the download starts. These exports include the full saved event log, independently of the 300-event recent buffer. See [result downloads](results.md#download-experiment-results) for archive contents and collection limits.
 
-`GET /api/v1/results` returns `sourceBytes`, the total uncompressed bytes of saved scenario, experiment metadata, event and observation source files at the last inspection, including running and queued results. It requires no log-content reads or ZIP generation and excludes analysis caches and generated images. The field is omitted only when source file sizes cannot be read safely. The dashboard uses this value without automatic ZIP size requests.
+`GET /api/v1/results` exposes saved records. The list field `sourceBytes` sums the sizes of currently present regular source files: `scenario.yaml`, `experiment.json`, `events.jsonl`, and `observations.jsonl`. It uses file metadata without reading log contents, reconstructing metrics, or compressing data, so large results remain quick to size. Generated analysis caches/images, the export-time `metrics.json` and `export.json`, and filesystem allocation overhead are excluded. Unreadable experiment metadata can still have a source size. If the source files cannot be statted safely, the field is omitted and the UI shows **Source · —**.
 
 `DELETE /api/v1/results/{id}` returns `204` on deletion, `404` if the result is absent, and `409` while the run/batch is active or an actual `GET` download holds it. Explicit `HEAD` size calculations and list reads do not cause a download conflict.
 
 `DELETE /api/v1/result-batches/{batchId}` uses the login session and exact batch ID. It checks every member before deleting any files, returns `409` if a run is active/finalizing or a ZIP download holds a member, and removes all saved member runs (including failed/canceled runs), their individual analyses, and the separate batch mean. Success returns `200` with `{"deletedIds":["run-id", "..."]}`; an absent group returns `404`. An orphan batch mean can also be removed. Storage failures return `500` and may leave a partially deleted group; refresh the list and resolve the storage error before retrying. The browser uses a 30-second request timeout; the Controller may finish after that timeout.
+
+The dashboard makes no automatic size HEAD requests and runs no ZIP-size expiry timers. An explicitly requested `HEAD /api/v1/experiments/RUN_ID/download` still measures the exact ZIP `Content-Length` with a streaming byte counter; actual GET downloads use that measurement too. Archives are not retained wholesale in memory or on disk. Concurrent measurements for one run are shared, with at most two different runs measured at once. For API compatibility, the list can still return an already prepared, valid `downloadBytes` value, but the UI does not use it.
+
+When no publication is pending, an unchanged file/state version keeps the measured byte count while each HEAD or download records a fresh, full-precision export time; the stored `export.json` entry uses a fixed-width timestamp so its encoded length stays constant. Stable list rows omit `downloadSizeMaxAgeMs`, and stable HEAD responses omit `X-KPL-Result-Size-Max-Age-Ms`. A result with pending publications briefly reuses both its byte count and export boundary. Its list row includes `downloadSizeMaxAgeMs`, and HEAD includes `X-KPL-Result-Size-Max-Age-Ms`; each value is a positive number of milliseconds calculated from the server's remaining cache lifetime after subtracting a one-second response safety grace. This relative lifetime avoids depending on synchronized client and server clocks. The first list that observes a prepared value extends the short lifetime once, then reports the max age from that extended boundary so an immediate GET still matches the displayed size; repeated list refreshes do not keep sliding the deadline. If the server has no lifetime left beyond the safety grace, the list omits both `downloadBytes` and `downloadSizeMaxAgeMs`, while HEAD measures a new boundary before responding.
+
+The first HEAD after Controller startup or a source/state change must read the captured files and rebuild metrics; pending results repeat that work after their short cache expires. HTTP request cancellation is checked while waiting for a measurement slot, reading source logs, and aggregating the reconstructed metrics; canceled requests stop without producing a server-error response. Large saved event logs can therefore take longer to measure. This work occurs only for explicitly requested HEADs and actual downloads; displaying source sizes does not require it.
+
+Reconstructing ZIP metrics uses memory proportional to distinct event IDs and message/receiver pairs; the raw file copy itself is streamed.
 
 ## Background analysis
 
@@ -132,7 +180,7 @@ Requests reuse an existing queued/running job even with `?refresh=1`. A current 
 
 After completion, `GET` or `HEAD` `/api/v1/analysis-jobs/{id}/result?jobId={jobId}` serves the full JSON; `/summary?jobId={jobId}` serves the comparison artifact. Supplying `jobId` guards against downloading a different attempt; omission selects the current completed attempt. An unfinished/mismatched attempt returns `409`, a missing run `404`, and malformed/unreadable stored data normally `422`. The compact artifact sets `observations`, `timeline`, `bandwidthTimeline` and `research.messages` to empty arrays while preserving `messageCount`, metrics, aggregates, distributions and fits. It cannot supply per-message paths or original timelines. Both responses carry `analysisId`, `analysisVersion`, and the source `asOf` boundary.
 
-`GET /api/v1/experiments/{id}/analysis` remains a synchronous compatibility route with a two-minute request timeout. It computes a response without creating a persisted background job. Use the job API for long analysis and later downloads. The [metric guide](experiment-metrics.md#saved-result-research-metrics) owns research definitions; [monitoring](monitoring.md#analysis-and-image-retention) owns saved files, and [visualization](visualization.md) describes the browser workflow.
+`GET /api/v1/experiments/{id}/analysis` remains a synchronous compatibility route with a two-minute request timeout. It computes a response without creating a persisted background job. Use the job API for long analysis and later downloads. The [metric guide](experiment-metrics.md#saved-result-research-metrics) owns research definitions; [monitoring](results.md#analysis-and-image-retention) owns saved files, and [visualization](visualization.md) describes the browser workflow.
 
 ## Repetition batch analysis
 

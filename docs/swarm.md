@@ -2,6 +2,8 @@
 
 English | [Korean](swarm.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 Deploy and manage `stack.swarm.yaml` from an active Swarm manager using `scripts/swarm.sh`, on one or more Linux servers. Swarm maintains **one Agent on each selected server**, and the Controller distributes an experiment's Peers among those Agents. Each Peer is a separate Docker container on its assigned server. Peers are not automatically rescheduled to another server as Swarm services would be.
 
 The executable deployment sources are [`stack.swarm.yaml`](../stack.swarm.yaml), [`scripts/swarm.sh`](../scripts/swarm.sh), and [`scripts/swarm-config.sh`](../scripts/swarm-config.sh). See [v3 architecture](architecture.md) for actual service/network mapping and the [Hub](https://github.com/k-p2p-lab/hub) for conceptual architecture.
@@ -112,7 +114,7 @@ For analysis, open the Grafana URL, sign in, and select this experiment in **Run
 
 Wait for the run to finish and check that its Peers are stopped. With no other experiments running, Agent occupancy should return to zero. To cancel an active run, use its **Stop** button and wait for cleanup.
 
-Choose **Download results** on the run or in **Saved results**. The ZIP contains `scenario.yaml`, `experiment.json`, `events.jsonl`, optional `observations.jsonl`, `metrics.json`, and `export.json`. Observation summaries, graph samples and bandwidth counters are included when collected. It includes the full saved event log and metrics rebuilt from that prefix, independently of the 300-event recent buffer, but not the Prometheus/Grafana time-series database. **Download snapshot** on a running experiment contains only records saved at the download boundary. **Delete** removes an inactive saved result after confirmation. [Download contents and limits](monitoring.md#download-experiment-results)
+Choose **Download results** on the run or in **Saved results**. The ZIP contains `scenario.yaml`, `experiment.json`, `events.jsonl`, optional `observations.jsonl`, `metrics.json`, and `export.json`. Observation summaries, graph samples and bandwidth counters are included when collected. It includes the full saved event log and metrics rebuilt from that prefix, independently of the 300-event recent buffer, but not the Prometheus/Grafana time-series database. **Download snapshot** on a running experiment contains only records saved at the download boundary. **Delete** removes an inactive saved result after confirmation. [Download contents and limits](results.md#download-experiment-results)
 
 Download before removing the services, since removal also takes the web pages offline:
 
@@ -262,25 +264,7 @@ The new placement uses stack-specific `kpl.<stack>.agent` labels instead of the 
 
 ## Distribution and Capacity
 
-| Setting | Placement behavior |
-|---|---|
-| `placement: balanced` (default) | Choose the online Agent with the lowest projected occupancy after adding one Peer, divided by effective capacity. Break ties by current utilization, then Agent ID |
-| `placement: random` | Use the seed to choose among online Agents with available capacity |
-| `placement: single-agent` | Pin one join execution to one selected Agent. Each repeat selects again. Wait if that Agent is full rather than switching servers |
-| `agentId` | Pin placement to the specified Agent. Use an ID from `/api/v1/agents` for experiments pinned to a physical server |
-| `parallelism` | Number of concurrent jobs in a join with `parallel: true`. This is separate from the server count or Swarm replica count |
-
-Capacity is a Peer-count admission limit, not a CPU or memory reservation or a cgroup limit. Changing the Agent's Swarm resource limits does not apply those limits to its sibling Peer containers. The supplied stack uses `KPL_AGENT_CAPACITY` as the startup default for every Agent. In **Dashboard → Agent status → Configure**, choose **Custom for this Agent** to override that default for the selected Agent ID, or **CLI default** to remove its override. For example, keep `KPL_AGENT_CAPACITY=200` and set one Agent to `100`; the other Agents continue to use `200`. Choose capacity based on measured CPU, RAM, file-descriptor, conntrack, and Docker daemon load.
-
-Per-Agent overrides are saved in `<controller-data-dir>/agent-capacities.json` and survive Controller/Agent restarts when the Controller volume and Agent ID remain the same. Keep this file in Controller backups. A changed Agent ID is a different configuration target. An offline Agent receives its saved setting when it reconnects. Both Controller and Agents must run a version supporting these settings; the UI disables Configure for older Agents.
-
-Balanced placement uses each Agent’s effective capacity, including Dashboard overrides. With otherwise idle Agents of capacity 100 and 50, 75 Peer reservations distribute as 50 and 25. Occupancy includes all experiments, pending reservations, and containers awaiting removal. Existing Peers stay in place; new joins and slots released during churn bring the ratios back into balance. Explicit `agentId`, `random`, and `single-agent` policies retain their requested placement behavior.
-
-Capacity changes apply through registration/heartbeats without a service restart. The table shows the CLI default or override and **Applying…** until acknowledged. A reduction limits new placement immediately and leaves existing Peers running; if occupancy exceeds the new limit, joins wait for space. Increases become available after the Agent acknowledges the current setting. The Agent also enforces the effective limit locally, and its capacity metric follows it.
-
-The Controller serializes reservations across concurrent experiments. An Agent holds a slot from accepting a creation request **until deletion is confirmed**, including time spent in Docker creation and startup; failed cleanup continues to occupy capacity. The Controller does not reuse a slot based only on a DELETE response. An Agent is excluded from new placement after more than 10 seconds without a report, such as during a network partition. Checks prevent reports from an earlier Agent process or out-of-order reports from overwriting current node and capacity data. A new Agent with the same ID can register after the previous process's online validity window expires.
-
-Docker creation admission receives a 45-second budget. After admission, configuration copying, startup, and address inspection share a fresh 45-second budget. A shorter original deadline limits both stages. Cancellation during admission is held until its bounded result is collected so cleanup can identify a late-created container; startup steps are immediately cancelable. See [`internal/agent/docker.go`](../internal/agent/docker.go). If a busy server repeatedly exceeds these limits, lower join `parallelism` and capacity and investigate disk and daemon load.
+Set startup defaults and per-Agent UI overrides using [Agent capacity and placement](agents.md). That guide owns balanced/random/pinned policies, proportional allocation, admission, and cleanup occupancy. The constraints below concern the deployment network.
 
 Docker recommends `/24` addressing for ordinary overlay networks. Service tasks and endpoints consume addresses in addition to Peers, so do not set `server count × capacity` equal to the full address count. The default capacity of 20 is a starting point, not a performance guarantee. Extending v2's `/16` configuration or merely increasing capacity does not establish support for thousands of Peers. The current configuration uses a single shared Peer overlay; hundreds or thousands of Peers require a design for reachability across multiple networks and separate load testing. [Swarm overlay size limitations](https://docs.docker.com/engine/swarm/networking/#overlay-network-size-limitations)
 
@@ -307,7 +291,7 @@ Agent updates and rollbacks use `stop-first`. Changing this to `start-first` can
 
 Draining a node affects Swarm service tasks. v3 Peers are standalone containers, so Swarm does not migrate them directly. A clean Agent shutdown removes its Peers. After an abnormal exit, restarting on the same node with the same Agent ID and Peer network name reclaims leftover containers. If the node rejoins or the stack, service, or network name changes, inspect labels on that server and separately remove Peers left under the previous ownership scope. Whole-host failures and network partitions are not hidden by recreating Peers on other servers.
 
-The Controller is a single instance without a shared database or leader election. Keep `replicas: 1`. If the control node fails, the Controller does not automatically move to another node with empty local volumes; restore backups and set a new Node ID as needed. At startup, the Controller does not restore live experiment state or counters into memory or automatically resume active experiments. Retained files are available through **Saved results** in the Dashboard and the [result download API](monitoring.md#download-experiment-results), including after a restart. A previously running record is displayed as `interrupted`, which does not confirm Peer cleanup.
+The Controller is a single instance without a shared database or leader election. Keep `replicas: 1`. If the control node fails, the Controller does not automatically move to another node with empty local volumes; restore backups and set a new Node ID as needed. At startup, the Controller does not restore live experiment state or counters into memory or automatically resume active experiments. Retained files are available through **Saved results** in the Dashboard and the [result download API](results.md#download-experiment-results), including after a restart. A previously running record is displayed as `interrupted`, which does not confirm Peer cleanup.
 
 A Controller crash alone does not stop Peers on Agents. An orderly Controller shutdown cancels active runs, then asks registered Agents to remove remaining Peers, including those retained by completed single runs that omitted `stop-all`. Before a planned update, finish or cancel active runs and allow this cleanup to complete. An unreachable Agent or cleanup failure is reported as a shutdown error; inspect that host for leftovers.
 
@@ -323,7 +307,7 @@ Controller records, Prometheus time series, and Grafana data live in separate na
 
 The Controller fails at startup when its data directory is not writable. It writes run metadata to a temporary file and renames it on the same filesystem, preventing partial JSON reads. Event logs use append writes. Neither path forcibly synchronizes each write to disk, so power loss can lose recent records. Retained results become available after restart, while live execution and counters are not restored.
 
-Background job state, completed analysis JSON and compact summaries also live in the Controller volume. Completed work can be reused after restart; unfinished/canceled work is resubmitted. Ordinary run ZIPs do not include these caches; see [analysis and image retention](monitoring.md#analysis-and-image-retention) for preservation boundaries.
+Background job state, completed analysis JSON and compact summaries also live in the Controller volume. Completed work can be reused after restart; unfinished/canceled work is resubmitted. Ordinary run ZIPs do not include these caches; see [analysis and image retention](results.md#analysis-and-image-retention) for preservation boundaries.
 
 ## Validation Scope
 

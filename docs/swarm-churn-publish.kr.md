@@ -2,6 +2,8 @@
 
 [English](swarm-churn-publish.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 [`examples/swarm-churn-publish.yaml`](../examples/swarm-churn-publish.yaml)은 worker가 계속 들어오고 나가는 동안 현재 살아 있는 worker를 무작위로 골라 반복 발행하는 예제입니다. 작은 [Swarm smoke 실험](swarm.kr.md#첫-배포부터-실험과-다운로드까지)에 지속적인 churn과 반복 관측을 더합니다. 실측 용량을 보장하거나 v2 실험을 그대로 재생하는 구성이 아닌 시작용 설정입니다.
 
 ## 준비와 실행
@@ -78,7 +80,7 @@ PubSub `join`/`leave`는 **Peer 생성·종료 기록이 아닙니다**. 측정 
 
 실험 종료 후 Peer 정리와, 다른 실행이 없다면 Agent 점유량 0을 확인합니다. `stop-all`이 끝나지 않은 join job을 의도적으로 취소하므로 `completed` 실행에도 `canceledJobs: 1`이 있을 수 있습니다. 이 값만으로 실패를 뜻하지는 않습니다.
 
-실험 항목 또는 **Saved results**의 **Download results**를 사용하십시오. ZIP에는 최근 300개 버퍼와 별개로 제출한 시나리오·실험 메타데이터·내보내기 경계까지 저장된 전체 이벤트 로그가 들어갑니다. `metrics.json`과 수집된 구독 세션 이벤트도 포함하지만 별도의 완전한 Docker lifecycle snapshot, 메시지 payload dump, PCAP, Prometheus/Grafana 데이터베이스는 포함하지 않습니다. 실행 중 다운로드는 snapshot이며 다운로드로 누락된 telemetry를 복구할 수는 없습니다. [파일 구성과 보존 정책](monitoring.kr.md#실험-결과-다운로드)
+실험 항목 또는 **Saved results**의 **Download results**를 사용하십시오. ZIP에는 최근 300개 버퍼와 별개로 제출한 시나리오·실험 메타데이터·내보내기 경계까지 저장된 전체 이벤트 로그가 들어갑니다. `metrics.json`과 수집된 구독 세션 이벤트도 포함하지만 별도의 완전한 Docker lifecycle snapshot, 메시지 payload dump, PCAP, Prometheus/Grafana 데이터베이스는 포함하지 않습니다. 실행 중 다운로드는 snapshot이며 다운로드로 누락된 telemetry를 복구할 수는 없습니다. [파일 구성과 보존 정책](results.kr.md#실험-결과-다운로드)
 
 `sudo sh scripts/swarm.sh remove`로 웹 서비스를 내리기 전에 다운로드하십시오. 데이터 volume과 외부 Peer network는 남습니다. 재시작 후 보이는 `interrupted` 결과는 자동 재개하지 않으며 Peer 정리 완료를 증명하지 않습니다.
 

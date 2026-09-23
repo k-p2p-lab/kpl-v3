@@ -2,6 +2,8 @@
 
 English | [Korean](v2-reproduction.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 This review uses the actual Controller/Peer code in `kpl-v2` and `exp/exp-2603_churn-02.sh` as its reference. Where documentation and implementation differ, the implementation takes precedence. The settings below reproduce the main experimental conditions; they do not reproduce the exact packet order or topology of a historical run.
 
 These compatibility details belong to v3. For the project-wide version history and research context, see the [Hub](https://github.com/k-p2p-lab/hub).

@@ -2,6 +2,8 @@
 
 [English](scenario-reference.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 이 문서는 버전 2 YAML 형식, 피어 프로파일, 프로토콜 설정, 네트워크 조건과 백그라운드 잡을 설명합니다. 대시보드에서 재사용할 YAML을 저장하는 방법은 [시나리오 라이브러리](scenario-library.kr.md)를 참고하십시오.
 
 ## 최상위 필드

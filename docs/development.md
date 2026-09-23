@@ -2,6 +2,8 @@
 
 English | [Korean](development.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 The canonical Go module path is `github.com/k-p2p-lab/v3`, and [`go.mod`](../go.mod) requires Go 1.25 or later. This guide covers the v3 development workflow; the [Hub](https://github.com/k-p2p-lab/hub) owns project goals and conceptual design.
 
 ## Build and Validate on Linux
@@ -64,7 +66,7 @@ The runtime image uses `CGO_ENABLED=0`. Shell scripts, Dockerfiles, and Makefile
 
 The [Hub](https://github.com/k-p2p-lab/hub) owns project goals, conceptual design, research and publications; v3 owns executable behavior and operational contracts. English is the default, with matching updates in `.kr.md`. Keep actual English UI labels when describing controls, including in Korean guidance.
 
-Use `experiment-metrics` and `bandwidth` for formulas/estimates, `api` for endpoints/log schemas/analysis versions, `monitoring` for retained files and their lifetime, and `visualization` for UI operation. Link to the owning section instead of duplicating its definition. Keep the README index and Hub↔v3 links aligned with the matching language; check relative paths, section anchors and code examples.
+Follow the [shared documentation policy](https://github.com/k-p2p-lab/hub/blob/master/docs/DOCUMENTATION.md) for repository ownership, splitting, and language pairing. Keep the [documentation index](README.md) current. In v3, `experiments` owns execution/recovery, `results` owns retained artifacts, `monitoring` owns operational telemetry/logs, and `api` owns HTTP/SSE contracts. `experiment-metrics` and `bandwidth` own formulas; `visualization` owns chart operation. Link to the owner instead of copying definitions.
 
 With the supplied v2 sources in the sibling directory, verify the analysis inventory with:
 

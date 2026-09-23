@@ -2,6 +2,8 @@
 
 English | [Korean](v2-analysis-coverage.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 This inventory covers 40 parser fields/families and 34 Go, Python and shell sources from the supplied v2 revision `74b71090410cac1315ae08f479a95c086feeaaf6`. [The manifest](v2-analysis-coverage.json) records hashes. Run `python3 scripts/audit-v2-analysis.py --v2 ../v2` to detect changes or omissions; this is not a numerical equivalence test.
 
 The following visualization families are available through **Saved results → Images** and its comparison tools. Main Metrics keep their session/delivery-window definitions; additional analysis uses `research.definition = v2-corrected-observations-v1`. **Different source observations and statistical definitions can produce different values from v2.** Missing measurements remain N/A, and unresolved propagation origins remain unknown.
@@ -54,6 +56,6 @@ Exact formulas, aggregation, graph sampling and Eager/Lazy inference belong in [
 - Distinguish estimated eager/lazy, unclassified origins, model predictions and v2's fixed historical/ER references. Even new message-ID logs do not directly establish sender-queue causes.
 - Research reducers correct the membership union and even median. Student-t fits observed probabilities directly instead of reconstructing 60,000 artificial samples or substituting arbitrary fallback parameters. Exact numerical, file-layout and plot identity with the old Python output is not asserted.
 
-New detailed IDs and graph edges exist only in logs collected after deploying that version. See [API](api.md#detailed-peer-logs) for fields/omission limits, [retention](monitoring.md#analysis-and-image-retention) for source/analysis/image boundaries, and [bandwidth](bandwidth.md) for the additional measured stream-usage definition.
+New detailed IDs and graph edges exist only in logs collected after deploying that version. See [API](api.md#detailed-peer-logs) for fields/omission limits, [retention](results.md#analysis-and-image-retention) for source/analysis/image boundaries, and [bandwidth](bandwidth.md) for the additional measured stream-usage definition.
 
 Validation is in [research metrics](../internal/controller/analysis_research_test.go), [origin inference](../internal/controller/analysis_origin_test.go), [Peer tracing](../internal/peer/tracer_test.go), [research UI](../internal/webui/research_test.cjs), and [result image](../internal/webui/result_images_test.cjs) tests. See [development](development.md#documentation) for the source-inventory check.

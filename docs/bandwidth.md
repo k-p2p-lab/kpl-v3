@@ -2,6 +2,8 @@
 
 English | [Korean](bandwidth.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 v3 measures **libp2p stream usage**, not physical link capacity or available capacity. Rebuild and apply Controller, Agent and Peer together, then start a new experiment. Old Agents reject the new typed event field. Historical payload sizes cannot reconstruct this traffic.
 
 ## Scope and calculation
@@ -35,9 +37,9 @@ Original events and `metrics.json` are included in result ZIPs. Saved-result ana
 
 ## Dashboard and API
 
-The **P2P B/W · Send / Receive** cards are part of the Dashboard's single **Metrics** row. Their main values show the current run's send/receive rates; expand each card for cumulative transfer and its explanation. See [Metrics controls](monitoring.md#built-in-dashboard-visualization) for mouse, keyboard and touch navigation. Rates sum each Peer's latest source interval average, with adaptive bit/s, kbit/s, Mbit/s and higher units; totals use B, KiB, MiB and higher units. They follow the run named by **Run metrics**, independently of topology topic/layer filters.
+The **P2P B/W · Send / Receive** cards are part of the Dashboard's single **Metrics** row. Their main values show the current run's send/receive rates; expand each card for cumulative transfer and its explanation. See [Metrics controls](dashboard.md#built-in-dashboard-visualization) for mouse, keyboard and touch navigation. Rates sum each Peer's latest source interval average, with adaptive bit/s, kbit/s, Mbit/s and higher units; totals use B, KiB, MiB and higher units. They follow the run named by **Run metrics**, independently of topology topic/layer filters.
 
-**B/W measurement** shows collection quality in the same row; expand it for fresh active sessions, finalized sessions, the last sample time and rejected samples. It displays `Partial` when only some active sessions are fresh, `Rate unavailable` when their rate is unknown, and `N/A` without valid samples. Measured zero remains zero. The 15-second freshness rule and zero rate after normal finalization match Grafana, while cumulative totals remain available. SSE refreshes snapshots every 15 seconds even without events so expired rates update. Live snapshots include this aggregate as `metrics.bandwidth.currentRates`; saved-result aggregates do not acquire wall-clock-dependent current rates.
+**B/W measurement** shows collection quality in the same row; expand it for fresh active sessions, finalized sessions, the last sample time and rejected samples. It displays `Partial` when only some active sessions are fresh, `Rate unavailable` when their rate is unknown, and `N/A` without valid samples. Measured zero remains zero. The 15-second freshness rule and zero rate after normal finalization match Grafana, while cumulative totals remain available. The [Dashboard stream](api.md#dashboard-sse) refreshes time-dependent values even without trace events, so expired rates update. Live snapshots include this aggregate as `metrics.bandwidth.currentRates`; saved-result aggregates do not acquire wall-clock-dependent current rates.
 
 **Saved results → Images** provides total and per-protocol send/receive throughput (kbit/s) and cumulative transfer (KiB) as PNG/CSV, with a ZIP of all charts. Original cumulative counters also remain in the result API/ZIP and Grafana. See [visualization](visualization.md) for controls and comparisons.
 

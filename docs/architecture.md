@@ -2,7 +2,9 @@
 
 English | [Korean](architecture.kr.md)
 
-This document maps the project-wide concepts in the [K-P2PLab Hub](https://github.com/k-p2p-lab/hub) to the current v3 implementation. It describes the executable components, Docker placement, communication paths, and isolation guarantees implemented in this repository. Project goals, version-independent design principles, research context, and publications belong in the Hub.
+[Documentation index](README.md) · [Repository](../README.md)
+
+This document maps the project-wide concepts in the [K-P2PLab Hub](https://github.com/k-p2p-lab/hub/blob/master/docs/CONCEPTS.md) to the current v3 implementation. It describes the executable components, Docker placement, communication paths, and isolation guarantees implemented in this repository. Project goals, version-independent design principles, research context, and publications belong in the Hub.
 
 ```mermaid
 flowchart TB
@@ -96,11 +98,11 @@ The experimental overlay provides cross-host Peer addressing, while actual delay
 
 The Dashboard renders recent state and events from the Controller. The Controller stores each run's `scenario.yaml`, `experiment.json`, and complete accepted `events.jsonl` under its data volume. At download time it fixes a snapshot boundary and derives `metrics.json` and `export.json` for the ZIP from that persisted prefix. Prometheus keeps scrape-based time series in a separate volume, and Grafana keeps its own settings and dashboard state. Prometheus scrapes no per-Peer exporter and its current Agent collector does not provide per-Peer CPU or memory usage. A result ZIP is the portable experiment record; it is not a backup of Prometheus or Grafana.
 
-Metrics and topology are observations of received reports. A stale or unreachable Agent, telemetry queue loss, `scope: all` impairment, scrape timing, or forced shutdown can reduce what the control plane observes even while some P2P traffic occurred. Use [experiment metrics](experiment-metrics.md) for metric definitions, [monitoring and results](monitoring.md) for collection limits, and [topology](topology.md) for graph semantics.
+Metrics and topology are observations of received reports. A stale or unreachable Agent, telemetry queue loss, `scope: all` impairment, scrape timing, or forced shutdown can reduce what the control plane observes even while some P2P traffic occurred. Use [experiment metrics](experiment-metrics.md) for metric definitions, [monitoring](monitoring.md) and [saved results](results.md) for collection limits, and [topology](topology.md) for graph semantics.
 
 The Controller periodically saves group topology and score summaries in `observations.jsonl` during each run. It also saves nodes and transport/Kademlia/GossipSub edges available from fresh Peer reports for background graph analysis. Individual observer-to-peer scores are not retained. Bandwidth samples are stored as events and reconstructed independently of delivery-window eligibility; see [bandwidth measurement](bandwidth.md). The embedded Dashboard uses the [saved-result visualization](visualization.md) to visualize distributions and timelines and compare runs from saved events and observations, independently of Prometheus retention.
 
-The Controller background worker computes from a fixed boundary of saved event/observation files and retains job state, completed analysis and compact comparison data in the same data directory. Restart preserves completed analysis but does not automatically resume experiment execution or unfinished calculations. The browser renders PNG/CSV and comparison charts from completed JSON; closing it leaves admitted server work running. See the [API](api.md#background-analysis), [retained files](monitoring.md#analysis-and-image-retention), and [visualization workflow](visualization.md) for their respective contracts.
+The Controller background worker computes from a fixed boundary of saved event/observation files and retains job state, completed analysis and compact comparison data in the same data directory. Restart preserves completed analysis but does not automatically resume experiment execution or unfinished calculations. The browser renders PNG/CSV and comparison charts from completed JSON; closing it leaves admitted server work running. See the [API](api.md#background-analysis), [retained files](results.md#analysis-and-image-retention), and [visualization workflow](visualization.md) for their respective contracts.
 
 ## Supported deployment boundary
 

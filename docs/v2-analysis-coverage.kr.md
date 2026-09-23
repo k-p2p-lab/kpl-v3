@@ -2,6 +2,8 @@
 
 [English](v2-analysis-coverage.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 제공된 v2 revision `74b71090410cac1315ae08f479a95c086feeaaf6`의 분석 출력 40개 필드/계열과 Go·Python·실행 스크립트 34개를 기준으로 합니다. 각 소스의 hash는 [목록](v2-analysis-coverage.json)에 있습니다. `python3 scripts/audit-v2-analysis.py --v2 ../v2`는 목록의 누락·변경을 확인하며 수치 동등성을 증명하는 검사는 아닙니다.
 
 아래 시각화 계열을 v3의 **Saved results → Images** 및 비교 도구에서 제공합니다. 메인 Metrics는 기존 세션·수신 기간 정의를 유지하고, 추가 분석은 `research.definition = v2-corrected-observations-v1`로 구분합니다. **원본 자료와 통계 정의가 다른 경우 v2와 같은 수치를 보장하지 않습니다.** 사용할 수 없는 관측값은 N/A, 추정하지 못한 전파 출처는 unknown으로 남깁니다.
@@ -54,6 +56,6 @@ Import는 파일당 32MiB까지 지원합니다. 제공 형식은 metric JSONL, 
 - 추정된 eager/lazy, 알려지지 않은 출처, 모델 예측과 v2의 고정 역사적/ER 참고자료를 구분합니다. 새 로그의 메시지 ID도 실제 발신 큐 원인을 직접 증명하지 않습니다.
 - 중앙값과 모집단 합집합을 바로잡은 연구 집계를 사용합니다. Student-t는 가상 표본 60,000개를 만들거나 실패 시 임의 파라미터를 넣지 않고 관측 확률에 직접 적합합니다. 따라서 기존 Python 수치·파일 구조·그림의 완전한 동일성을 주장하지 않습니다.
 
-새 상세 ID와 그래프 간선은 해당 버전으로 배포한 이후 수집한 로그에만 존재합니다. 필드·생략 한도는 [API](api.kr.md#상세-peer-로그), 원본·분석·이미지 구분은 [보존 안내](monitoring.kr.md#분석-파일과-이미지-보존), v3에 추가한 실제 스트림 B/W의 범위는 [대역폭 정의](bandwidth.kr.md)를 참고하십시오.
+새 상세 ID와 그래프 간선은 해당 버전으로 배포한 이후 수집한 로그에만 존재합니다. 필드·생략 한도는 [API](api.kr.md#상세-peer-로그), 원본·분석·이미지 구분은 [보존 안내](results.kr.md#분석-파일과-이미지-보존), v3에 추가한 실제 스트림 B/W의 범위는 [대역폭 정의](bandwidth.kr.md)를 참고하십시오.
 
 계산 검증은 [연구 지표 테스트](../internal/controller/analysis_research_test.go)와 [출처 추정 테스트](../internal/controller/analysis_origin_test.go), 로그는 [Peer tracer 테스트](../internal/peer/tracer_test.go), 가져오기·비교·그림은 [연구 UI 테스트](../internal/webui/research_test.cjs)와 [결과 이미지 테스트](../internal/webui/result_images_test.cjs)에 있습니다. 소스 목록 검사는 [개발 안내](development.kr.md#문서-관리)를 따릅니다.

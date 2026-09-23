@@ -2,6 +2,8 @@
 
 [English](development.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 정식 Go 모듈 경로는 `github.com/k-p2p-lab/v3`이며 [`go.mod`](../go.mod)는 Go 1.25 이상을 요구합니다. 이 문서는 v3 개발 절차를 다룹니다. 프로젝트 목표와 개념 설계는 [Hub](https://github.com/k-p2p-lab/hub/blob/master/README.kr.md)에서 관리합니다.
 
 ## Linux 빌드와 검증
@@ -64,7 +66,7 @@ Windows에서는 편집과 정적 검사를 수행합니다. Windows 네이티�
 
 프로젝트 공통 목적·설계·연구·논문은 [Hub](https://github.com/k-p2p-lab/hub/blob/master/README.kr.md), 실행 동작·운영 계약은 v3에서 관리합니다. 영어가 기본이며 변경한 안내는 대응하는 `.kr.md`에도 반영합니다. 문서 제목과 UI 조작 이름을 구분하고 UI 이름은 실제 영어 표시를 유지합니다.
 
-지표의 수식·추정은 `experiment-metrics`와 `bandwidth`, endpoint·로그 스키마·분석 버전은 `api`, 저장 파일과 수명은 `monitoring`, 화면 조작은 `visualization`을 정본으로 삼습니다. 관련 문서는 정의를 복제하기보다 해당 절로 연결합니다. README의 문서 목록과 Hub↔v3 링크는 같은 언어의 안내로 연결하고 상대 경로·절 앵커·코드 예제를 확인하십시오.
+[공통 문서 관리 기준](https://github.com/k-p2p-lab/hub/blob/master/docs/DOCUMENTATION.kr.md)의 저장소 책임·분할·언어 쌍 규칙을 따르고 [문서 안내](README.kr.md)를 최신으로 유지하십시오. v3에서 `experiments`는 실행·복구, `results`는 저장 파일, `monitoring`은 운영 지표·로그, `api`는 HTTP·SSE 계약을 담당합니다. `experiment-metrics`와 `bandwidth`는 수식, `visualization`은 그림 조작의 기준입니다. 정의를 복제하지 않고 기준 문서로 연결합니다.
 
 v2 자료가 나란히 있을 때 분석 소스 목록은 다음과 같이 확인합니다.
 

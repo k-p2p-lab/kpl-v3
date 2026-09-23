@@ -2,6 +2,8 @@
 
 [English](api.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 Controller의 대시보드와 운영 API는 로그인 세션으로 보호합니다. 아래 [인증](#인증)에서 공개 모니터링 경로와 내부 서비스 인증을 구분합니다.
 
 Controller는 웹 접근과 인증 시도를 `<data-dir>/logs/access.jsonl`, `auth.jsonl`에 보존합니다. 비밀번호·쿠키·인증 헤더·쿼리는 기록하지 않습니다. 필드·회전·조회 방법은 [웹 접근·인증 로그](monitoring.kr.md#웹-접근인증-로그)를 참고하십시오.
@@ -74,11 +76,45 @@ Agent의 로컬 용량 제한 때문에 create-node 요청을 거절하면 Peer�
 
 최초 snapshot은 30초, 이후 snapshot·변경분·heartbeat 사이는 45초까지 기다립니다. 이를 넘으면 멈춘 연결을 닫고 SSE 오류와 같은 복구 경로를 실행합니다. 세션 확인은 8초 뒤 취소하며, 실패·시간 초과여도 다음 연결을 시도합니다. 401은 **Login required** 안내 페이지로 이동합니다. 반복 실패 시 재시도 간격은 무작위 편차를 포함해 약 2초에서 최대 30초까지 늘어나고, 데이터를 받으면 초기화합니다. 브라우저 `online` 이벤트는 오래된 연결·인증 확인을 취소하고 화면이 보이면 바로 재연결합니다. 화면을 숨기거나 떠나면 SSE와 진행 중인 세션 확인을 함께 취소합니다. 서버의 10초 쓰기 제한시간은 각 전송·flush 중에만 적용하고 직후 해제하므로 HTTP/2 유휴 연결이 다음 heartbeat 전에 끊기지 않습니다.
 
-## 실행 제출, 중지와 관측
+## 시나리오 라이브러리
 
 `POST /api/v1/scenarios/validate`는 원본 YAML 본문(`Content-Type: application/yaml`)을 최대 1 MiB까지 받습니다. 유효하면 `200`과 `{valid: true, name, phases}`를 반환합니다. 빈 입력, YAML 문법 오류, 알 수 없는 필드, 잘못된 설정, 여러 YAML 문서는 `400`과 `{error: "…"}`를 반환하며 파서가 제공하는 줄 번호를 보존합니다. 본문 한도 초과는 `413`입니다. 저장·실행과 같은 파서를 사용하지만 기록이나 job을 만들지 않으며 로그인 세션을 사용합니다. 설정 검증이며 Agent 용량이나 실행 시 연결성을 검사하지는 않습니다.
 
+요청과 응답 본문은 모두 JSON을 사용합니다. 큰 라이브러리도 가볍게 열 수 있도록 목록 응답에는 YAML을 넣지 않으므로, 편집하기 전에 개별 항목을 조회하십시오.
+
+| Method | Path | 본문 | 성공 응답 |
+|---|---|---|---|
+| `GET` | `/api/v1/scenarios` | 없음 | `id`, `name`, `createdAt`, `updatedAt` 요약 목록 |
+| `POST` | `/api/v1/scenarios` | `{ "name": "…", "yaml": "…" }` | 전체 항목과 `201` |
+| `GET` | `/api/v1/scenarios/{id}` | 없음 | `yaml`을 포함한 전체 항목 |
+| `PUT` | `/api/v1/scenarios/{id}` | `{ "name": "…", "yaml": "…" }` | 갱신된 전체 항목과 `200` |
+| `DELETE` | `/api/v1/scenarios/{id}` | 없음 | 본문 없는 `204` |
+
+조회·검증·변경 모두 로그인 세션이 필요합니다. 변경 요청의 `X-KPL-Request: dashboard` 헤더는 UI가 자동으로 전달합니다. 해석한 YAML이 1 MiB를 넘는 경우를 포함하여 유효하지 않은 입력은 `400`입니다. JSON 요청 본문은 escape된 문자를 고려해 `6 * 1 MiB + 64 KiB`까지 허용하며 이 한도를 넘으면 `413`입니다. 알 수 없는 JSON 필드와 후행 JSON 값은 거부합니다. 없거나 유효하지 않은 ID는 `404`, 저장소 오류는 `500`입니다. ID는 소문자 16진수 32자로 구성됩니다.
+
+`control-node:8080`은 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [API 인증](api.kr.md#인증)으로 `KPL_COOKIE_JAR`를 생성하십시오.
+
+```sh
+curl --fail -b "${KPL_COOKIE_JAR:?Log in first}" http://control-node:8080/api/v1/scenarios
+
+curl --fail -X POST http://control-node:8080/api/v1/scenarios \
+  -H 'Content-Type: application/json' \
+  -b "${KPL_COOKIE_JAR:?Log in first}" -H 'X-KPL-Request: dashboard' \
+  --data-binary @- <<'JSON'
+{"name":"Smoke baseline","yaml":"version: 2\nname: smoke-baseline\nphases:\n  - action: stop-all\n"}
+JSON
+```
+
+
+## 실행 제출, 중지와 관측
+
 `POST /api/v1/experiments`는 첫 run의 experiment 객체와 `202`를 반환합니다. `{scenario, repetitions}`를 제출하려면 `Content-Type: application/json`을 사용하십시오. `scenario`는 YAML 문자열이며 `repetitions`를 생략하면 기본값은 `1`입니다. 다른 content type은 원시 YAML로 처리합니다. 원시 YAML과 JSON에서 해석한 `scenario` 문자열의 한도는 각각 1 MiB입니다. JSON 요청 본문은 escape를 고려해 `6 * 1 MiB + 64 KiB`까지 허용합니다. 요청 본문 자체가 한도를 넘으면 `413`, 해석한 YAML 문자열이 한도를 넘거나 scenario/repetition이 유효하지 않으면 `400`입니다.
+
+3회 반복 JSON 요청 본문 예제:
+
+```json
+{"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
+```
 
 반복 제출은 매 iteration에 별도 run ID와 결과 기록을 예약하고 `batchId`, `iteration`, `repetitions`를 공유합니다. 순차 실행하며 실패하거나 취소된 iteration은 대기 중인 나머지 실행도 취소합니다. 반복 배치가 진행 중일 때 구성원 하나를 중지하면 해당 배치를 취소합니다. `repetitions > 1`에서는 마지막을 포함한 매 iteration이 최종 상태를 기록하기 전에 Peer를 fence하고 제거합니다. 자연스럽게 성공한 단일 실행만 YAML에 `stop-all`이 없을 때 Peer를 남겨둘 수 있습니다.
 
@@ -86,9 +122,9 @@ Agent의 로컬 용량 제한 때문에 create-node 요청을 거절하면 Peer�
 
 두 이어하기 모드는 접수한 HTTP 요청과 독립적으로 Controller에서 실행합니다. 새 회차 실행 전에 이전 Peer를 fence·제거하고 Agent 상태를 갱신합니다. 정리가 실패하거나 정리 중 사용자가 정지하면 대기 회차를 `canceled`로 기록하고 experiment 메타데이터에 이유를 남기며 새 회차는 시작하지 않습니다. Agent·정리 오류를 해결한 뒤 다시 이어하기를 실행할 수 있습니다. 실행·최종 정리·다운로드·개별 및 배치 분석이 진행 중이면 접수를 거절하며, 완료된 회차 기록은 덮어쓰지 않습니다.
 
-`GET /api/v1/experiments`, Dashboard snapshot/SSE와 최초 제출 응답의 실시간 experiment 객체에는 `timing`이 포함될 수 있습니다. 필드는 `estimatedFinishAt`(UTC), 음수가 아닌 `remainingSeconds`, `basis`(`scenario` 또는 `observed-runs`), `observedRuns`, `overdue`입니다. 진행 중인 반복 Run에는 `batchEstimatedFinishAt`, `batchRemainingSeconds`, `batchOverdue`도 포함됩니다(0·false인 선택 필드는 생략 가능). 대기 Run의 종료 시각에는 같은 배치의 선행 Run 시간이 포함됩니다. 완료·실패·취소된 Run이나 시간 정보가 부족한 경우 `timing`을 생략하며 결과 manifest에 저장하지 않습니다. 계산 방식과 불확실성은 [예상 종료 시각](scenario-library.kr.md#예상-종료-시각)을 참고하십시오.
+`GET /api/v1/experiments`, Dashboard snapshot/SSE와 최초 제출 응답의 실시간 experiment 객체에는 `timing`이 포함될 수 있습니다. 필드는 `estimatedFinishAt`(UTC), 음수가 아닌 `remainingSeconds`, `basis`(`scenario` 또는 `observed-runs`), `observedRuns`, `overdue`입니다. 진행 중인 반복 Run에는 `batchEstimatedFinishAt`, `batchRemainingSeconds`, `batchOverdue`도 포함됩니다(0·false인 선택 필드는 생략 가능). 대기 Run의 종료 시각에는 같은 배치의 선행 Run 시간이 포함됩니다. 완료·실패·취소된 Run이나 시간 정보가 부족한 경우 `timing`을 생략하며 결과 manifest에 저장하지 않습니다. 계산 방식과 불확실성은 [예상 종료 시각](experiments.kr.md#예상-종료-시각)을 참고하십시오.
 
-중지 endpoint는 cleanup 완료 전, 취소 요청을 접수하면 `202`와 JSON `{"runId":"run-id","status":"stopping"}`을 반환합니다. Dashboard는 snapshot에서 실행·대기 중인 구성원이 없음을 확인할 때까지 해당 실행 또는 배치의 버튼을 **Stopping…**으로 비활성화하며, 접수 응답만으로 버튼을 다시 활성화하지 않습니다. `/api/v1/experiments` 또는 snapshot에서 최종 상태를 확인하십시오. 취소 handle이 더 이상 없는 run은 `404`입니다. SSE는 최초 `event: snapshot`, 상태 변경을 최대 초당 한 번으로 합친 전체 snapshot(클라이언트 간 인코딩 공유), 이벤트가 없어도 15초마다 전체 snapshot를 보내며 event ID 기반 replay는 제공하지 않습니다. `/api/v1/events`는 현재 Controller 상태에서 가장 최근 event 최대 300개를 포함합니다.
+중지 endpoint는 cleanup 완료 전, 취소 요청을 접수하면 `202`와 JSON `{"runId":"run-id","status":"stopping"}`을 반환합니다. Dashboard는 snapshot에서 실행·대기 중인 구성원이 없음을 확인할 때까지 해당 실행 또는 배치의 버튼을 **Stopping…**으로 비활성화하며, 접수 응답만으로 버튼을 다시 활성화하지 않습니다. `/api/v1/experiments` 또는 snapshot에서 최종 상태를 확인하십시오. 취소 handle이 더 이상 없는 run은 `404`입니다. 경량·기존 스트림 계약은 [Dashboard SSE](#dashboard-sse)를 참고하십시오. `/api/v1/events`는 현재 Controller 상태에서 가장 최근 event 최대 300개를 포함합니다.
 
 저장소 루트에서 실행합니다. 호스트는 `access`가 표시한 Controller 주소로 바꾸고, 먼저 [인증](#인증) 절차로 `KPL_COOKIE_JAR`를 생성하십시오.
 
@@ -99,17 +135,29 @@ curl -X POST http://control-node:8080/api/v1/experiments \
   --data-binary @examples/smoke.yaml
 ```
 
-시나리오 라이브러리 endpoint는 재사용할 편집기 입력을 실험 결과와 별도로 저장합니다. 목록에서는 YAML을 제외하고, 개별 GET·POST·PUT 응답에는 포함합니다. UI 사용 순서, payload, 검증 제한과 저장 위치는 [시나리오 라이브러리 안내](scenario-library.kr.md)를 참고하십시오.
+시나리오 라이브러리 endpoint는 재사용할 편집기 입력을 실험 결과와 별도로 저장합니다. 목록에서는 YAML을 제외하고, 개별 GET·POST·PUT 응답에는 포함합니다. UI 사용 순서와 저장 위치는 [시나리오 라이브러리 안내](scenario-library.kr.md), payload와 검증 제한은 [라이브러리 API](#시나리오-라이브러리)를 참고하십시오.
+
+## 저장 결과와 다운로드
+
+결과 API는 시작 시각 최신순을 유지하되 queued처럼 시작 시각이 같으면 배치·회차·ID 순서로 정렬합니다.
 
 typed 대역폭 표본을 포함한 원시 이벤트는 `<data-dir>/runs/<run-id>/events.jsonl`, 실행 입력은 같은 디렉터리의 `scenario.yaml`, 실험 메타데이터는 `experiment.json`, 수집한 그래프 표본·토폴로지·점수 요약은 선택적 `observations.jsonl`에 저장됩니다. 로컬 Controller의 기본 data 디렉터리는 `data`입니다. Swarm에서는 영구 `controller-data` 볼륨을 `/var/lib/kpl/data`에 마운트하며, 실험별 파일은 그 아래 `runs/<run-id>`에 저장됩니다.
 
-대시보드의 **Download results**로 실험 결과를 ZIP으로 받을 수 있습니다. **Saved results**에는 이전 Controller 실행에서 보존된 결과도 표시되며, **Refresh**로 목록을 다시 읽습니다. 실행 중 실험의 **Download snapshot**은 다운로드 시작 시점까지 저장된 기록을 담습니다. 최근 300개 이벤트 버퍼와 별개로 저장된 전체 이벤트 로그를 내보냅니다. 파일 구성과 수집 한계는 [실험 결과 다운로드](monitoring.kr.md#실험-결과-다운로드)를 참고하십시오.
+대시보드의 **Download results**로 실험 결과를 ZIP으로 받을 수 있습니다. **Saved results**에는 이전 Controller 실행에서 보존된 결과도 표시되며, **Refresh**로 목록을 다시 읽습니다. 실행 중 실험의 **Download snapshot**은 다운로드 시작 시점까지 저장된 기록을 담습니다. 최근 300개 이벤트 버퍼와 별개로 저장된 전체 이벤트 로그를 내보냅니다. 파일 구성과 수집 한계는 [실험 결과 다운로드](results.kr.md#실험-결과-다운로드)를 참고하십시오.
 
-`GET /api/v1/results`의 `sourceBytes`는 마지막 조회 시점에 저장된 시나리오·실험 메타데이터·이벤트·관측 원본 파일의 압축 전 바이트 합계입니다. 실행·대기 중 결과에도 제공하며 로그 본문을 읽거나 ZIP을 생성하지 않습니다. 분석 캐시와 생성 이미지는 제외합니다. 안전하게 파일 크기를 조회할 수 없을 때만 생략합니다. 화면은 이 값을 사용하며 자동 ZIP 크기 측정을 요청하지 않습니다.
+`GET /api/v1/results`는 저장 기록을 반환합니다. 결과 목록의 `sourceBytes`는 `scenario.yaml`, `experiment.json`, `events.jsonl`, `observations.jsonl` 중 현재 존재하는 일반 파일의 크기를 합산한 바이트 수입니다. 로그 본문을 읽거나 분석·압축하지 않고 파일 통계만 조회하므로 큰 결과도 용량을 빠르게 표시합니다. 생성된 분석 캐시·이미지, 다운로드 시 생성하는 `metrics.json`·`export.json`, 파일시스템 할당 오버헤드는 제외합니다. 메타데이터가 손상되어도 원본 파일 크기를 조회할 수 있으면 용량을 표시합니다. 원본 파일 자체의 통계를 읽을 수 없으면 `sourceBytes`를 생략하고 화면에는 **Source · —**로 표시합니다.
 
 `DELETE /api/v1/results/{id}`는 삭제 성공 시 `204`, 결과가 없으면 `404`, 실행·배치가 활성 상태이거나 실제 `GET` 다운로드가 결과를 사용 중이면 `409`를 반환합니다. 직접 요청한 `HEAD` 크기 계산과 목록 조회는 다운로드 충돌로 처리하지 않습니다.
 
 `DELETE /api/v1/result-batches/{batchId}`는 로그인 세션과 정확한 배치 ID를 사용합니다. 파일을 삭제하기 전에 전체 구성원을 검사하며 실행·정리 중인 run이나 구성원의 ZIP 다운로드가 있으면 `409`를 반환합니다. 실패·취소 run을 포함한 모든 저장 구성원, 개별 분석, 별도 통합 평균을 제거합니다. 성공 시 `200`과 `{"deletedIds":["run-id", "..."]}`를 반환하며 그룹이 없으면 `404`입니다. 원본 없이 남은 통합 평균도 제거할 수 있습니다. 저장 장치 오류는 `500`이며 일부 삭제가 끝났을 수 있으므로 목록을 갱신하고 저장 오류를 해결한 뒤 재시도하십시오. 브라우저는 요청에 30초 제한 시간을 적용하며 그 이후에도 Controller에서 완료될 수 있습니다.
+
+대시보드는 용량 표시를 위한 `HEAD` 요청이나 ZIP 크기 재측정 타이머를 실행하지 않습니다. 직접 호출하는 `HEAD /api/v1/experiments/RUN_ID/download`는 기존처럼 ZIP encoder를 바이트 counter에 실행하여 정확한 `Content-Length`를 반환하며, 실제 GET 다운로드도 해당 측정을 사용합니다. ZIP은 메모리나 디스크에 통째로 보관하지 않고 스트리밍합니다. 같은 run의 동시 측정은 공유하고 서로 다른 run의 측정은 최대 두 개로 제한합니다. 기존 API 호환성을 위해 목록은 준비된 ZIP 크기가 유효하면 `downloadBytes`도 제공하지만 화면은 이를 사용하지 않습니다.
+
+Pending publication이 없으면 파일과 상태가 같은 동안 측정한 바이트 수를 유지하면서 HEAD 또는 다운로드마다 정밀도를 유지한 새 export 시각을 기록합니다. 저장 방식이 고정된 `export.json`에는 고정 폭 시각 문자열을 사용하므로 시각이 바뀌어도 인코딩 길이는 같습니다. Stable 목록 행에는 `downloadSizeMaxAgeMs`가 없고 stable HEAD 응답에는 `X-KPL-Result-Size-Max-Age-Ms`가 없습니다. Pending publication이 있으면 바이트 수와 export 경계를 짧게 함께 재사용합니다. 목록 행은 `downloadSizeMaxAgeMs`를 포함하고 HEAD는 `X-KPL-Result-Size-Max-Age-Ms`를 제공합니다. 두 값은 서버의 남은 cache 유효 시간에서 응답 안전 여유 1초를 뺀 양의 밀리초이므로 client와 server의 시계가 일치하지 않아도 됩니다. 준비된 값을 처음 확인한 목록만 유효 시간을 한 번 연장하고, 연장한 경계에서 계산한 max age를 응답하므로 바로 이어지는 GET이 표시 크기와 일치합니다. 목록을 반복해서 새로고침해도 deadline이 계속 밀리지는 않습니다. 안전 여유를 제외하고 남은 유효 시간이 없으면 목록은 `downloadBytes`와 `downloadSizeMaxAgeMs`를 모두 생략하고, HEAD는 응답 전에 새 경계를 측정합니다.
+
+Controller 시작 후 첫 HEAD나 원본 파일·상태 변경 뒤에는 캡처한 파일을 읽고 지표를 다시 구성해야 하며, pending 결과는 짧은 cache가 만료된 뒤 이 작업을 반복합니다. 측정 slot 대기, 원본 로그 읽기와 재구성한 지표 집계 단계에서 HTTP 요청 취소를 확인하며, 취소된 요청은 server error 응답 없이 중단합니다. 저장한 이벤트 로그가 크면 측정 시간이 길어질 수 있습니다. 이 비용은 직접 요청한 HEAD나 실제 다운로드에만 발생하며, 화면의 원본 용량 표시에는 필요하지 않습니다.
+
+ZIP 원본 복사는 스트리밍하며 지표 재구성에는 고유 이벤트 ID·메시지/수신 쌍에 비례한 메모리가 필요합니다.
 
 ## 백그라운드 분석
 
@@ -132,7 +180,7 @@ typed 대역폭 표본을 포함한 원시 이벤트는 `<data-dir>/runs/<run-id
 
 완료 후 `GET` 또는 `HEAD` `/api/v1/analysis-jobs/{id}/result?jobId={jobId}`는 전체 JSON, `/summary?jobId={jobId}`는 비교용 자료를 반환합니다. `jobId`를 지정하면 다른 분석 시도를 내려받지 않도록 확인하며 생략하면 현재 완료 시도를 선택합니다. 미완료·시도 불일치는 `409`, 실행 부재는 `404`, 잘못되거나 읽을 수 없는 저장 자료는 보통 `422`입니다. 경량 응답은 `observations`, `timeline`, `bandwidthTimeline`, `research.messages`를 빈 배열로 두고 `messageCount`·지표·집계·분포·적합 결과를 유지합니다. 개별 메시지 경로나 원본 시계열 용도로 사용할 수 없습니다. 두 응답 모두 `analysisId`, `analysisVersion`, 원본 경계 `asOf`를 포함합니다.
 
-`GET /api/v1/experiments/{id}/analysis`는 2분 요청 제한의 동기 호환 경로입니다. 보존되는 백그라운드 작업을 만들지 않고 응답을 계산합니다. 긴 분석과 나중 다운로드에는 job API를 사용하십시오. 연구 정의는 [지표 가이드](experiment-metrics.kr.md#저장-결과-연구-지표), 보존 파일은 [모니터링](monitoring.kr.md#분석-파일과-이미지-보존), 브라우저 조작은 [시각화](visualization.kr.md)에서 관리합니다.
+`GET /api/v1/experiments/{id}/analysis`는 2분 요청 제한의 동기 호환 경로입니다. 보존되는 백그라운드 작업을 만들지 않고 응답을 계산합니다. 긴 분석과 나중 다운로드에는 job API를 사용하십시오. 연구 정의는 [지표 가이드](experiment-metrics.kr.md#저장-결과-연구-지표), 보존 파일은 [모니터링](results.kr.md#분석-파일과-이미지-보존), 브라우저 조작은 [시각화](visualization.kr.md)에서 관리합니다.
 
 ## 반복 실험 통합 분석
 

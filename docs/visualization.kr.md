@@ -2,6 +2,8 @@
 
 [English](visualization.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 **Saved results → Images**에서 백그라운드 분석을 시작합니다. 서버가 로그 읽기·그래프 지표·전파 경로·분포 적합·저장 단계를 처리하고, 완료 데이터를 브라우저가 흰 배경의 가로 1,600px PNG로 만듭니다. **Graph images**는 기본으로 접힌 차트 제목 목록이며, 제목을 펼치면 이미지와 **PNG ↓ / CSV ↓** 링크를 표시합니다. **Download analysis JSON**은 서버에 저장된 전체 분석입니다.
 
 **Graph protocol**에서 **GossipSub**(기본값), **Kad**, **Transport**를 선택하면 그래프 지표별 제목 한 행에서 해당 프로토콜의 별도 이미지를 확인합니다. 같은 창에서 프로토콜을 전환해도 펼친 제목은 유지합니다. 공통 지연·전파·대역폭 차트는 바뀌지 않습니다. **Download all PNG + CSV (ZIP)**에는 선택한 프로토콜이나 제목의 펼침 여부와 관계없이 세 프로토콜의 별도 PNG·CSV와 차트 정의를 모두 포함합니다.
@@ -64,6 +66,6 @@ Eager Push/Lazy Pull 색상과 기여 값은 메타정보 추정입니다. 분�
 
 [백그라운드 분석 API](api.kr.md#백그라운드-분석)는 작업 상태·버전·원본 snapshot 시점과 전체/경량 응답을 정의합니다. 원본 경계는 대기열 접수 시점이 아니라 해당 작업이 계산 슬롯을 얻은 뒤 잡힙니다. 완료 작업은 이 경계를 유지하므로 나중에 도착한 로그를 포함하려면 **Analyze latest snapshot**을 사용하십시오.
 
-서버는 완료 분석 JSON을 보존하고, PNG·CSV·비교 ZIP은 창을 열었을 때 브라우저에서 생성합니다. **Download results**의 원본 ZIP과 이 화면의 **Download analysis JSON**, **Download all PNG + CSV (ZIP)**은 서로 다른 파일입니다. 파일별 구성·보존 범위는 [분석 파일과 이미지 보존](monitoring.kr.md#분석-파일과-이미지-보존)을 참고하십시오.
+서버는 완료 분석 JSON을 보존하고, PNG·CSV·비교 ZIP은 창을 열었을 때 브라우저에서 생성합니다. **Download results**의 원본 ZIP과 이 화면의 **Download analysis JSON**, **Download all PNG + CSV (ZIP)**은 서로 다른 파일입니다. 파일별 구성·보존 범위는 [분석 파일과 이미지 보존](results.kr.md#분석-파일과-이미지-보존)을 참고하십시오.
 
 [실험 지표](experiment-metrics.kr.md) · [v2 기능 대조](v2-analysis-coverage.kr.md) · [Bandwidth](bandwidth.kr.md)

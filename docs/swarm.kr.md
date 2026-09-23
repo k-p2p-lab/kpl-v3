@@ -2,6 +2,8 @@
 
 [English](swarm.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 하나 이상의 Linux 서버에서 활성 Swarm manager의 `scripts/swarm.sh`로 `stack.swarm.yaml`을 배포·관리합니다. Swarm은 **선택한 서버마다 Agent 하나**를 유지하고, Controller가 실험의 Peer를 Agent에 배분합니다. Peer는 해당 서버의 독립 Docker 컨테이너입니다. Swarm 서비스처럼 Peer를 다른 서버로 자동 재배치하지 않습니다.
 
 실행 가능한 배포 근거는 [`stack.swarm.yaml`](../stack.swarm.yaml), [`scripts/swarm.sh`](../scripts/swarm.sh), [`scripts/swarm-config.sh`](../scripts/swarm-config.sh)입니다. 실제 서비스·네트워크 대응은 [v3 아키텍처](architecture.kr.md)를, 개념 아키텍처는 [Hub](https://github.com/k-p2p-lab/hub/blob/master/README.kr.md)를 참고하십시오.
@@ -112,7 +114,7 @@ sh scripts/swarm.sh scenario
 
 실험이 끝나고 해당 Peer들이 종료되었는지 확인하십시오. 다른 실험이 없다면 Agent 점유량은 0으로 돌아와야 합니다. 실행 중인 실험을 취소하려면 해당 실험의 **Stop**을 누르고 정리가 완료될 때까지 기다립니다.
 
-실험 항목이나 **Saved results**에서 **Download results**를 선택합니다. ZIP에는 `scenario.yaml`, `experiment.json`, `events.jsonl`, 선택적 `observations.jsonl`, `metrics.json`, `export.json`이 들어갑니다. 수집된 관측 요약·표본 그래프·대역폭 카운터도 포함합니다. 최근 300개 버퍼와 별개로 전체 저장 로그와 같은 경계에서 재계산한 지표를 포함하며 Prometheus/Grafana DB는 포함하지 않습니다. 실행 중 **Download snapshot**은 다운로드 경계까지의 기록입니다. **Delete**는 확인 후 비활성 결과를 삭제합니다. [다운로드 구성과 한계](monitoring.kr.md#실험-결과-다운로드)
+실험 항목이나 **Saved results**에서 **Download results**를 선택합니다. ZIP에는 `scenario.yaml`, `experiment.json`, `events.jsonl`, 선택적 `observations.jsonl`, `metrics.json`, `export.json`이 들어갑니다. 수집된 관측 요약·표본 그래프·대역폭 카운터도 포함합니다. 최근 300개 버퍼와 별개로 전체 저장 로그와 같은 경계에서 재계산한 지표를 포함하며 Prometheus/Grafana DB는 포함하지 않습니다. 실행 중 **Download snapshot**은 다운로드 경계까지의 기록입니다. **Delete**는 확인 후 비활성 결과를 삭제합니다. [다운로드 구성과 한계](results.kr.md#실험-결과-다운로드)
 
 철거하면 웹 화면도 내려가므로 먼저 다운로드한 뒤 실행하십시오.
 
@@ -262,25 +264,7 @@ sh scripts/swarm.sh status
 
 ## 분배와 용량
 
-| 설정 | 배치 동작 |
-|---|---|
-| `placement: balanced` (기본) | Peer 하나를 추가한 예상 점유량/유효 capacity가 가장 낮은 online Agent부터 배치. 동률은 현재 점유율, Agent ID 순서 |
-| `placement: random` | 여유가 있는 online Agent 중 시드 기반 선택 |
-| `placement: single-agent` | 한 join 실행을 선택한 Agent 하나에 고정. repeat는 회차마다 재선택. 가득 차면 다른 서버로 넘기지 않고 대기 |
-| `agentId` | 지정한 Agent로 고정. 물리 서버 고정 실험은 `/api/v1/agents`의 ID 사용 |
-| `parallelism` | `parallel: true`인 join에서 동시에 실행할 작업 수. 서버 수나 Swarm replica 수와 다름 |
-
-capacity는 Peer 개수의 admission 제한이며 CPU·메모리 예약이나 cgroup 한도가 아닙니다. Agent의 Swarm resource 제한을 바꾸어도 형제 컨테이너인 Peer에 전파되지 않습니다. 제공된 stack은 `KPL_AGENT_CAPACITY`를 모든 Agent의 시작 기본값으로 사용합니다. **Dashboard → Agent status → Configure**에서 **Custom for this Agent**를 선택하면 해당 Agent ID에만 예외값을 지정합니다. **CLI default**를 선택하면 예외값을 삭제합니다. 예를 들어 `KPL_AGENT_CAPACITY=200`을 유지한 채 특정 Agent만 `100`으로 설정하면 다른 Agent는 계속 `200`을 사용합니다. CPU/RAM/FD/conntrack 및 Docker daemon 부하를 측정해 capacity를 정하십시오.
-
-Agent별 예외값은 `<controller-data-dir>/agent-capacities.json`에 저장하며 Controller 볼륨과 Agent ID가 같으면 Controller·Agent 재시작 뒤에도 유지합니다. Controller 백업에 이 파일을 포함하십시오. Agent ID가 바뀌면 별도 설정 대상입니다. 오프라인 Agent의 설정은 재접속할 때 적용합니다. Controller와 Agent 모두 이 기능을 지원하는 버전이어야 하며, 구버전 Agent는 UI의 Configure 버튼을 비활성화합니다.
-
-Balanced 배치는 웹 예외값을 포함한 각 Agent의 유효 capacity에 비례합니다. 다른 부하가 없는 capacity 100과 50의 Agent에 Peer 75개를 예약하면 50개와 25개로 배분합니다. 점유량에는 모든 실험의 Peer, 생성 예약, 제거 중인 컨테이너를 포함합니다. 기존 Peer는 이동하지 않고 새 join과 churn으로 비워지는 슬롯을 통해 점유 비율을 맞춥니다. 명시적 `agentId`, `random`, `single-agent`는 지정한 배치 정책을 유지합니다.
-
-서비스 재시작 없이 등록·heartbeat 응답으로 설정을 전달합니다. 표에는 CLI 기본값 또는 예외값과 적용 확인 전 **Applying…**을 표시합니다. 용량을 낮추면 새 배치 제한을 즉시 적용하고 기존 Peer는 유지합니다. 현재 점유량이 한도보다 크면 여유가 생길 때까지 새 join이 대기합니다. 증가는 Agent가 현재 설정을 적용했다고 확인한 뒤 사용할 수 있습니다. Agent 자체 생성 제한과 capacity 메트릭에도 변경값을 반영합니다.
-
-동시 실험의 예약은 Controller에서 직렬화합니다. Agent는 생성 요청 수락부터 **삭제 완료 확인까지** 슬롯을 유지하므로 Docker 생성·시작 대기 시간도 포함하며, 삭제 실패도 점유량에 포함합니다. Controller는 DELETE 응답만으로 슬롯을 재사용하지 않습니다. 네트워크 단절로 보고가 10초 넘게 없으면 신규 배치에서 제외하며, 이전 Agent 프로세스나 순서가 뒤집힌 보고가 현재 노드·용량을 덮어쓰지 않도록 검사합니다. 같은 ID의 새 Agent는 이전 프로세스의 online 유효 시간이 끝난 뒤 등록됩니다.
-
-Docker 생성 admission에는 45초의 예산을 적용합니다. 이후 설정 복사·시작·주소 확인은 새로 시작하는 45초 예산을 공유합니다. 원래 요청의 deadline이 더 짧으면 두 단계 모두 이를 따릅니다. admission 도중 취소는 늦게 생성된 컨테이너를 정리할 수 있도록 제한 시간 안에서 생성 결과를 확보할 때까지 보류하며, 시작 단계는 즉시 취소할 수 있습니다. [`internal/agent/docker.go`](../internal/agent/docker.go)를 참고하십시오. 혼잡한 서버에서 이 제한을 반복해서 초과하면 join `parallelism`과 capacity를 낮추고 디스크·데몬 부하를 점검하십시오.
+시작 기본값과 Agent별 UI 예외는 [Agent 용량과 배치](agents.kr.md)에서 설정합니다. 해당 문서에서 balanced/random/고정 배치, 비례 할당, 생성 허용과 정리 중 점유를 설명합니다. 아래는 배포 네트워크 제약입니다.
 
 Docker는 일반적인 overlay에 `/24` 규모를 권장합니다. 주소에는 Peer뿐 아니라 서비스 task·endpoint도 포함되므로 `서버 수 × capacity`를 주소 수만큼 꽉 채우지 마십시오. 기본 20은 시작용 설정이며 성능 보장이 아닙니다. v2의 `/16`을 그대로 확대하거나 capacity만 올리는 방식으로 수천 Peer 지원을 주장할 수 없습니다. 현재 구성은 단일 공통 Peer overlay를 사용하므로 수백·수천 Peer에는 여러 네트워크 간 도달성 설계와 별도 부하 시험이 필요합니다. [Swarm overlay 크기 제한](https://docs.docker.com/engine/swarm/networking/#overlay-network-size-limitations)
 
@@ -307,7 +291,7 @@ Agent update/rollback은 `stop-first`입니다. `start-first`로 바꾸면 같�
 
 노드 drain은 Swarm 서비스 task에 적용됩니다. v3 Peer는 standalone 컨테이너이므로 Swarm이 직접 이전하지 않습니다. 정상 Agent 종료에서 Peer를 정리하고, 비정상 종료 후에는 동일 Agent ID·Peer network name으로 같은 노드에서 재시작할 때 잔존 컨테이너를 회수합니다. 노드 재가입, stack/service 이름 변경 또는 네트워크 이름 변경 시 이전 소유 범위의 잔존 Peer는 해당 서버에서 label을 확인해 별도로 정리해야 합니다. 전체 호스트 정지·네트워크 단절을 다른 서버의 Peer 재생성으로 숨기지 않습니다.
 
-Controller는 단일 인스턴스이며 공유 DB/leader election을 구현하지 않았습니다. `replicas: 1`을 유지하십시오. control 노드 장애 시 자동으로 빈 로컬 volume을 쓰는 다른 노드로 이동하지 않으며, 백업 복원과 새 Node ID 지정이 필요합니다. Controller는 실시간 실험 상태·counter를 시작 시 메모리에 복원하거나 실행 중 실험을 자동 재개하지 않습니다. 보존된 파일은 재시작 후에도 대시보드의 **Saved results**와 [결과 다운로드 API](monitoring.kr.md#실험-결과-다운로드)에서 받을 수 있습니다. 이전에 실행 중이었던 기록은 `interrupted`로 표시하지만 Peer 정리를 확인한 상태는 아닙니다.
+Controller는 단일 인스턴스이며 공유 DB/leader election을 구현하지 않았습니다. `replicas: 1`을 유지하십시오. control 노드 장애 시 자동으로 빈 로컬 volume을 쓰는 다른 노드로 이동하지 않으며, 백업 복원과 새 Node ID 지정이 필요합니다. Controller는 실시간 실험 상태·counter를 시작 시 메모리에 복원하거나 실행 중 실험을 자동 재개하지 않습니다. 보존된 파일은 재시작 후에도 대시보드의 **Saved results**와 [결과 다운로드 API](results.kr.md#실험-결과-다운로드)에서 받을 수 있습니다. 이전에 실행 중이었던 기록은 `interrupted`로 표시하지만 Peer 정리를 확인한 상태는 아닙니다.
 
 Controller crash만으로 Agent의 Peer가 종료되지는 않습니다. 정상 Controller 종료는 활성 run을 취소한 뒤 등록된 Agent에 남은 Peer 제거를 요청하며, `stop-all`을 생략한 완료된 단일 run의 Peer도 포함합니다. 계획된 업데이트 전에는 활성 run을 완료하거나 취소하고 이 정리가 끝날 때까지 기다리십시오. Agent에 연결할 수 없거나 정리가 실패하면 종료 오류를 보고하므로 해당 호스트의 잔존 컨테이너를 확인해야 합니다.
 
@@ -323,7 +307,7 @@ Controller 기록, Prometheus 시계열과 Grafana 데이터는 `KPL_CONTROL_NOD
 
 Controller 데이터 디렉터리에 쓸 수 없으면 시작이 실패합니다. 실행 메타데이터는 임시 파일에 쓴 뒤 같은 파일시스템에서 rename하여 부분 JSON 읽기를 방지하며 이벤트 로그는 append로 기록합니다. 쓰기마다 강제로 디스크에 동기화하지 않으므로 전원 장애 때 최근 기록을 잃을 수 있습니다. 재시작 후 보존 결과에 접근할 수 있지만 실시간 실행과 counter는 복원하지 않습니다.
 
-백그라운드 분석의 상태·완료 JSON·비교 요약도 Controller 볼륨에 보존됩니다. 완료 결과는 재시작 후 재사용하며 미완료·취소 작업은 다시 접수합니다. 일반 실행 ZIP에는 이 분석 캐시가 포함되지 않으므로 보존 경계는 [분석 파일과 이미지](monitoring.kr.md#분석-파일과-이미지-보존)를 참고하십시오.
+백그라운드 분석의 상태·완료 JSON·비교 요약도 Controller 볼륨에 보존됩니다. 완료 결과는 재시작 후 재사용하며 미완료·취소 작업은 다시 접수합니다. 일반 실행 ZIP에는 이 분석 캐시가 포함되지 않으므로 보존 경계는 [분석 파일과 이미지](results.kr.md#분석-파일과-이미지-보존)를 참고하십시오.
 
 ## 검증 범위
 

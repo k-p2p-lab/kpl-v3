@@ -2,6 +2,8 @@
 
 [English](protocol-options.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 이 문서는 고정 의존성 `go-libp2p-pubsub v0.13.1`, `go-libp2p-kad-dht v0.31.0`에 대한 선언형 노드 설정을 설명합니다. 각 블록은 시나리오 profile 또는 join phase의 `node`에 작성합니다. [시나리오 설정](scenario-reference.kr.md)과 [프로토콜 예제](../examples/protocol-options.yaml)를 참고하십시오. 실험은 [Swarm](swarm.kr.md)에서 실행하며 배포 전에 `kpl validate --scenario FILE`로 YAML을 검증합니다.
 
 Duration에는 `250ms`, `1s`, `5m` 같은 Go 문자열을 사용합니다. 포인터로 표현하는 숫자·boolean 설정은 유효한 범위에서 명시적인 `0`·`false`를 보존합니다. List와 map은 상속된 list·map 전체를 교체합니다. `score`, `peerGater`, `discovery` 같은 선택적 객체 블록도 상속된 객체 전체를 교체하므로 유지하려는 설정을 다시 작성해야 합니다. `enabled: true`가 없는 `score` 블록은 활성 profile score를 교체한 경우에도 비활성입니다.

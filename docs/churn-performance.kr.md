@@ -1,8 +1,16 @@
-# 반복 Churn 실험의 Controller 부하
+# Controller 성능 조사와 벤치마크
+
+[English](churn-performance.md) | 한국어
+
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
+구현에 대한 근거이며 용량 보장은 아닙니다. 운영 중인 배포는 [Agent 용량](agents.kr.md)과 [모니터링](monitoring.kr.md)부터 확인하십시오. 아래는 과거 조사 기록이며 이번 문서 재구성으로 측정을 다시 수행한 것은 아닙니다.
 
 2026-09-22 조사에서 누적 Peer 기록은 65,227개였고, Prometheus의 최근 5분 평균에서 Controller는 약 7.17개 코어와 초당 약 526MB의 메모리 할당을 기록했습니다. 메모리 할당률은 사용 중인 메모리 크기와 별개이며, 짧게 쓰고 버리는 객체의 생성·회수 비용도 포함합니다.
 
-## 원인과 변경
+<a id="원인과-변경"></a>
+
+## 조사한 경로와 구현 변경
 
 - `/api/v1/bootstrap`이 주소 목록을 구하기 위해 전체 snapshot을 생성했습니다. 이 과정에서 과거 Peer 전체 복사·정렬, 실험 지표 및 토폴로지 계산이 발생했습니다. 이제 활성 노드 인덱스에서 해당 실행의 ready boot 주소만 읽습니다.
 - Discovery와 부분 heartbeat의 점유량 확인도 활성 노드 인덱스를 사용합니다. 부분 heartbeat에서 생략된 노드를 찾기 위한 전체 이력 순회를 제거했습니다.
@@ -38,3 +46,7 @@ rate(go_memstats_alloc_bytes_total{job="kpl-controller"}[5m])
 sum by (state) (kpl_nodes)
 kpl_local_telemetry_queue_events
 ```
+
+## SSE 전송량 근거
+
+기존 대용량 trace 합성 회귀 테스트는 20초간 21회 갱신에서 경량 Dashboard 스트림의 JSON 전송량을 85,767,024바이트에서 170,144바이트로 줄였습니다. 이는 회귀 테스트 입력의 측정값이며 모바일 네트워크 실측이나 임의 규모의 전송량 보장은 아닙니다. 현재 형식은 [Dashboard SSE](api.kr.md#dashboard-sse), 운영 확인은 [연결 진단](monitoring.kr.md#대시보드-스트림-전송량)을 참고하십시오.

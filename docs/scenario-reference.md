@@ -2,6 +2,8 @@
 
 English | [Korean](scenario-reference.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 This guide describes the version 2 YAML format, Peer profiles, protocol controls, network conditions, and background jobs. For saving reusable YAML in the Dashboard, see the [scenario library](scenario-library.md).
 
 ## Top-level fields

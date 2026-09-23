@@ -2,6 +2,8 @@
 
 English | [Korean](topology.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 ## Read the graph
 
 **Ready Peers** counts nodes whose latest reported state is `ready`. The topology also shows `starting` nodes, so its total can be larger during joins/churn. Its header separates total, ready, and starting counts; the center marked **TOTAL** and the Agent-sector counts refer to all displayed Peers. The metric card also shows **Topology** (total) and **Starting** beneath its Ready count. Stopping, stopped, and failed nodes are excluded; any unrecognized visible state is counted separately as **Other**. Both displays use the same cluster snapshot, including Peers retained from other runs. Run selection, relationship layers, and topic filters do not change these population counts. These are reported lifecycle states, not a fresh reachability check.
@@ -24,7 +26,7 @@ Hover over a Peer to emphasize its visible neighbors and dim unrelated lines. Se
 
 **Pause motion** keeps existing Peer positions while leaving filters, selection, zoom, and pan available. New Peers and changes to Agent sectors still appear immediately. **Resume motion** lets the layout settle again.
 
-The **Network overview** header's **Collapse / Expand** button hides or shows the entire panel. A collapsed panel stops layout animation while live state continues to update. Reopening shows the latest topology and preserves the chosen motion setting. See [panel visibility](monitoring.md#show-and-hide-panels) for saved preferences and the other panel controls.
+The **Network overview** header's **Collapse / Expand** button hides or shows the entire panel. A collapsed panel stops layout animation while live state continues to update. Reopening shows the latest topology and preserves the chosen motion setting. See [panel visibility](dashboard.md#show-and-hide-panels) for saved preferences and the other panel controls.
 
 With the operating system or browser's reduced-motion preference enabled, animated settling is off by default. The initial layout and relationship changes use a bounded settling calculation and display the result without intermediate animation. You can explicitly choose **Resume motion** to enable animation.
 
@@ -76,7 +78,7 @@ Older Peers lacking overlay snapshots provide only Transport lines. The graph re
 
 During a run, the Controller saves group state/degree/clustering/score summaries and protocol graph samples in `observations.jsonl` about every five seconds. Each `graphs` item has `protocol`, sorted Node IDs in `nodes`, aligned `groups`, and node-index pairs in `edges`. Edges are unique and undirected; GossipSub merges the same peer pair across topics. The live edge fields `topic` and `reportedBy` are not retained in this graph format. Changes between samples and individual observer-to-peer scores are not retained.
 
-`events.jsonl` preserves collected GRAFT/PRUNE transitions and [detailed RPC metadata](api.md#detailed-peer-logs), subject to telemetry loss. Historical summaries without edges cannot recover new graph metrics. Use the [result ZIP](monitoring.md#download-experiment-results) for source records and [research metrics](experiment-metrics.md#research-graph-observations) for thinning and graph calculations. Layer visibility and layout do not change the main delivery definition.
+`events.jsonl` preserves collected GRAFT/PRUNE transitions and [detailed RPC metadata](api.md#detailed-peer-logs), subject to telemetry loss. Historical summaries without edges cannot recover new graph metrics. Use the [result ZIP](results.md#download-experiment-results) for source records and [research metrics](experiment-metrics.md#research-graph-observations) for thinning and graph calculations. Layer visibility and layout do not change the main delivery definition.
 
 ## Development checks
 

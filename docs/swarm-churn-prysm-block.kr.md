@@ -2,6 +2,8 @@
 
 [English](swarm-churn-prysm-block.md) | 한국어
 
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
+
 [`examples/swarm-churn-prysm-block.yaml`](../examples/swarm-churn-prysm-block.yaml)은 제시한 boot 10개, warm-up 5분, 4KiB 실험을 확장하여 세 그룹에서 동시에 churn을 실행합니다. 모든 worker가 `kpl/prysm/beacon_block` 토픽을 공유하며 발행 그룹을 돌아가면서 선택합니다.
 
 ## 그룹과 실행 순서

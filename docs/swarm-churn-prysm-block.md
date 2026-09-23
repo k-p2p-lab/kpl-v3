@@ -2,6 +2,8 @@
 
 English | [Korean](swarm-churn-prysm-block.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 [`examples/swarm-churn-prysm-block.yaml`](../examples/swarm-churn-prysm-block.yaml) extends the supplied 10-boot, 5-minute warm-up, 4-KiB experiment with three concurrent churn jobs. All workers share `kpl/prysm/beacon_block`; publisher cohorts rotate while all three cohorts receive messages.
 
 ## Cohorts and scheduling

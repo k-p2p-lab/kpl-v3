@@ -1,30 +1,10 @@
-# 실험 지표와 반복 실행
+# 실험 지표 정의
 
 [English](experiment-metrics.md) | 한국어
 
-이 가이드는 v3가 구현한 계산을 정의합니다. 메인 Metrics·저장 연구 그림·대역폭은 아래에서 구분한 정의를 사용합니다. 프로젝트 공통 연구 배경은 [Hub 연구 가이드](https://github.com/k-p2p-lab/hub/blob/master/docs/RESEARCH.kr.md)를 참고하십시오. Grafana, 내보내기, 보존과 삭제 절차는 [모니터링과 결과](monitoring.kr.md)에서 설명합니다.
+[문서 안내](README.kr.md) · [저장소](../README.kr.md)
 
-## 같은 시나리오 여러 번 실행
-
-**Run experiment**에서 YAML을 입력하고 **Run** 옆의 **Runs**를 1~100 정수로 지정하십시오. Controller가 모든 회차를 대기열에 등록한 뒤 순서대로 실행하므로 브라우저를 닫아도 계속됩니다. 회차마다 고유 run ID, 별도 결과 디렉터리, 메타데이터의 `batchId`, `iteration`, `repetitions`가 부여됩니다.
-
-2회 이상이면 각 회차의 종료 정책에 따라 백그라운드 작업을 취소하거나 완료까지 기다리고, 해당 회차의 Peer 생성을 차단하고 제거한 뒤 Agent 상태를 갱신해야 다음 회차가 시작됩니다. 실행·정리 실패는 남은 회차를 취소합니다. 실행 중이거나 대기 중인 항목의 **Stop batch**는 현재 회차와 나머지 대기열을 함께 취소합니다. 별도로 제출한 다른 실험은 동시에 실행될 수 있으므로 반복 결과 비교 시 중지해 두십시오.
-
-모든 회차의 YAML은 동일합니다. 명시한 0이 아닌 `seed`는 재사용하고, 0이거나 생략되면 회차별로 새 seed를 생성해 기록합니다. 동일 seed는 표본 추출 입력을 반복하지만 Docker 타이밍, 후보 집합, 네트워크 실행 결과까지 동일하게 만들지는 않습니다. Controller 재시작 시 대기열을 자동으로 재개하지 않으며 남은 `queued`·`running` 기록은 `interrupted`로 표시합니다.
-
-API는 `/api/v1/experiments`에 `application/json`으로 다음 본문을 POST합니다.
-
-```json
-{"scenario":"version: 1\nname: repeat-example\nphases:\n  - action: wait\n    duration: 1s\n","repetitions":3}
-```
-
-응답은 첫 번째 실험이며 `/api/v1/snapshot`과 SSE에는 모든 회차가 나타납니다. 기존 YAML 원문 요청은 1회 실행을 유지합니다. 조회·변경은 로그인 세션을 사용하며 변경 요청에는 `X-KPL-Request: dashboard`도 포함합니다.
-
-### 실패 후 남은 회차 이어서 실행
-
-**Saved results**에서 중단된 시리즈의 **Continue remaining (N)**을 누르면 아직 시작하지 않은 회차만 재개합니다. 완료·실패한 회차와 그 밖의 이미 시작한 회차는 보존하고 다시 실행하지 않습니다. 원래 batch ID, run ID, 회차 번호, 전체 반복 수, 저장 YAML과 회차별 seed를 유지합니다. 예를 들어 Run 2 of 5에서 실패했다면 Runs 3–5를 실행하며, 성공 5회를 채우기 위한 대체 회차를 추가하지 않습니다. 배치 평균에는 계속 완료된 회차만 포함합니다.
-
-Controller 재시작 후에도 저장 결과에서 재개할 수 있습니다. 실패 회차 또는 시작 후 interrupted가 된 회차가 있고 미시작 회차가 보존되어 있어야 합니다. Controller는 등록된 Agent에서 이전의 성공하지 못한 회차에 대한 피어 정리를 재시도한 뒤 나머지를 시작합니다. 정리가 실패하면 남은 회차는 시작하지 않고 오류를 표시하며 **Continue remaining**을 다시 시도할 수 있습니다. 이후 회차가 또 실패하면 나머지는 다시 중단됩니다. 중복 재개, 활성 배치, 다운로드와 진행 중인 분석 작업은 재개 접수를 막습니다. **Stop batch**로 재개 전 정리 단계도 취소할 수 있고, 브라우저를 닫아도 접수된 작업은 계속됩니다.
+이 가이드는 v3가 구현한 계산을 정의합니다. 메인 Metrics·저장 연구 그림·대역폭은 아래에서 구분한 정의를 사용합니다. 프로젝트 공통 연구 배경은 [Hub 연구 가이드](https://github.com/k-p2p-lab/hub/blob/master/docs/RESEARCH.kr.md)를 참고하십시오. Grafana는 [모니터링](monitoring.kr.md), 내보내기·보존·삭제는 [저장 결과](results.kr.md)에서 설명합니다.
 
 ## Churn 도달률: session-window-v1
 
@@ -230,4 +210,12 @@ Student-t는 전체 그룹 GossipSub의 차수 확률에 직접 가중 최대우
 | [연구 집계](../internal/controller/analysis_research.go), [그래프](../internal/controller/analysis_graph.go), [출처 추정](../internal/controller/analysis_origin.go) | 저장 결과의 별도 연구 정의·표본 그래프·메타정보 추정 |
 | [결과 내보내기](../internal/controller/results.go) | 다운로드의 이벤트 로그 경계와 지표 재계산 |
 
-그래프 레이어, Agent 번호와 화면 조작은 [토폴로지 가이드](topology.kr.md)에서 관리합니다. 화면 변경은 측정 대상 집합을 바꾸지 않습니다. [모니터링과 결과](monitoring.kr.md)에서 저장 파일의 보존·삭제를 관리하며, 결과 삭제는 해당 지표 인덱스를 해제하지만 Peer를 종료하거나 Prometheus 이력을 삭제하지 않습니다. 다운로드·삭제 endpoint는 [REST API 가이드](api.kr.md)에서 정의합니다.
+그래프 레이어, Agent 번호와 화면 조작은 [토폴로지 가이드](topology.kr.md)에서 관리합니다. 화면 변경은 측정 대상 집합을 바꾸지 않습니다. [저장 결과](results.kr.md)에서 저장 파일의 보존·삭제를 관리하며, 결과 삭제는 해당 지표 인덱스를 해제하지만 Peer를 종료하거나 Prometheus 이력을 삭제하지 않습니다. 다운로드·삭제 endpoint는 [REST API 가이드](api.kr.md)에서 정의합니다.
+
+## 같은 시나리오 여러 번 실행
+
+절차는 [실행과 반복](experiments.kr.md#같은-시나리오-여러-번-실행)으로 옮겼습니다.
+
+### 실패 후 남은 회차 이어서 실행
+
+미시작 회차 이어하기와 미완료 회차 재시도는 [복구 방식](experiments.kr.md#저장된-실험-복구)을 참고하십시오.

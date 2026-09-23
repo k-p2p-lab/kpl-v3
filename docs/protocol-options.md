@@ -2,6 +2,8 @@
 
 English | [Korean](protocol-options.kr.md)
 
+[Documentation index](README.md) · [Repository](../README.md)
+
 This reference covers the declarative node configuration for the pinned `go-libp2p-pubsub v0.13.1` and `go-libp2p-kad-dht v0.31.0` dependencies. Use these blocks under a scenario profile or a join phase's `node`; see [scenario configuration](scenario-reference.md) and the [protocol example](../examples/protocol-options.yaml). Experiments run on [Swarm](swarm.md). Validate YAML before deployment with `kpl validate --scenario FILE`.
 
 Duration fields use Go strings such as `250ms`, `1s`, and `5m`. Numeric tuning pointers preserve explicit `0`, and boolean pointers preserve explicit `false`, wherever those values are valid. Lists and maps replace inherited lists and maps. Optional object blocks such as `score`, `peerGater`, and `discovery` replace the inherited object as a whole: repeat the settings you want to retain. A `score` block without `enabled: true` remains disabled, including after replacing an enabled profile score.

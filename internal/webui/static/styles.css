@@ -362,9 +362,9 @@ textarea { min-height: 24rem; resize: vertical; padding: 0.9rem; font: 0.82rem/1
 select, input:where(:not([type="checkbox"]):not([type="radio"])) { min-height: var(--control-height); padding: 0.55rem 0.75rem; }
 input[type="checkbox"], input[type="radio"] { flex: 0 0 auto; width: 1rem; height: 1rem; min-height: 1rem; margin: 0; padding: 0; accent-color: var(--cyan); vertical-align: middle; }
 dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
-#scenarioDialog { width: min(76rem, calc(100% - 2rem)); }
-#scenarioForm { height: calc(100vh - 2rem); overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto auto auto auto; }
-.scenario-workspace { display: grid; grid-template-columns: minmax(16rem, 0.72fr) minmax(28rem, 1.8fr); gap: 0.85rem; min-height: 0; }
+#scenarioDialog { --scenario-dialog-gap: 1rem; width: min(76rem, calc(100% - 2 * var(--scenario-dialog-gap))); max-width: calc(100% - 2 * var(--scenario-dialog-gap)); max-height: calc(100dvh - 2 * var(--scenario-dialog-gap)); overflow: hidden; }
+#scenarioForm { height: calc(100dvh - 2 * var(--scenario-dialog-gap) - 2px); max-height: none; min-width: 0; min-height: 0; overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.scenario-workspace { min-width: 0; display: grid; grid-template-columns: minmax(16rem, 0.72fr) minmax(28rem, 1.8fr); gap: 0.85rem; min-height: 0; }
 .scenario-library, .scenario-editor { min-width: 0; border: 1px solid var(--line-soft); border-radius: 0.7rem; background: rgba(7, 16, 24, 0.42); }
 .scenario-library { display: flex; flex-direction: column; min-height: 0; }
 .scenario-library > header, .scenario-editor-heading { min-height: 4.2rem; padding: 0.8rem 0.9rem; border-bottom: 1px solid var(--line-soft); }
@@ -410,17 +410,21 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .dialog-error { color: var(--red); font-size: 0.8rem; }
 .delete-result-name { font-weight: 650; overflow-wrap: anywhere; }
 #deleteResultDialog { width: min(32rem, calc(100% - 2rem)); }
-#scenarioError { margin-right: auto; color: var(--red); font-size: 0.8rem; }
+#scenarioError { min-width: 0; margin-right: auto; max-height: 4.5rem; overflow-y: auto; overflow-wrap: anywhere; color: var(--red); font-size: 0.8rem; }
+#scenarioError:empty, #scenarioLibraryError:empty { display: none; }
 .toast { position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 20; max-width: min(26rem, calc(100% - 2.5rem)); padding: 0.8rem 1rem; border: 1px solid var(--line); border-radius: 0.55rem; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow); opacity: 0; transform: translateY(0.5rem); pointer-events: none; transition: 160ms ease; }
 .toast.show { opacity: 1; transform: translateY(0); }
 
 @media (max-width: 860px) {
   .topbar { flex-wrap: wrap; }
   .service-nav { order: 3; width: 100%; margin-left: 0; overflow-x: auto; }
-  #scenarioForm { height: auto; overflow-y: auto; grid-template-rows: none; }
-  .scenario-workspace { grid-template-columns: 1fr; }
+  /* Keep the header and run actions visible; scroll the workspace as one region. */
+  .scenario-workspace { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
   .scenario-library { max-height: 15rem; }
-  .scenario-editor textarea { height: auto; min-height: 19rem; }
+  .scenario-editor { overflow: visible; grid-template-rows: none; grid-auto-rows: max-content; }
+  .scenario-editor textarea { height: 19rem; min-height: 12rem; }
+  #scenarioForm > footer { flex-wrap: wrap; }
+  #scenarioError { flex-basis: 100%; }
 }
 
 @media (max-width: 620px) {
@@ -441,9 +445,14 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
   .event-type, .event-summary, .event-run-id { grid-column: 2; }
   .event-summary { white-space: normal; overflow-wrap: anywhere; }
   .event-run-id { text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
-  textarea, .scenario-editor textarea { min-height: 19rem; }
+  textarea { min-height: 19rem; }
+  .scenario-editor textarea { min-height: 12rem; height: clamp(12rem, 36dvh, 19rem); }
   dialog footer { flex-wrap: wrap; }
-  #scenarioError { flex-basis: 100%; }
+  #scenarioDialog { --scenario-dialog-gap: .5rem; }
+  #scenarioForm > footer .run-repetitions { flex: 1 1 100%; justify-content: space-between; }
+  #scenarioForm > footer > button { flex: 1 1 0; min-width: 0; }
+  .scenario-save-row > button { flex: 1 1 8rem; min-width: 0; }
+  .scenario-save-row .dialog-error { min-width: 0; }
   .scenario-library > header { align-items: flex-start; }
   .scenario-library-toolbar { width: 100%; }
   .scenario-library-toolbar button { flex: 1; }

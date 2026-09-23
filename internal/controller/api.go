@@ -43,6 +43,10 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	if s.state.agentSettingsErr != nil {
+		_ = listener.Close()
+		return s.state.agentSettingsErr
+	}
 	for _, log := range []*rotatingWebLog{s.webLogs.access, s.webLogs.auth} {
 		if err := log.prepare(); err != nil {
 			_ = listener.Close()
@@ -140,6 +144,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/prometheus/controller-targets", s.handlePrometheusControllerTargets)
 	mux.HandleFunc("/api/v1/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/api/v1/agents", s.handleAgents)
+	mux.HandleFunc("PUT /api/v1/agents/{agentID}/capacity", s.handleAgentCapacity)
 	mux.HandleFunc("/api/v1/agents/register", s.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", s.handleAgentHeartbeat)
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
@@ -342,6 +347,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.writeAgentCapacityHeader(w, registered.ID)
 	writeJSON(w, http.StatusCreated, registered)
 }
 
@@ -359,6 +365,7 @@ func (s *Server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.writeAgentCapacityHeader(w, heartbeat.Agent.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

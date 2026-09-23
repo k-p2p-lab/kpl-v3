@@ -126,7 +126,7 @@ func (c *localCollector) Collect(ch chan<- prometheus.Metric) {
 	type nodeKey struct{ state, runtime string }
 	s := c.server
 	s.mu.RLock()
-	agentID, capacity := s.config.ID, s.config.Capacity
+	agentID, capacity := s.config.ID, s.capacityLocked()
 	const defaultRuntime = "docker"
 	counts := make(map[nodeKey]int)
 	for _, state := range []string{model.NodeStarting, model.NodeReady, model.NodeStopping, model.NodeStopped, model.NodeFailed} {

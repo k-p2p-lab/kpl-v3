@@ -286,7 +286,7 @@
           <div>
             <p class="eyebrow">FLEET</p>
             <h2>Agent status</h2>
-            <p class="panel-note">Topology labels use these Agent numbers.</p>
+            <p class="panel-note">Topology labels use these Agent numbers. Configure capacity per Agent below.</p>
           </div>
           <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-agents-body" data-panel-toggle="agents"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
@@ -401,6 +401,24 @@
       <p class="dialog-help">Select an image name to expand its preview and PNG / CSV downloads.</p>
       <div class="result-images-list" id="resultImagesGrid"></div>
     </div>
+  </dialog>
+
+  <dialog id="agentCapacityDialog" aria-labelledby="agentCapacityHeading" aria-describedby="agentCapacityHelp">
+    <form class="dialog-shell" id="agentCapacityForm">
+      <header>
+        <div><p class="eyebrow">AGENT SETTINGS</p><h2 id="agentCapacityHeading">Peer capacity</h2></div>
+        <button class="icon-button" type="button" aria-label="Close Agent settings" data-agent-capacity-close><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
+      </header>
+      <p class="agent-capacity-identity" id="agentCapacityIdentity"></p>
+      <p class="panel-note" id="agentCapacityCurrent"></p>
+      <label for="agentCapacityMode">Capacity source</label>
+      <select id="agentCapacityMode"><option value="default" id="agentCapacityDefault">CLI default</option><option value="custom">Custom for this Agent</option></select>
+      <label for="agentCapacityValue">Maximum Peers</label>
+      <input id="agentCapacityValue" type="number" min="1" step="1" required inputmode="numeric" aria-describedby="agentCapacityHelp agentCapacityError">
+      <p class="panel-note" id="agentCapacityHelp">Saved for this Agent ID across restarts. Changes apply automatically when the Agent connects. Lowering capacity keeps existing Peers running and limits new joins until space is available. Choose CLI default to remove the override.</p>
+      <p class="dialog-error" id="agentCapacityError" role="alert"></p>
+      <footer><button class="secondary-button" type="button" data-agent-capacity-close>Cancel</button><button class="primary-button" id="saveAgentCapacity" type="submit">Save capacity</button></footer>
+    </form>
   </dialog>
 
   <dialog id="scenarioDialog" aria-labelledby="scenarioDialogHeading">

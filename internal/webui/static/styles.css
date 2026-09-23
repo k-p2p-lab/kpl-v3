@@ -673,3 +673,11 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
   .dialog-shell > footer button { min-height: 2.75rem; }
   .toast { right: .75rem; bottom: .75rem; max-width: calc(100% - 1.5rem); }
 }
+
+/* Per-Agent admission settings. */
+.agent-capacity-note { display: block; color: var(--muted); font-size: .75rem; margin-top: .25rem; }
+.agent-capacity-button { display: inline-flex; align-items: center; min-height: 2.75rem; margin-top: .3rem; padding: .35rem .65rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--cyan); background: var(--bg-soft); font-size: .8rem; }
+.agent-capacity-button:hover:not(:disabled) { border-color: var(--cyan); }
+#agentCapacityDialog { width: min(32rem, calc(100% - 2rem)); }
+.agent-capacity-identity { overflow-wrap: anywhere; font-weight: 600; }
+#agentCapacityHelp { line-height: 1.65; }

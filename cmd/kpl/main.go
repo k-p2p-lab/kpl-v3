@@ -107,7 +107,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	metricsURL := flags.String("metrics-url", "", "public metrics URL advertised to the Controller")
 	selfURL := flags.String("self-url", "", "agent overlay URL reachable from peer containers (defaults to advertise-url)")
 	controllerURL := flags.String("controller-url", "", "controller URL on the Swarm peer overlay")
-	capacity := flags.Int("capacity", 100, "maximum active peers")
+	capacity := flags.Int("capacity", 100, "default maximum active peers (overridable per Agent in Dashboard)")
 	dataDir := flags.String("data-dir", "data-agent", "agent data directory")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	labels := flags.String("labels", "", "comma-separated key=value labels")

@@ -20,6 +20,7 @@ The Controller persists web access and authentication attempts in `<data-dir>/lo
 | `GET` | `/api/v1/prometheus/agent-targets` | Prometheus HTTP service-discovery groups for online Agents with advertised metrics URLs |
 | `GET` | `/api/v1/snapshot` | Full dashboard snapshot, including node `peerScores` |
 | `GET` | `/api/v1/agents` | Agent state |
+| `PUT` | `/api/v1/agents/{agentID}/capacity` | Set an Agent capacity override with `{capacity: 100}`; `{capacity: null}` restores its CLI default |
 | `GET` | `/api/v1/nodes` | Peer state, including inspected `peerScores` |
 | `GET` | `/api/v1/network` | Peers with `peerScores`, connection edges, and propagation metrics |
 | `GET` | `/api/v1/bootstrap?runId={runId}` | Ready bootstrap peers belonging only to the required run ID |
@@ -50,6 +51,14 @@ The `runId` query parameter on `/api/v1/bootstrap` is required. The registry ret
 The bootstrap response is an array of `{nodeId, peerId, addresses}` records (or `null` when empty). Unlike discovery, bootstrap does not filter on Agent online status. Discovery returns an array, empty when no candidates match, with an additional `subscribed` flag. It returns the full eligible candidate set; the requesting Peer applies rendezvous ranking, connection budgets, and retries as described in [topology](topology.md#bootstrap-and-topic-discovery).
 
 `/api/v1/prometheus/controller-targets` advertises the Controller `--metrics-url` (`KPL_CONTROLLER_METRICS_URL`) and returns `[]` when it is unset. It is a public, read-only endpoint; the URL must be HTTP(S), end in `/metrics`, and have no credentials, query, fragment, or loopback/unspecified address. The Swarm helper supplies the control node address and `KPL_HTTP_PORT` automatically.
+
+## Agent capacity settings
+
+`PUT /api/v1/agents/{agentID}/capacity` requires a logged-in session and `X-KPL-Request: dashboard`. The required `capacity` field accepts a positive integer or `null` to remove the override; unknown fields, fractions and nonpositive values return `400`. It returns the updated Agent with `200`, `404` for an unknown ID, or `409` for an Agent that does not report support. Offline registered Agents can be configured. A storage failure returns an error without changing the live setting.
+
+Agent records include `defaultCapacity` (startup CLI value), optional `capacityOverride` (saved exception), and `capacityPending` (awaiting application). `capacity` is the Controller's currently usable admission limit. Registration and heartbeat responses carry `X-KPL-Agent-Capacity` and `X-KPL-Agent-Capacity-Revision`; heartbeat responses remain `204`. The Agent applies these values under its admission lock and echoes `capacityRevision` with its actual capacity in subsequent reports. Only a current acknowledgment permits an increase, so delayed reports cannot undo a reduction. Overrides persist in `agent-capacities.json` in the Controller data directory; corrupt settings stop Controller startup instead of silently reverting limits.
+
+An Agent returns `429` for a create-node request rejected by its local capacity limit, before creating a Peer. The Controller releases that reservation and waits/retries placement within the existing operation context. Other creation failures retain their usual handling.
 
 ## Dashboard SSE
 

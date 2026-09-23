@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -113,6 +114,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		node, err := s.createNode(context.Background(), request)
+		if errors.Is(err, errCapacityReached) {
+			writeError(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return

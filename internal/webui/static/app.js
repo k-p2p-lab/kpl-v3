@@ -4,6 +4,7 @@ const state = {
   streamWatchdogTimer: null, streamAuthAbort: null, streamFailures: 0,
   savedResults: null, resultsLoading: false, resultsError: "",
   resultQuery: "", resultStatus: "all",
+  agentSettingsID: null, agentSettingsSaving: false,
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
   selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false,
@@ -1463,12 +1464,82 @@ function renderAgents(agents) {
       <td><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
       <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span></td>
       <td>${escapeHTML(agent.hostname || "—")}</td>
-      <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}</td>
+      <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
+        <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
+        <button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure capacity for ${agent.name || agent.id}`)}" ${agent.defaultCapacity > 0 ? "" : 'disabled title="Update this Agent to enable capacity settings."'}>Configure</button>
+      </td>
       <td><div class="usage"><div class="usage-track"><i style="width:${usage}%"></i></div><span>${usage}%</span></div></td>
       <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td>${agentMetricsLink(agent)}</td>
     </tr>`;
   }).join(""));
+}
+
+function openAgentCapacity(id) {
+  if (state.agentSettingsSaving) return;
+  const agent = (state.snapshot?.agents || []).find(agent => agent.id === id);
+  if (!agent || !(agent.defaultCapacity > 0)) return;
+  state.agentSettingsID = id;
+  setText($("#agentCapacityIdentity"), `${agent.name || id} · ${id}${agent.hostname ? ` · ${agent.hostname}` : ""}`);
+  setText($("#agentCapacityCurrent"), `${formatNumber(agent.activeNodes)} occupied · ${formatNumber(agent.capacity)} current capacity${agent.state !== "online" ? " · Offline" : ""}`);
+  setText($("#agentCapacityDefault"), `CLI default (${formatNumber(agent.defaultCapacity)} Peers)`);
+  $("#agentCapacityMode").value = agent.capacityOverride > 0 ? "custom" : "default";
+  $("#agentCapacityValue").value = agent.capacityOverride || agent.defaultCapacity;
+  setText($("#agentCapacityError"), "");
+  updateAgentCapacityMode();
+  $("#agentCapacityDialog").showModal();
+}
+
+function updateAgentCapacityMode() {
+  $("#agentCapacityValue").disabled = state.agentSettingsSaving || $("#agentCapacityMode").value !== "custom";
+}
+
+function closeAgentCapacity() {
+  if (state.agentSettingsSaving) return;
+  const id = state.agentSettingsID;
+  $("#agentCapacityDialog").close();
+  state.agentSettingsID = null;
+  [...document.querySelectorAll("[data-agent-capacity]")].find(button => button.dataset.agentCapacity === id)?.focus();
+}
+
+async function saveAgentCapacity() {
+  if (state.agentSettingsSaving || !state.agentSettingsID) return;
+  const custom = $("#agentCapacityMode").value === "custom";
+  const capacity = custom ? Number($("#agentCapacityValue").value) : null;
+  if (custom && (!Number.isSafeInteger(capacity) || capacity < 1)) {
+    setText($("#agentCapacityError"), "Enter a positive whole number of Peers.");
+    $("#agentCapacityValue").focus();
+    return;
+  }
+  const id = state.agentSettingsID;
+  state.agentSettingsSaving = true;
+  setText($("#agentCapacityError"), "");
+  $("#agentCapacityMode").disabled = true;
+  $("#saveAgentCapacity").disabled = true;
+  setText($("#saveAgentCapacity"), "Saving…");
+  for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.disabled = true;
+  updateAgentCapacityMode();
+  let saved = false;
+  try {
+    const agent = await api(`/api/v1/agents/${encodeURIComponent(id)}/capacity`, { method: "PUT", body: JSON.stringify({capacity}) });
+    if (state.snapshot) {
+      state.snapshot = { ...state.snapshot, agents: (state.snapshot.agents || []).map(current => current.id === id ? agent : current) };
+      render(state.snapshot);
+    }
+    saved = true;
+    showToast(agent.state !== "online" ? "Capacity saved. Applies when this Agent reconnects."
+      : agent.capacityPending ? "Capacity saved. Applying to the Agent…" : "Agent capacity saved.");
+  } catch (error) {
+    setText($("#agentCapacityError"), error.message);
+  } finally {
+    state.agentSettingsSaving = false;
+    $("#agentCapacityMode").disabled = false;
+    $("#saveAgentCapacity").disabled = false;
+    setText($("#saveAgentCapacity"), "Save capacity");
+    for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.disabled = false;
+    updateAgentCapacityMode();
+    if (saved) closeAgentCapacity();
+  }
 }
 
 function safeAgentMetricsURL(value) {
@@ -1938,6 +2009,10 @@ $("#logout").addEventListener("click", logout);
 window.addEventListener("pageshow", event => {
   if (event.persisted) void api("/api/v1/auth/session").catch(() => {});
 });
+$("#agentCapacityForm").addEventListener("submit", event => { event.preventDefault(); void saveAgentCapacity(); });
+$("#agentCapacityMode").addEventListener("change", updateAgentCapacityMode);
+$("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
+for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);
 $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
@@ -1961,6 +2036,11 @@ $("#scenarioForm").addEventListener("submit", (event) => event.preventDefault())
 for (const close of document.querySelectorAll("[data-scenario-close]")) close.addEventListener("click", closeScenarioEditor);
 
 document.addEventListener("click", async (event) => {
+  const capacityButton = event.target.closest("[data-agent-capacity]");
+  if (capacityButton) {
+    if (!capacityButton.disabled) openAgentCapacity(capacityButton.dataset.agentCapacity);
+    return;
+  }
   const retryButton = event.target.closest("[data-retry-batch]");
   if (retryButton) {
     event.preventDefault();

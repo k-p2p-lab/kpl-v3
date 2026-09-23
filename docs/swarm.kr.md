@@ -270,7 +270,11 @@ sh scripts/swarm.sh status
 | `agentId` | 지정한 Agent로 고정. 물리 서버 고정 실험은 `/api/v1/agents`의 ID 사용 |
 | `parallelism` | `parallel: true`인 join에서 동시에 실행할 작업 수. 서버 수나 Swarm replica 수와 다름 |
 
-capacity는 Peer 개수의 admission 제한이며 CPU·메모리 예약이나 cgroup 한도가 아닙니다. Agent의 Swarm resource 제한을 바꾸어도 형제 컨테이너인 Peer에 전파되지 않습니다. 제공된 stack은 모든 Agent에 동일한 `KPL_AGENT_CAPACITY`를 적용합니다. 서버별 capacity를 달리하는 별도 Agent 서비스 그룹은 이 helper의 지원 범위에 포함되지 않습니다. CPU/RAM/FD/conntrack 및 Docker daemon 부하를 측정해 capacity를 정하십시오.
+capacity는 Peer 개수의 admission 제한이며 CPU·메모리 예약이나 cgroup 한도가 아닙니다. Agent의 Swarm resource 제한을 바꾸어도 형제 컨테이너인 Peer에 전파되지 않습니다. 제공된 stack은 `KPL_AGENT_CAPACITY`를 모든 Agent의 시작 기본값으로 사용합니다. **Dashboard → Agent status → Configure**에서 **Custom for this Agent**를 선택하면 해당 Agent ID에만 예외값을 지정합니다. **CLI default**를 선택하면 예외값을 삭제합니다. 예를 들어 `KPL_AGENT_CAPACITY=200`을 유지한 채 특정 Agent만 `100`으로 설정하면 다른 Agent는 계속 `200`을 사용합니다. CPU/RAM/FD/conntrack 및 Docker daemon 부하를 측정해 capacity를 정하십시오.
+
+Agent별 예외값은 `<controller-data-dir>/agent-capacities.json`에 저장하며 Controller 볼륨과 Agent ID가 같으면 Controller·Agent 재시작 뒤에도 유지합니다. Controller 백업에 이 파일을 포함하십시오. Agent ID가 바뀌면 별도 설정 대상입니다. 오프라인 Agent의 설정은 재접속할 때 적용합니다. Controller와 Agent 모두 이 기능을 지원하는 버전이어야 하며, 구버전 Agent는 UI의 Configure 버튼을 비활성화합니다.
+
+서비스 재시작 없이 등록·heartbeat 응답으로 설정을 전달합니다. 표에는 CLI 기본값 또는 예외값과 적용 확인 전 **Applying…**을 표시합니다. 용량을 낮추면 새 배치 제한을 즉시 적용하고 기존 Peer는 유지합니다. 현재 점유량이 한도보다 크면 여유가 생길 때까지 새 join이 대기합니다. 증가는 Agent가 현재 설정을 적용했다고 확인한 뒤 사용할 수 있습니다. Agent 자체 생성 제한과 capacity 메트릭에도 변경값을 반영합니다.
 
 동시 실험의 예약은 Controller에서 직렬화합니다. Agent는 생성 요청 수락부터 **삭제 완료 확인까지** 슬롯을 유지하므로 Docker 생성·시작 대기 시간도 포함하며, 삭제 실패도 점유량에 포함합니다. Controller는 DELETE 응답만으로 슬롯을 재사용하지 않습니다. 네트워크 단절로 보고가 10초 넘게 없으면 신규 배치에서 제외하며, 이전 Agent 프로세스나 순서가 뒤집힌 보고가 현재 노드·용량을 덮어쓰지 않도록 검사합니다. 같은 ID의 새 Agent는 이전 프로세스의 online 유효 시간이 끝난 뒤 등록됩니다.
 

@@ -27,6 +27,8 @@ import (
 	"github.com/k-p2p-lab/v3/internal/model"
 )
 
+var errCapacityReached = errors.New("agent capacity reached")
+
 type Config struct {
 	DockerBinary  string
 	DockerImage   string
@@ -61,22 +63,24 @@ type process struct {
 }
 
 type Server struct {
-	config          Config
-	logger          *slog.Logger
-	client          *http.Client
-	docker          *dockerRuntime
-	startedAt       time.Time
-	mu              sync.RWMutex
-	heartbeatMu     sync.Mutex
-	processes       map[string]*process
-	runFences       map[string]uint64
-	shuttingDown    bool
-	eventsMu        sync.Mutex
-	events          []model.TraceEvent
-	eventsInFlight  int
-	terminations    map[string]model.TraceEvent
-	telemetryClosed bool
-	flushNow        chan struct{}
+	config           Config
+	logger           *slog.Logger
+	client           *http.Client
+	docker           *dockerRuntime
+	startedAt        time.Time
+	mu               sync.RWMutex
+	heartbeatMu      sync.Mutex
+	capacityLimit    int // protected by mu; zero uses the CLI default
+	capacityRevision string
+	processes        map[string]*process
+	runFences        map[string]uint64
+	shuttingDown     bool
+	eventsMu         sync.Mutex
+	events           []model.TraceEvent
+	eventsInFlight   int
+	terminations     map[string]model.TraceEvent
+	telemetryClosed  bool
+	flushNow         chan struct{}
 }
 
 func New(config Config, logger *slog.Logger) (*Server, error) {
@@ -328,18 +332,20 @@ func (s *Server) snapshotAgent() model.Agent {
 // every departed peer's status. Inventory acknowledgments remain independent.
 func (s *Server) agentStatusLocked(hostname string) model.Agent {
 	return model.Agent{
-		ID:          s.config.ID,
-		Name:        s.config.Name,
-		URL:         strings.TrimRight(s.config.AdvertiseURL, "/"),
-		MetricsURL:  s.config.MetricsURL,
-		Hostname:    hostname,
-		Version:     "v3-dev",
-		Capacity:    s.config.Capacity,
-		ActiveNodes: s.capacityUsedLocked(),
-		State:       model.AgentOnline,
-		Labels:      s.config.Labels,
-		StartedAt:   s.startedAt,
-		LastSeen:    time.Now().UTC(),
+		ID:               s.config.ID,
+		Name:             s.config.Name,
+		URL:              strings.TrimRight(s.config.AdvertiseURL, "/"),
+		MetricsURL:       s.config.MetricsURL,
+		Hostname:         hostname,
+		Version:          "v3-dev",
+		Capacity:         s.capacityLocked(),
+		DefaultCapacity:  s.config.Capacity,
+		CapacityRevision: s.capacityRevision,
+		ActiveNodes:      s.capacityUsedLocked(),
+		State:            model.AgentOnline,
+		Labels:           s.config.Labels,
+		StartedAt:        s.startedAt,
+		LastSeen:         time.Now().UTC(),
 	}
 }
 
@@ -348,7 +354,7 @@ func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartb
 	s.mu.RLock()
 	capacity := len(s.processes)
 	if !includeAcknowledged {
-		capacity = min(capacity, max(0, s.config.Capacity))
+		capacity = min(capacity, max(0, s.capacityLocked()))
 	}
 	h := model.AgentHeartbeat{
 		Agent: s.agentStatusLocked(hostname),
@@ -398,9 +404,9 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		s.mu.Unlock()
 		return model.Node{}, fmt.Errorf("node %q already exists", request.ID)
 	}
-	if s.capacityUsedLocked() >= s.config.Capacity {
+	if s.capacityUsedLocked() >= s.capacityLocked() {
 		s.mu.Unlock()
-		return model.Node{}, fmt.Errorf("agent capacity reached")
+		return model.Node{}, errCapacityReached
 	}
 	now := time.Now().UTC()
 	profile := request.Profile
@@ -765,6 +771,14 @@ func cloneNodeStatus(node model.Node) model.Node {
 	return node
 }
 
+// Caller holds mu. The startup config remains the reset/default value.
+func (s *Server) capacityLocked() int {
+	if s.capacityLimit > 0 {
+		return s.capacityLimit
+	}
+	return s.config.Capacity
+}
+
 // A Docker slot is occupied from admission until its container is confirmed
 // removed. Stopping and failed-cleanup peers still use the host's resources.
 // Caller holds Server.mu.
@@ -914,6 +928,18 @@ func (s *Server) postData(ctx context.Context, path string, data []byte, output 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("controller returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+	}
+	if path == "/api/v1/agents/register" || path == "/api/v1/agents/heartbeat" {
+		if raw := resp.Header.Get("X-KPL-Agent-Capacity"); raw != "" {
+			capacity, err := strconv.Atoi(raw)
+			if err != nil || capacity <= 0 {
+				return fmt.Errorf("Controller returned invalid Agent capacity %q", raw)
+			}
+			s.mu.Lock()
+			s.capacityLimit = capacity
+			s.capacityRevision = resp.Header.Get("X-KPL-Agent-Capacity-Revision")
+			s.mu.Unlock()
+		}
 	}
 	if output != nil {
 		return json.NewDecoder(resp.Body).Decode(output)

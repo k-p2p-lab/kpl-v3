@@ -14,18 +14,22 @@ const (
 )
 
 type Agent struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	URL         string            `json:"url"`
-	MetricsURL  string            `json:"metricsUrl,omitempty"`
-	Hostname    string            `json:"hostname"`
-	Version     string            `json:"version"`
-	Capacity    int               `json:"capacity"`
-	ActiveNodes int               `json:"activeNodes"`
-	State       string            `json:"state"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	StartedAt   time.Time         `json:"startedAt"`
-	LastSeen    time.Time         `json:"lastSeen"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	URL              string            `json:"url"`
+	MetricsURL       string            `json:"metricsUrl,omitempty"`
+	Hostname         string            `json:"hostname"`
+	Version          string            `json:"version"`
+	Capacity         int               `json:"capacity"`
+	DefaultCapacity  int               `json:"defaultCapacity,omitempty"`
+	CapacityOverride int               `json:"capacityOverride,omitempty"`
+	CapacityPending  bool              `json:"capacityPending,omitempty"`
+	CapacityRevision string            `json:"capacityRevision,omitempty"`
+	ActiveNodes      int               `json:"activeNodes"`
+	State            string            `json:"state"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	StartedAt        time.Time         `json:"startedAt"`
+	LastSeen         time.Time         `json:"lastSeen"`
 }
 
 type Node struct {

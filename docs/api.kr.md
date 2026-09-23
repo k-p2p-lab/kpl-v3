@@ -20,6 +20,7 @@ Controller는 웹 접근과 인증 시도를 `<data-dir>/logs/access.jsonl`, `au
 | `GET` | `/api/v1/prometheus/agent-targets` | metrics URL을 알린 online Agent의 Prometheus HTTP service-discovery group |
 | `GET` | `/api/v1/snapshot` | 노드 `peerScores`를 포함한 대시보드 전체 snapshot |
 | `GET` | `/api/v1/agents` | Agent 상태 |
+| `PUT` | `/api/v1/agents/{agentID}/capacity` | `{capacity: 100}`으로 Agent별 예외값 지정, `{capacity: null}`로 CLI 기본값 복원 |
 | `GET` | `/api/v1/nodes` | inspection으로 수집한 `peerScores`를 포함한 Peer 상태 |
 | `GET` | `/api/v1/network` | `peerScores`가 포함된 Peer, 연결 edge와 전파 지표 |
 | `GET` | `/api/v1/bootstrap?runId={runId}` | 필수 run ID에 속한 준비 상태의 bootstrap peer만 반환 |
@@ -50,6 +51,14 @@ Controller는 웹 접근과 인증 시도를 `<data-dir>/logs/access.jsonl`, `au
 Bootstrap 응답은 `{nodeId, peerId, addresses}` 항목 배열이며 비어 있으면 `null`입니다. Discovery와 달리 bootstrap은 Agent online 상태로 필터링하지 않습니다. Discovery는 후보가 없을 때 빈 배열을 반환하며 각 항목에는 `subscribed` flag도 포함합니다. 조건에 맞는 전체 후보를 반환하고, 요청하는 Peer가 [토폴로지](topology.kr.md#bootstrap과-topic-discovery)에 설명한 rendezvous 순위, connection budget과 retry를 적용합니다.
 
 `/api/v1/prometheus/controller-targets`는 Controller의 `--metrics-url` (`KPL_CONTROLLER_METRICS_URL`)을 광고하며 미설정 시 `[]`를 반환합니다. 인증 없이 조회하는 읽기 전용 endpoint입니다. URL은 HTTP(S)의 `/metrics` 경로여야 하며 인증정보·query·fragment·loopback/unspecified 주소를 허용하지 않습니다. Swarm helper가 control 노드 주소와 `KPL_HTTP_PORT`로 자동 설정합니다.
+
+## Agent 용량 설정
+
+`PUT /api/v1/agents/{agentID}/capacity`는 로그인 세션과 `X-KPL-Request: dashboard`를 요구합니다. 필수 `capacity` 필드는 양의 정수 또는 예외값을 삭제하는 `null`을 받습니다. 알 수 없는 필드·소수·0 이하 값은 `400`입니다. 갱신한 Agent와 `200`을 반환하며, 없는 ID는 `404`, 이 기능 지원을 보고하지 않는 Agent는 `409`입니다. 등록된 오프라인 Agent도 설정할 수 있습니다. 저장 실패 시 오류를 반환하고 현재 설정은 변경하지 않습니다.
+
+Agent 레코드에는 `defaultCapacity`(시작 CLI 값), 선택적 `capacityOverride`(저장 예외값), `capacityPending`(적용 확인 대기)을 제공합니다. `capacity`는 Controller가 현재 배치에 사용하는 한도입니다. 등록·heartbeat 응답의 `X-KPL-Agent-Capacity`, `X-KPL-Agent-Capacity-Revision`으로 설정을 전달하며 heartbeat 응답은 기존 `204`를 유지합니다. Agent는 생성 admission과 같은 잠금 아래 설정을 적용하고 다음 보고에 실제 capacity와 `capacityRevision`을 보냅니다. 현재 설정을 확인한 보고만 용량 증가를 허용하므로 지연된 보고가 감소 설정을 취소하지 않습니다. Controller 데이터 디렉터리의 `agent-capacities.json`에 예외값을 저장하며 파일이 손상되면 한도를 임의 복원하지 않고 Controller 시작을 중단합니다.
+
+Agent의 로컬 용량 제한 때문에 create-node 요청을 거절하면 Peer를 만들기 전에 `429`를 반환합니다. Controller는 해당 예약을 해제하고 기존 작업 컨텍스트 안에서 배치를 대기·재시도합니다. 다른 생성 오류 처리는 유지합니다.
 
 ## Dashboard SSE
 

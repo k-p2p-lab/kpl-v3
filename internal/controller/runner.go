@@ -400,16 +400,7 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 				lastScheduleWarning = now
 			}
 		}
-		var node model.Node
-		if err := s.callAgent(operationCtx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node); err != nil {
-			s.releaseReservation(request.ID)
-			return fmt.Errorf("create node %s on agent %s: %w", request.ID, agent.ID, err)
-		}
-		if !s.recordCreatedNode(request, agent.ID, node, agent.StartedAt) {
-			s.releaseReservation(request.ID)
-			return fmt.Errorf("agent %s changed instance while creating node %s", agent.ID, request.ID)
-		}
-		return nil
+		return s.createReservedNode(operationCtx, request, agent, agentID, placementRNG)
 	})
 }
 
@@ -1246,6 +1237,9 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if method == http.MethodPost && path == "/api/v1/nodes" && resp.StatusCode == http.StatusTooManyRequests {
+			return errAgentCapacityReached
+		}
 		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 	}
 	if output != nil {

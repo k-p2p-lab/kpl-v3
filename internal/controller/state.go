@@ -21,21 +21,26 @@ const (
 )
 
 type state struct {
-	mu              sync.RWMutex
-	persistMu       sync.Mutex
-	agents          map[string]model.Agent
-	nodes           map[string]model.Node
-	activeNodeIDs   map[string]struct{}
-	reservations    map[string]string
-	agentSnapshots  map[string]time.Time
-	nodeReportTimes map[string]time.Time
-	experiments     map[string]model.Experiment
-	runTimings      map[string]*runTiming
-	events          []model.TraceEvent
-	watchers        map[chan struct{}]struct{}
-	dataDir         string
-	metrics         *controllerMetrics
-	runMetrics      map[string]*runMetricAccumulator
+	mu                      sync.RWMutex
+	persistMu               sync.Mutex
+	agentSettingsMu         sync.Mutex
+	agentCapacityOverrides  map[string]int
+	agentCapacityRevisions  map[string]string
+	agentReportedCapacities map[string]int
+	agentSettingsErr        error
+	agents                  map[string]model.Agent
+	nodes                   map[string]model.Node
+	activeNodeIDs           map[string]struct{}
+	reservations            map[string]string
+	agentSnapshots          map[string]time.Time
+	nodeReportTimes         map[string]time.Time
+	experiments             map[string]model.Experiment
+	runTimings              map[string]*runTiming
+	events                  []model.TraceEvent
+	watchers                map[chan struct{}]struct{}
+	dataDir                 string
+	metrics                 *controllerMetrics
+	runMetrics              map[string]*runMetricAccumulator
 }
 
 func newState(dataDir string) *state {
@@ -51,6 +56,9 @@ func newState(dataDir string) *state {
 		dataDir:         dataDir,
 		runMetrics:      make(map[string]*runMetricAccumulator),
 	}
+	s.agentReportedCapacities = make(map[string]int)
+	s.agentCapacityRevisions = make(map[string]string)
+	s.agentCapacityOverrides, s.agentSettingsErr = loadAgentCapacities(dataDir)
 	s.metrics = newControllerMetrics(s)
 	return s
 }
@@ -100,6 +108,9 @@ func (s *state) activeNodesLocked() iter.Seq[model.Node] {
 }
 
 func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
+	if s.agentSettingsErr != nil {
+		return model.Agent{}, s.agentSettingsErr
+	}
 	if strings.TrimSpace(agent.ID) == "" || strings.TrimSpace(agent.URL) == "" {
 		return model.Agent{}, fmt.Errorf("agent id and url are required")
 	}
@@ -149,6 +160,7 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 	agent.ActiveNodes = max(0, agent.ActiveNodes)
 	agent.LastSeen = now
 	agent.State = model.AgentOnline
+	s.observeAgentCapacityLocked(&agent)
 	s.agents[agent.ID] = agent
 	s.mu.Unlock()
 	s.notify()
@@ -210,7 +222,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	h.Agent.Hostname = firstNonEmpty(h.Agent.Hostname, previous.Hostname)
 	h.Agent.Version = firstNonEmpty(h.Agent.Version, previous.Version)
 	if h.Agent.Capacity == 0 {
-		h.Agent.Capacity = previous.Capacity
+		h.Agent.Capacity = s.agentReportedCapacities[h.Agent.ID]
 	}
 	if h.Agent.StartedAt.IsZero() {
 		h.Agent.StartedAt = previous.StartedAt
@@ -294,6 +306,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	if stale {
 		h.Agent = previous
 		h.Agent.ActiveNodes = max(0, previous.ActiveNodes-releasedReservations)
+	}
+	if !stale {
+		s.observeAgentCapacityLocked(&h.Agent)
 	}
 	s.agents[h.Agent.ID] = h.Agent
 	s.mu.Unlock()

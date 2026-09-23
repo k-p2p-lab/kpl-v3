@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the source inventory behind docs/v2-analysis-coverage.kr.md.
+"""Verify the inventory documented at https://github.com/k-p2p-lab/v3/wiki/V2-Analysis-Coverage.
 
 This detects unreviewed v2 files/outputs; it does NOT prove v3 feature parity.
 It uses only the Python standard library and is independent of the running app.
@@ -17,7 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--v2", type=Path, default=project.parent / "v2")
     args = parser.parse_args()
-    manifest = json.loads((project / "docs/v2-analysis-coverage.json").read_text())
+    manifest = json.loads((project / "scripts/data/v2-analysis-coverage.json").read_text())
     root = args.v2
     log_path = root / "kpl-parser/internal/analysis/log.go"
     metric_path = root / "kpl-parser/internal/analysis/metric.go"

@@ -299,7 +299,7 @@ for service in $services; do
     identity=$(dock service inspect --format '{{.Spec.Name}}|{{index .Spec.Labels "io.kpl.application"}}' "$service")
     case "$identity" in
         "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application") ;;
-        *) fail 'Existing stack contains an unrecognized service. See docs/swarm.md for migration; no changes made.' ;;
+        *) fail 'Existing stack contains an unrecognized service. See https://github.com/k-p2p-lab/v3/wiki/Swarm-Deployment for migration; no changes made.' ;;
     esac
     case "$identity" in
         "${KPL_STACK_NAME}_controller|$application") controller_present=yes ;;

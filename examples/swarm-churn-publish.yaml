@@ -7,7 +7,7 @@ jobShutdownTimeout: 3m
 # Start with at least two online Agents and 40 free Peer slots in total.
 # Adapted from v2 exp-2603_churn-02.sh: smaller population, repeated publishing.
 # The 10,000 joins below are a total request budget, not concurrent Peer count.
-# See docs/swarm-churn-publish.md for scheduling and measurement definitions.
+# See https://github.com/k-p2p-lab/v3/wiki/Churn-Publish-Example for scheduling and measurement definitions.
 profiles:
   stable-boot:
     type: boot

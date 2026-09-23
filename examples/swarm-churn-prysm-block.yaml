@@ -7,7 +7,7 @@ jobShutdownTimeout: 3m
 # Three concurrent delay cohorts, one shared topic, 10,000 total join requests.
 # Ideal aggregate rate: 10 joins/s; mean lifetime: 200s; about 2,000 workers.
 # Provision capacity for that scale or increase the shared join interval below.
-# Guide: docs/swarm-churn-prysm-block.md (Korean: matching .kr.md).
+# Guide: https://github.com/k-p2p-lab/v3/wiki/Prysm-Scoring-Example (Korean: Prysm-Scoring-Example-KO).
 # Scoring: Prysm v7.1.8, mainnet slot=12s, epoch=32 slots.
 # Source: https://github.com/OffchainLabs/prysm/blob/51b5a75ebbadf05af22bd2601b5baf7a9e99b66d/beacon-chain/p2p/gossip_scoring_params.go
 # KPL envelope traffic uses these scores; it is not Ethereum SSZ block traffic.

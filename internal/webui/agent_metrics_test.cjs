@@ -14,8 +14,8 @@ vm.runInContext(functions, sandbox);
 
 test('Agent table reserves a Metrics column and keeps the empty row aligned', () => {
   assert.match(markup, /<th>Last seen<\/th><th>Metrics<\/th>/);
-  assert.match(markup, /id="agentRows"><tr><td colspan="8"/);
-  assert.match(source, /colspan="8" class="empty-cell">No Agents registered\./);
+  assert.match(markup, /id="agentRows"><tr><td colspan="9"/);
+  assert.match(source, /colspan="9" class="empty-cell">No Agents registered\./);
 });
 
 test('Agent metrics links accept only absolute credential-free HTTP metrics URLs', () => {

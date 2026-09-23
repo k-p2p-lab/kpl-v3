@@ -645,7 +645,8 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 
 /* Per-Agent admission settings. */
 .agent-capacity-note { display: block; color: var(--muted); font-size: .75rem; margin-top: .25rem; }
-.agent-capacity-button { display: inline-flex; align-items: center; min-height: var(--control-height); margin-top: .3rem; padding: .35rem .65rem; border: 1px solid var(--line); border-radius: .5rem; color: var(--cyan); background: var(--bg-soft); font-size: .8rem; }
+.agent-settings-cell { width: 1%; padding-inline: .75rem; text-align: center; }
+.agent-capacity-button { display: inline-flex; align-items: center; justify-content: center; width: var(--control-height); height: var(--control-height); padding: 0; border: 1px solid var(--line); border-radius: .5rem; color: var(--cyan); background: var(--bg-soft); font-size: 1rem; line-height: 1; }
 .agent-capacity-button:hover:not(:disabled) { border-color: var(--cyan); }
 #agentCapacityDialog { width: min(32rem, calc(100% - 2rem)); }
 .agent-capacity-identity { overflow-wrap: anywhere; font-weight: 600; }

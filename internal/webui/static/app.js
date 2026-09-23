@@ -1432,7 +1432,7 @@ async function confirmResultDeletion() {
 function renderAgents(agents) {
   rememberAgents(agents.map((agent) => agent.id));
   if (!agents.length) {
-    setHTML($("#agentRows"), '<tr><td colspan="8" class="empty-cell">No Agents registered.</td></tr>');
+    setHTML($("#agentRows"), '<tr><td colspan="9" class="empty-cell">No Agents registered.</td></tr>');
     return;
   }
   setHTML($("#agentRows"), [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
@@ -1444,11 +1444,11 @@ function renderAgents(agents) {
       <td>${escapeHTML(agent.hostname || "—")}</td>
       <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
-        <button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure capacity for ${agent.name || agent.id}`)}" ${agent.defaultCapacity > 0 ? "" : 'disabled title="Update this Agent to enable capacity settings."'}>Configure</button>
       </td>
       <td><div class="usage"><div class="usage-track"><i style="width:${usage}%"></i></div><span>${usage}%</span></div></td>
       <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td>${agentMetricsLink(agent)}</td>
+      <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure capacity for ${agent.name || agent.id}`)}" title="${escapeHTML(agent.defaultCapacity > 0 ? `Configure capacity for ${agent.name || agent.id}` : "Update this Agent to enable capacity settings.")}" ${agent.defaultCapacity > 0 ? "" : "disabled"}><span aria-hidden="true">⚙️</span></button></td>
     </tr>`;
   }).join(""));
 }

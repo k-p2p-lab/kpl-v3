@@ -15,6 +15,34 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
+// publicationGate serializes the wire-ID bridge while allowing canceled
+// HTTP requests to leave the queue before the current publisher finishes.
+// The zero value is ready to use, including in embedded/test Servers.
+type publicationGate struct {
+	once sync.Once
+	slot chan struct{}
+}
+
+func (g *publicationGate) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	g.once.Do(func() { g.slot = make(chan struct{}, 1) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case g.slot <- struct{}{}:
+		// Cancellation can become ready at the same time as the slot.
+		if err := ctx.Err(); err != nil {
+			g.release()
+			return err
+		}
+		return nil
+	}
+}
+
+func (g *publicationGate) release() { <-g.slot }
+
 type publication struct {
 	wire     []byte
 	id       string
@@ -118,12 +146,14 @@ func (b *publicationBridge) finish() string {
 func (s *Server) publishMessage(ctx context.Context, topic string, message publication) (publication, error) {
 	// All local publications share this gate: an envelope published concurrently
 	// with raw data must not supply the pending raw publication's wire ID.
-	s.publishMu.Lock()
-	defer s.publishMu.Unlock()
+	if err := s.publishGate.acquire(ctx); err != nil {
+		return publication{}, err
+	}
+	defer s.publishGate.release()
 	return s.publishPreparedMessage(ctx, topic, message)
 }
 
-// publishPreparedMessage requires publishMu. The HTTP path prepares its payload
+// publishPreparedMessage requires publishGate. The HTTP path prepares its payload
 // under the same gate, so envelope timestamps exclude time waiting for another
 // publication. Tests can also pass prepared wire bytes through publishMessage.
 func (s *Server) publishPreparedMessage(ctx context.Context, topic string, message publication) (publication, error) {

@@ -161,6 +161,8 @@ Agent 정상 종료 또는 `DELETE /api/v1/nodes`의 telemetry drain은 마지�
 
 JSON 본문에는 값 하나만 있어야 합니다. 본문 한도 내의 후행 공백은 허용하며, 두 번째 JSON 값·후행 쓰레기 데이터·디코더 본문 한도 초과는 `400`을 반환합니다. Controller/Agent의 일반 JSON handler는 10 MiB, Peer `/publish`는 1 MiB 한도를 사용합니다. 시나리오 요청 envelope에는 위에서 설명한 별도 한도가 적용됩니다. Peer 내부에서 생성된 이벤트가 JSON으로 인코딩되지 않거나 단일 batch 한도를 넘으면 로그와 `telemetry_drop`에 유실 수를 남기고, 소스 sequence의 빈 번호를 유지한 채 후속 이벤트를 전송합니다. 네트워크 실패 시에는 대기 중인 batch를 보존해 재시도합니다.
 
+Peer `/publish`의 10초 발행 제한시간에는 다른 로컬 발행 뒤에서 기다리는 시간도 포함됩니다. 요청 취소나 제한시간 만료 시 현재 발행의 종료를 기다리지 않고 대기에서 빠져나오며, gate/readiness 대기 중에는 `504`를 반환합니다. 대기 중 취소된 요청은 발행하거나 성공 `publish` 이벤트를 남기지 않습니다. 발행 시각은 기존처럼 gate와 readiness 대기 이후에 기록합니다.
+
 Agent는 Controller가 cleanup에 사용하는 다음 endpoint도 제공합니다.
 
 | Method | Agent path | 설명 |
@@ -193,7 +195,7 @@ ID 상세는 종류별 최대 8,192개 및 hex 합계 512KiB, 구독 목록은 �
 
 Controller와 모든 Agent에 같은 `KPL_USER`·`KPL_PASSWORD`를 설정하며 시작 시 둘 다 필수입니다. 대시보드는 먼저 **Log in** 화면을 열고, 로그인 성공 시 임의의 서버 세션을 생성해 HttpOnly·SameSite=Strict 쿠키로 식별합니다. HTTPS에서는 Secure 쿠키를 사용하며 신뢰할 수 있는 reverse proxy의 `X-Forwarded-Proto: https`도 지원합니다. 세션은 12시간 뒤 만료되고 **Log out** 또는 Controller 재시작 시 무효화됩니다. 로그아웃·만료 시 해당 세션의 SSE 연결도 닫지만 실행 중 실험과 백그라운드 분석은 계속됩니다. 설정 계정 하나가 대시보드 전체 권한을 가집니다.
 
-대시보드/API 조회·변경, SSE, 시나리오 검증, 분석, 다운로드는 모두 로그인 세션이 필요합니다. 미인증 API는 `401`, 대시보드는 `/login` 리다이렉트를 반환합니다. 세션을 사용하는 변경 요청은 `X-KPL-Request: dashboard` 헤더도 필요하며 다른 origin의 요청은 거부합니다. UI는 이 헤더를 자동으로 넣으므로 추가 토큰 입력이 없고 비밀번호·세션 쿠키를 localStorage에 저장하지 않습니다. 로그인은 JSON `{user, password}`만 받으며 잘못된 계정은 `401`, 같은 접속 IP에서 5분 동안 10회 실패한 이후에는 `429`를 반환합니다. 세션과 실패 기록은 각각 최대 1,024개입니다.
+대시보드/API 조회·변경, SSE, 시나리오 검증, 분석, 다운로드는 모두 로그인 세션이 필요합니다. 미인증 API는 `401`, 대시보드는 `/login` 리다이렉트를 반환합니다. 세션을 사용하는 변경 요청은 `X-KPL-Request: dashboard` 헤더도 필요하며 다른 origin의 요청은 거부합니다. UI는 이 헤더를 자동으로 넣으므로 추가 토큰 입력이 없고 비밀번호·세션 쿠키를 localStorage에 저장하지 않습니다. 로그인은 JSON `{user, password}`만 받으며 잘못된 계정은 `401`, 같은 접속 IP에서 5분 동안 10회 실패한 이후에는 `429`를 반환합니다. 세션과 실패 기록은 각각 최대 1,024개입니다. 로그인 응답 전송 중에는 세션 잠금을 유지하지 않으므로, 응답을 받지 못하는 로그인 클라이언트가 다른 세션 확인이나 로그아웃을 막지 않습니다.
 
 로그인 리소스, health/시각 endpoint, `/metrics`, 두 Prometheus target-discovery endpoint만 공개로 유지합니다. 내부 Agent 등록·heartbeat·이벤트와 Peer bootstrap·discovery는 계정 설정에서 용도를 분리해 자동 생성한 서비스 키를 사용합니다. Peer에는 로그인 비밀번호 대신 이 키만 전달하며, 키로 대시보드 결과 API에 접근하거나 실험을 시작할 수 없습니다. `KPL_API_TOKEN`과 `--token` CLI 옵션은 폐기했습니다. 자격 증명 변경 시 이전 키를 쓰는 진행 중 실험·잔존 Peer를 정리한 뒤 Controller와 Agent를 함께 재배포하십시오. Grafana 로그인은 별도입니다.
 

@@ -1129,41 +1129,77 @@ func runOperations(ctx context.Context, count int, parallel bool, parallelism in
 	}
 	operationCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	semaphore := make(chan struct{}, parallelism)
-	errors := make(chan error, count)
+	started := time.Now()
+	// Only workers consume goroutines. Queued operations and publication
+	// timers must not create one goroutine per item in a large churn batch.
+	jobs := make(chan int)
+	failures := make(chan error, parallelism)
 	var group sync.WaitGroup
-	for i := 0; i < count; i++ {
-		index := i
+	for i := 0; i < parallelism; i++ {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			if delayParallel && index < len(delays) {
-				if err := sleepContext(operationCtx, delays[index]); err != nil {
-					errors <- err
+			for index := range jobs {
+				if operationCtx.Err() != nil {
+					return
+				}
+				if err := operation(operationCtx, index); err != nil {
+					failures <- err
+					cancel()
 					return
 				}
 			}
-			select {
-			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
-			case <-operationCtx.Done():
-				errors <- operationCtx.Err()
-				return
-			}
-			if err := operation(operationCtx, index); err != nil {
-				errors <- err
-				cancel()
-			}
 		}()
 	}
-	group.Wait()
-	close(errors)
-	for err := range errors {
-		if err != nil && err != context.Canceled {
-			return err
+	// Parallel publication delays are independent offsets from batch start.
+	// Dispatch by due time so a late first item cannot hold up an earlier one.
+	// Waiting for a worker does not reset any remaining publication deadline.
+	var order []int
+	delay := func(index int) time.Duration {
+		if index < len(delays) && delays[index] > 0 {
+			return delays[index]
+		}
+		return 0
+	}
+	if delayParallel && len(delays) > 0 {
+		order = make([]int, count)
+		for i := range order {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(i, j int) bool { return delay(order[i]) < delay(order[j]) })
+	}
+dispatch:
+	for i := 0; i < count; i++ {
+		index := i
+		if order != nil {
+			index = order[i]
+			if err := sleepContext(operationCtx, time.Until(started.Add(delay(index)))); err != nil {
+				break
+			}
+		}
+		select {
+		case <-operationCtx.Done():
+			break dispatch
+		case jobs <- index:
 		}
 	}
-	return ctx.Err()
+	close(jobs)
+	group.Wait()
+	close(failures)
+	var canceled error
+	for err := range failures {
+		if !errors.Is(err, context.Canceled) {
+			return err
+		}
+		if canceled == nil {
+			canceled = err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A canceled operation is still a failure when its parent is alive.
+	return canceled
 }
 
 func (s *Server) agent(id string) (model.Agent, bool) {

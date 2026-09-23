@@ -44,7 +44,7 @@ type Server struct {
 	logger            *slog.Logger
 	startedAt         time.Time
 	publishSeq        atomic.Uint64
-	publishMu         sync.Mutex
+	publishGate       publicationGate
 	publishing        publicationBridge
 	mesh              meshTracker
 	discoveryMu       sync.Mutex
@@ -368,7 +368,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	if request.PayloadSize <= 0 {
 		request.PayloadSize = 32
 	}
-	if request.PayloadSize > 16<<20 {
+	if request.PayloadSize > model.MaxPublishPayloadBytes {
 		http.Error(w, "payload exceeds 16 MiB", http.StatusBadRequest)
 		return
 	}
@@ -396,20 +396,23 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	for _, topicName := range topicNames {
 		// Start the application clock after acquiring the publication gate.
 		// Queueing behind another HTTP publish is not propagation latency.
-		s.publishMu.Lock()
+		if err := s.publishGate.acquire(publishCtx); err != nil {
+			http.Error(w, err.Error(), http.StatusGatewayTimeout)
+			return
+		}
 		if err := s.waitPublishReady(publishCtx, topicName); err != nil {
-			s.publishMu.Unlock()
+			s.publishGate.release()
 			http.Error(w, err.Error(), http.StatusGatewayTimeout)
 			return
 		}
 		message, err := s.preparePublicationWithClock(request, s.telemetry.clockReading())
 		if err != nil {
-			s.publishMu.Unlock()
+			s.publishGate.release()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		message, err = s.publishPreparedMessage(publishCtx, topicName, message)
-		s.publishMu.Unlock()
+		s.publishGate.release()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

@@ -95,6 +95,9 @@ type CreateNodeRequest struct {
 	Lifetime   string     `json:"lifetime,omitempty"`
 }
 
+// MaxPublishPayloadBytes is shared by scenario validation and Peer admission.
+const MaxPublishPayloadBytes = 16 << 20
+
 type PublishRequest struct {
 	RunID       string `json:"runId"`
 	Topic       string `json:"topic,omitempty"`

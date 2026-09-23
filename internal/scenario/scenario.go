@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -216,7 +217,7 @@ func (s *Scenario) Validate() error {
 			if p.ReadyRatio == 0 {
 				p.ReadyRatio = 1
 			}
-			if p.ReadyRatio <= 0 || p.ReadyRatio > 1 {
+			if math.IsNaN(p.ReadyRatio) || p.ReadyRatio <= 0 || p.ReadyRatio > 1 {
 				return fmt.Errorf("phase %q: readyRatio must be in (0, 1]", p.Name)
 			}
 			if p.Timeout == "" {
@@ -272,6 +273,9 @@ func (s *Scenario) Validate() error {
 			}
 			if p.PayloadSize <= 0 {
 				p.PayloadSize = 32
+			}
+			if p.PayloadSize > model.MaxPublishPayloadBytes {
+				return fmt.Errorf("phase %q: payloadSize exceeds 16 MiB", p.Name)
 			}
 			if err := p.Interval.Validate(true); err != nil {
 				return fmt.Errorf("phase %q interval: %w", p.Name, err)

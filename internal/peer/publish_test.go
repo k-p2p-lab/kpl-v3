@@ -294,7 +294,9 @@ func TestHTTPPublishTimestampExcludesWaitingForPublicationGate(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(`{"topic":"topic-a","payloadSize":32}`)).WithContext(ctx)
 	response := httptest.NewRecorder()
 	started, done := make(chan struct{}), make(chan struct{})
-	server.publishMu.Lock()
+	if err := server.publishGate.acquire(parent); err != nil {
+		t.Fatal(err)
+	}
 	go func() {
 		close(started)
 		server.handler().ServeHTTP(response, request)
@@ -305,12 +307,12 @@ func TestHTTPPublishTimestampExcludesWaitingForPublicationGate(t *testing.T) {
 	// actual release timestamp, not a tolerance on total test execution time.
 	select {
 	case <-done:
-		server.publishMu.Unlock()
+		server.publishGate.release()
 		t.Fatal("HTTP publication bypassed the publication gate")
 	case <-time.After(25 * time.Millisecond):
 	}
 	releasedAt := time.Now().UTC()
-	server.publishMu.Unlock()
+	server.publishGate.release()
 	select {
 	case <-done:
 	case <-ctx.Done():
@@ -451,5 +453,52 @@ func TestPublishMeasurementWindowValidationAndFields(t *testing.T) {
 		if !found {
 			t.Fatal("missing successful publication event")
 		}
+	}
+}
+
+func TestCanceledHTTPPublicationDoesNotWaitForGate(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "canceled"
+		if deadline {
+			name = "deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			server, parent := publicationTestServer(t)
+			ctx, cancel := context.WithCancel(parent)
+			if deadline {
+				cancel()
+				ctx, cancel = context.WithTimeout(parent, 25*time.Millisecond)
+			}
+			defer cancel()
+			if err := server.publishGate.acquire(parent); err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(`{"topic":"topic-a","payloadSize":32}`)).WithContext(ctx)
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				server.handler().ServeHTTP(response, request)
+				close(done)
+			}()
+			if !deadline {
+				cancel()
+			}
+			<-ctx.Done()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Error("canceled HTTP publication remained queued behind the gate")
+			}
+			server.publishGate.release()
+			<-done
+			if response.Code != http.StatusGatewayTimeout {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			for len(server.telemetry.events) > 0 {
+				if event := <-server.telemetry.events; event.Type == "publish" {
+					t.Fatal("canceled queued request emitted a publication")
+				}
+			}
+		})
 	}
 }

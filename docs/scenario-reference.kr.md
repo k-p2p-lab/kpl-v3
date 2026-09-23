@@ -183,11 +183,11 @@ curl -X POST http://control-node:8080/api/v1/experiments \
 | `type` | `join`, `publish`, `leave`, `wait-ready` | Join preset을 선택하거나 적용 완료된 type으로 기존 노드를 필터링합니다. |
 | `role`, `profile`, `node` | `join` | Role은 `boot` 또는 기본값 `worker`이며 profile과 inline node 설정으로 preset을 조정합니다. |
 | `placement`, `agentId` | `join` | 기본값 `balanced`는 사용률로 선택하고 `random`은 노드마다, `single-agent`는 batch마다 Agent 하나를 선택합니다. 명시적 `agentId`는 배치를 고정하며 admission은 가용 용량을 기다립니다. |
-| `parallel`, `parallelism` | `join`, `publish`, `leave` | 기본값은 순차 실행입니다. Parallel을 켜고 parallelism을 생략하거나 0으로 설정하면 batch 전체의 동시 실행을 허용합니다. |
+| `parallel`, `parallelism` | `join`, `publish`, `leave` | 기본값은 순차 실행입니다. Parallel을 켜고 parallelism을 생략하거나 0으로 설정하면 batch 전체의 동시 실행을 허용합니다. 명시한 값은 실행 중인 작업뿐 아니라 worker goroutine 수도 제한하며, 대기 중인 publish의 지연 시간은 batch 시작 시점 기준을 유지합니다. |
 | `interval`, `lifetime` | 간격이 있는 작업; lifetime은 `join`만 | 아래 시간 규칙을 따릅니다. Peer lifetime은 컨테이너 생성 성공 후 시작하므로 설정 복사, start, bootstrap을 포함하며 background job 완료와 독립적입니다. |
-| `topic`, `payloadSize`, `payloadEncoding` | `publish` | Topic 기본값은 publisher의 첫 설정 topic이며 `'*'`는 설정한 모든 topic으로 발행합니다. 0 이하 `payloadSize`는 `32`로 처리합니다. 기본값 `envelope`는 JSON/base64 metadata를 추가하고 `raw`는 PubSub data를 정확히 `payloadSize` byte로 만듭니다. |
+| `topic`, `payloadSize`, `payloadEncoding` | `publish` | Topic 기본값은 publisher의 첫 설정 topic이며 `'*'`는 설정한 모든 topic으로 발행합니다. 0 이하 `payloadSize`는 `32`로 처리하며 16 MiB를 초과하는 값은 시나리오 검증에서 거부합니다. 기본값 `envelope`는 JSON/base64 metadata를 추가하고 `raw`는 PubSub data를 정확히 `payloadSize` byte로 만듭니다. |
 | `deliveryWindow`, `onError` | `publish`; `onError`는 `leave`에도 적용 | Window 기본값은 `10s`입니다. 기본값 `onError: fail` 대신 `continue`를 사용하면 개별 작업 실패를 기록하고 churn을 계속합니다. Publish 후보가 없을 때 `continue`는 아무 작업 없이 성공합니다. |
-| `group`, `type`, `readyRatio`, `minCount`, `jobs`, `timeout` | `wait-ready` | 빈 group/type은 현재 generation의 모든 노드에 대응합니다. Ratio 기본값은 `1`, timeout 기본값은 `1m`이며 job 대기와 readiness를 함께 제한합니다. `minCount`는 cohort 크기의 하한입니다. |
+| `group`, `type`, `readyRatio`, `minCount`, `jobs`, `timeout` | `wait-ready` | 빈 group/type은 현재 generation의 모든 노드에 대응합니다. Ratio 기본값은 `1`이며 유한한 `(0, 1]` 값이어야 합니다. Timeout 기본값은 `1m`이며 job 대기와 readiness를 함께 제한합니다. `minCount`는 cohort 크기의 하한입니다. |
 | `jobs`, `timeout` | `wait-jobs` | 빈 jobs는 추적하는 모든 job을 뜻하며 timeout 기본값은 `5m`입니다. |
 | `duration`; `message` | `wait` / `sleep`; `log` | 양수 대기 시간과 Controller 로그 메시지입니다. |
 
@@ -254,4 +254,4 @@ phases:
 
 Docker 런타임은 Peer마다 네트워크를 격리하고 노드별 P2P egress 조건을 지원합니다. `wait-ready`는 Peer 초기화와 API 준비 완료를 확인하며 mesh 수렴을 검증하지 않습니다. 주기적 topic discovery가 churn 중 transport 후보를 보강하지만 GossipSub heartbeat와 GRAFT 처리에는 여전히 수렴 시간이 필요합니다. 필요한 실험에는 별도 안정화 대기 단계를 추가하십시오. scenario seed는 앞서 설명한 조건에서 애플리케이션 sampling과 순서를 재현하지만, 커널의 packet impairment나 네트워크 타이밍까지 동일하게 재현하지는 않습니다. HopWave는 지원하지 않습니다.
 
-종료된 노드의 이력은 현재 메모리에 유지되며 Agent heartbeat와 Controller snapshot에도 포함됩니다. 장기간 대규모 churn을 실행할 때 control-plane 상태와 payload가 계속 증가하지 않도록 제한된 보존 정책과 별도의 pagination 기반 history API가 추가로 필요합니다.
+종료된 노드의 이력은 메모리에 유지되며 Agent의 전체 등록 정보와 Controller의 전체 snapshot에 포함됩니다. 평상시 부분 heartbeat, discovery, dashboard SSE는 활성 노드와 전송할 변경 사항을 사용하여 전체 이력의 반복 처리를 피합니다. 보존 메모리와 전체 snapshot 크기까지 제한하는 것은 아니므로, 장기간 대규모 churn에는 제한된 보존 정책과 별도의 pagination 기반 history API가 추가로 필요합니다. 대규모 parallel phase에는 `parallelism`을 명시하십시오. 생략하면 여전히 batch 전체의 동시 실행을 허용합니다.

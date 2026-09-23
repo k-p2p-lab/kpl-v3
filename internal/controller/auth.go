@@ -200,42 +200,65 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid login request")
 		return
 	}
-	recordWebAuth(r, "login", "failure", "invalid_credentials", credentials.User)
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	now := time.Now()
+	var previousSession string
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
+		previousSession = cookie.Value
+	}
+	result := s.authenticateLogin(host, credentials.User, credentials.Password, previousSession)
+	// Network writes must never hold the shared session lock: a slow login
+	// client must not block authentication, logout, or SSE session revocation.
+	if result.status != http.StatusOK {
+		if result.status == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "300")
+		}
+		recordWebAuth(r, "login", "failure", result.reason, credentials.User)
+		writeError(w, result.status, result.message)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: result.value, Path: "/", HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode, MaxAge: int(sessionLifetime.Seconds()), Expires: result.expires})
+	setWebIdentity(r, "session", s.config.User)
+	recordWebAuth(r, "login", "success", "", s.config.User)
+	writeJSON(w, http.StatusOK, map[string]any{"user": s.config.User, "expiresAt": result.expires})
+}
+
+type loginResult struct {
+	status  int
+	reason  string
+	message string
+	value   string
+	expires time.Time
+}
+
+func (s *Server) authenticateLogin(host, user, password, previousSession string) loginResult {
 	s.auth.mu.Lock()
 	defer s.auth.mu.Unlock()
+	now := time.Now()
 	for ip, attempt := range s.auth.failures {
 		if !now.Before(attempt.expires) {
 			delete(s.auth.failures, ip)
 		}
 	}
+	limited := loginResult{status: http.StatusTooManyRequests, reason: "rate_limited", message: "too many login attempts; try again later"}
 	attempt := s.auth.failures[host]
 	if attempt.count >= 10 {
-		w.Header().Set("Retry-After", "300")
-		recordWebAuth(r, "login", "failure", "rate_limited", credentials.User)
-		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
-		return
+		return limited
 	}
-	validUser := auth.Equal(credentials.User, s.config.User)
-	validPassword := auth.Equal(credentials.Password, s.config.Password)
+	validUser := auth.Equal(user, s.config.User)
+	validPassword := auth.Equal(password, s.config.Password)
 	if !validUser || !validPassword {
 		if len(s.auth.failures) >= sessionLimit && attempt.count == 0 {
-			w.Header().Set("Retry-After", "300")
-			recordWebAuth(r, "login", "failure", "rate_limited", credentials.User)
-			writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
-			return
+			return limited
 		}
 		if attempt.count == 0 {
 			attempt.expires = now.Add(5 * time.Minute)
 		}
 		attempt.count++
 		s.auth.failures[host] = attempt
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
-		return
+		return loginResult{status: http.StatusUnauthorized, reason: "invalid_credentials", message: "invalid username or password"}
 	}
 	delete(s.auth.failures, host)
 	for key, session := range s.auth.sessions {
@@ -245,31 +268,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Reauthentication rotates the old session, including its SSE connections.
-	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		key := sha256.Sum256([]byte(cookie.Value))
+	if previousSession != "" {
+		key := sha256.Sum256([]byte(previousSession))
 		if session := s.auth.sessions[key]; session != nil {
 			close(session.done)
 			delete(s.auth.sessions, key)
 		}
 	}
 	if len(s.auth.sessions) >= sessionLimit {
-		recordWebAuth(r, "login", "failure", "session_capacity", credentials.User)
-		writeError(w, http.StatusServiceUnavailable, "session capacity reached; try again later")
-		return
+		return loginResult{status: http.StatusServiceUnavailable, reason: "session_capacity", message: "session capacity reached; try again later"}
 	}
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
-		recordWebAuth(r, "login", "failure", "session_creation_failed", credentials.User)
-		writeError(w, http.StatusInternalServerError, "could not create session")
-		return
+		return loginResult{status: http.StatusInternalServerError, reason: "session_creation_failed", message: "could not create session"}
 	}
 	value := hex.EncodeToString(secret)
 	session := &browserSession{expires: now.Add(sessionLifetime), done: make(chan struct{})}
 	s.auth.sessions[sha256.Sum256([]byte(value))] = session
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: value, Path: "/", HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteStrictMode, MaxAge: int(sessionLifetime.Seconds()), Expires: session.expires})
-	setWebIdentity(r, "session", s.config.User)
-	recordWebAuth(r, "login", "success", "", s.config.User)
-	writeJSON(w, http.StatusOK, map[string]any{"user": s.config.User, "expiresAt": session.expires})
+	return loginResult{status: http.StatusOK, value: value, expires: session.expires}
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {

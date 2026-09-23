@@ -86,6 +86,8 @@ Controller 이미지를 갱신하고 페이지를 새로고침한 뒤 브라우�
 
 Run이 완료·실패·취소되면 해당 실험의 캐러셀 수치는 초기 N/A·0으로 돌아갑니다. 카드는 그대로 유지하며 다음 run이 시작되면 새 수치를 표시합니다. 클러스터 수치는 실시간 상태를 유지하고 최종 측정값은 **Saved results**에서 확인합니다.
 
+**Saved results**의 반복 실행 그룹 내부는 queued 및 재시도 항목을 포함해 **Run n of M**의 숫자 순서(1, 2, …, 10)로 정렬합니다. queued 항목이 실행을 시작해도 순서를 유지합니다. 이전 시도는 별도 표에 남으며, 유효한 회차 번호가 없는 항목은 마지막에 표시합니다. 배치 그룹 자체는 기존 결과 목록 위치를 유지합니다. 결과 API는 시작 시각 최신순을 유지하되 queued처럼 시작 시각이 같으면 배치·회차·ID 순서로 정렬합니다.
+
 **Available slots**는 online Agent가 보고한 여유 Peer 수를 합산하며 offline Agent는 포함하지 않습니다. Capacity는 CPU·메모리 예약이 아닌 생성 허용 개수입니다. 값을 늘리기 전 [Peer 배치와 capacity](swarm.kr.md#분배와-용량)를 확인하십시오.
 
 **Saved results → Images**에서 서버 백그라운드 분석을 접수하고 개요·메시지·반복 비교 그림을 PNG/CSV/ZIP으로 다운로드합니다. 저장 기록을 사용하며 Prometheus 보존과 독립적입니다. 조작 방법은 [결과 이미지](visualization.kr.md), 계산 정의는 [실험 지표](experiment-metrics.kr.md#저장-결과-연구-지표)를 참고하십시오.

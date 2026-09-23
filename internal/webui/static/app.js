@@ -312,14 +312,14 @@ function relativeTime(value) {
   return new Date(value).toLocaleString("en-US", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function redirectToLogin() {
+function redirectToLogin(loginRequired = true) {
   if (state.loginRedirecting) return;
   state.loginRedirecting = true;
   state.stream?.close();
   clearTimeout(state.reconnectTimer);
   if (state.streamWatchdogTimer != null) clearTimeout(state.streamWatchdogTimer);
   state.streamAuthAbort?.abort();
-  globalThis.location.replace("/login");
+  globalThis.location.replace(loginRequired ? "/login-required" : "/login");
 }
 
 async function logout() {
@@ -327,7 +327,7 @@ async function logout() {
   button.disabled = true;
   try {
     await api("/api/v1/auth/logout", { method: "POST" });
-    redirectToLogin();
+    redirectToLogin(false);
   } catch (error) {
     if (error.status !== 401) showToast(error.message);
   } finally {
@@ -1120,6 +1120,12 @@ function currentBatchRuns(runs) {
   return runs.filter(run => !previous.has(run.id));
 }
 
+function batchIterationOrder(a, b) {
+  const first = Number.isInteger(a.iteration) && a.iteration > 0 ? a.iteration : Infinity;
+  const second = Number.isInteger(b.iteration) && b.iteration > 0 ? b.iteration : Infinity;
+  return first - second || String(a.id).localeCompare(String(b.id));
+}
+
 function savedResultBatches(results, includeSingles = false) {
   const groups = new Map();
   for (const run of results) {
@@ -1130,8 +1136,8 @@ function savedResultBatches(results, includeSingles = false) {
     batch.expected = Math.max(batch.expected, run.repetitions || 1);
   }
   return [...groups.values()].filter(batch => includeSingles || batch.expected > 1 || batch.runs.some(run => run.previousRunIds?.length)).map(batch => {
-    const runs = currentBatchRuns(batch.runs), current = new Set(runs.map(run => run.id));
-    return { ...batch, runs, previousRuns: batch.runs.filter(run => !current.has(run.id)),
+    const runs = currentBatchRuns(batch.runs).sort(batchIterationOrder), current = new Set(runs.map(run => run.id));
+    return { ...batch, runs, previousRuns: batch.runs.filter(run => !current.has(run.id)).sort(batchIterationOrder),
       completed: runs.filter(run => run.state === "completed").length,
       active: batch.runs.some(isPendingRun),
       job: batch.runs.find(run => run.batchAnalysis)?.batchAnalysis,

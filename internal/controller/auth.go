@@ -7,15 +7,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/k-p2p-lab/v3/internal/auth"
+	"github.com/k-p2p-lab/v3/internal/webui"
 )
 
 const sessionCookieName = "kpl_session"
@@ -95,7 +98,7 @@ func publicAuthPath(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/login", "/login.html", "/login.js", "/login.css", "/styles.css", "/kpl-logo.jpg", "/favicon.ico",
+	case "/login", "/login.html", "/login-required", "/login-required.html", "/login.js", "/login.css", "/styles.css", "/kpl-logo.jpg", "/favicon.ico",
 		"/api/v1/health", "/metrics", "/api/v1/prometheus/agent-targets", "/api/v1/prometheus/controller-targets":
 		return true
 	}
@@ -132,6 +135,8 @@ func (s *Server) withAuthentication(next http.Handler) http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 			if (r.URL.Path == "/" || r.URL.Path == "/index.html") && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
+			} else if wantsLoginRequiredHTML(r) {
+				serveLoginRequired(w, r)
 			} else {
 				writeError(w, http.StatusUnauthorized, "login required")
 			}
@@ -162,6 +167,55 @@ func (s *Server) withAuthentication(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// HTML is for browser navigation; API/SSE clients retain the JSON 401 contract.
+func wantsLoginRequiredHTML(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if r.Header.Get("Sec-Fetch-Mode") == "navigate" {
+		return true
+	}
+	var htmlQuality, jsonQuality float64
+	for _, item := range strings.Split(r.Header.Get("Accept"), ",") {
+		media, params, err := mime.ParseMediaType(strings.TrimSpace(item))
+		if err != nil {
+			continue
+		}
+		quality := 1.0
+		if raw, exists := params["q"]; exists {
+			quality, err = strconv.ParseFloat(raw, 64)
+			if err != nil || !(quality >= 0 && quality <= 1) {
+				continue
+			}
+		}
+		switch media {
+		case "text/html":
+			htmlQuality = max(htmlQuality, quality)
+		case "application/json":
+			jsonQuality = max(jsonQuality, quality)
+		}
+	}
+	return htmlQuality > 0 && htmlQuality >= jsonQuality
+}
+
+func serveLoginRequired(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w)
+		return
+	}
+	page, err := fs.ReadFile(webui.FS(), "login-required.html")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load login page")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(page)
+	}
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

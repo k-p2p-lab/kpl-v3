@@ -29,7 +29,7 @@ test('an expired session redirects once and stops stream reconnection without as
   let redirects=0, closed=0, cleared=0;
   const context = {
     Headers, state:{loginRedirecting:false, stream:{close(){closed++;}}, reconnectTimer:42},
-    location:{replace(url){assert.equal(url,'/login');redirects++;}},
+    location:{replace(url){assert.equal(url,'/login-required');redirects++;}},
     clearTimeout(id){assert.equal(id,42);cleared++;},
     fetch:async()=>({ok:false,status:401,statusText:'Unauthorized',json:async()=>({error:'login required'})}),
   };
@@ -37,4 +37,22 @@ test('an expired session redirects once and stops stream reconnection without as
   vm.runInContext(functions, context);
   for(let i=0;i<2;i++)await assert.rejects(context.api('/api/v1/results'),error=>error.status===401&&error.message==='login required');
   assert.equal(redirects,1);assert.equal(closed,1);assert.equal(cleared,1);
+});
+
+test('an explicit successful logout goes to the login form instead of the error page', async () => {
+  const button = {disabled:false}, redirects = [];
+  const context = {
+    Headers, state:{loginRedirecting:false}, $:()=>button,
+    location:{replace(url){redirects.push(url);}}, clearTimeout(){},
+    fetch:async(url,options)=>{
+      assert.equal(url,'/api/v1/auth/logout');
+      assert.equal(options.method,'POST');
+      return {ok:true,status:204};
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(functions,context);
+  await context.logout();
+  assert.deepEqual(redirects,['/login']);
+  assert.equal(button.disabled,false);
 });

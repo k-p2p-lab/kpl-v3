@@ -14,3 +14,6 @@
 .login-footer { padding-top: 1.25rem; text-align: center; font-size: .8rem; }
 .login-footer a { color: var(--muted); text-decoration: none; }
 .login-footer a:hover { color: var(--text); }
+
+.login-required-actions { display: grid; gap: .75rem; }
+.login-required-actions a { width: 100%; min-height: 2.8rem; justify-content: center; text-decoration: none; }

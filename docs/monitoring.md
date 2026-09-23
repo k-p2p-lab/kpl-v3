@@ -86,6 +86,8 @@ If a connection stalls, the Dashboard automatically closes it after 30 seconds w
 
 When a run finishes, fails or is canceled, its carousel measurements reset to the initial N/A/zero values. All cards remain available; the next running run supplies new values. Cluster counts stay live, and final measurements remain in **Saved results**.
 
+Within a repeated-run group in **Saved results**, rows are ordered by numeric **Run n of M** (1, 2, …, 10), including queued runs and retries. The order stays stable when a queued run starts; previous attempts remain in their separate table and entries without a valid iteration appear last. Batch groups keep their archive position. The results API keeps newest-started-first ordering, with batch/iteration/ID tie breaks for equal start times such as queued runs.
+
 **Available slots** totals the free Peer capacity reported by online Agents; offline Agents contribute no available slots. Capacity is an admission count, not a CPU or memory reservation. See [Peer placement and capacity](swarm.md#distribution-and-capacity) before increasing it.
 
 **Saved results → Images** submits server background analysis and provides overview, message and repeated-run charts as PNG/CSV/ZIP. It uses saved records independently of Prometheus retention. See [result images](visualization.md) for operation and [experiment metrics](experiment-metrics.md#saved-result-research-metrics) for definitions.

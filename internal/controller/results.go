@@ -469,10 +469,26 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(results, func(i, j int) bool {
-		if results[i].StartedAt.Equal(results[j].StartedAt) {
-			return results[i].ID < results[j].ID
+		a, b := results[i], results[j]
+		if !a.StartedAt.Equal(b.StartedAt) {
+			return a.StartedAt.After(b.StartedAt)
 		}
-		return results[i].StartedAt.After(results[j].StartedAt)
+		// Queued runs share a zero start time. Their IDs do not encode the
+		// batch execution order; use a complete group/iteration tie break.
+		aGroup, bGroup := a.BatchID, b.BatchID
+		if aGroup == "" {
+			aGroup = a.ID
+		}
+		if bGroup == "" {
+			bGroup = b.ID
+		}
+		if aGroup != bGroup {
+			return aGroup < bGroup
+		}
+		if a.Iteration != b.Iteration {
+			return a.Iteration < b.Iteration
+		}
+		return a.ID < b.ID
 	})
 	batchMembers := map[string][]savedResult{}
 	for _, result := range results {

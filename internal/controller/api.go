@@ -127,6 +127,8 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/v1/auth/session", s.handleSession)
 	mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("/login-required", serveLoginRequired)
+	mux.HandleFunc("/login-required.html", serveLoginRequired)
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFileFS(w, r, webui.FS(), "login.html")

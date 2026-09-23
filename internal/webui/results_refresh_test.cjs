@@ -107,7 +107,7 @@ test('Saved results groups only one repetition batch and preserves individual ac
 });
 
 
-test('repeated series start collapsed and render every individual result exactly once in archive order', () => {
+test('repeated series keep archive group order and show individual results in execution order', () => {
   const runs = [
     { id: 'first', name: 'Independent', state: 'completed' },
     { id: 'a3', name: 'Same name', batchId: 'alpha', repetitions: 3, iteration: 3, state: 'completed' },
@@ -123,8 +123,8 @@ test('repeated series start collapsed and render every individual result exactly
   assert.deepEqual([...html.matchAll(/<details[^>]+data-result-batch="([^"]+)"/g)].map(match => match[1]), ['alpha', 'beta']);
   assert.doesNotMatch(html, /<details[^>]*\bopen(?:[\s=>])/);
   const groups = [...html.matchAll(/<details[^>]+data-result-batch="([^"]+)"[\s\S]*?<\/details>/g)];
-  assert.match(groups[0][0], /Run 3 of 3[\s\S]*Run 2 of 3[\s\S]*Run 1 of 3/);
-  assert.match(groups[1][0], /Run 2 of 2[\s\S]*Run 1 of 2/);
+  assert.match(groups[0][0], /Run 1 of 3[\s\S]*Run 2 of 3[\s\S]*Run 3 of 3/);
+  assert.match(groups[1][0], /Run 1 of 2[\s\S]*Run 2 of 2/);
   for (const run of runs) {
     for (const action of ['images', 'download']) assert.equal(html.split(`data-result-${action}="${run.id}"`).length - 1, 1);
     assert.equal(html.split(`data-delete-result="${run.id}"`).length - 1, 1);
@@ -147,7 +147,7 @@ test('series retain incomplete metadata members and remain grouped until their l
   assert.match(html, /data-result-batch="batch&quot;&lt;&amp;"/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(html, /<img/);
-  assert.match(html, /<details[\s\S]*data-result-images="metadata-partial"[\s\S]*data-result-images="remaining"[\s\S]*<\/details>/);
+  assert.match(html, /<details[\s\S]*data-result-images="remaining"[\s\S]*data-result-images="metadata-partial"[\s\S]*<\/details>/);
   assert.match(html, /2 runs · 1 \/ 3 completed · 1 excluded · 1 missing\/unreadable/);
   state.savedResults = runs.slice(1);
   api.renderSavedResults();
@@ -338,4 +338,28 @@ test('Retry after a Controller restart accepts an empty live snapshot',async()=>
   assert.equal(state.snapshot.experiments.length,1);
   assert.equal(state.snapshot.experiments[0].id,'retry');
   assert.match(toast,/Queued 3 unfinished runs/);
+});
+
+test('queued, running and retried batch rows keep numeric execution order across refresh', () => {
+  const runs = [
+    {id:'old-2',batchId:'batch',iteration:2,repetitions:12,state:'failed'},
+    {id:'run-10',batchId:'batch',iteration:10,repetitions:12,state:'queued'},
+    {id:'retry-2',batchId:'batch',iteration:2,repetitions:12,state:'queued',previousRunIds:['old-2']},
+    {id:'run-3',batchId:'batch',iteration:3,repetitions:12,state:'queued'},
+    {id:'run-1',batchId:'batch',iteration:1,repetitions:12,state:'completed'},
+  ];
+  const {api,state,element} = fixture(runs);
+  const original = JSON.stringify(runs);
+  const assertOrder = () => {
+    const html = element('#savedResultsRows').innerHTML;
+    const current = html.split('Previous attempts')[0];
+    assert.deepEqual([...current.matchAll(/data-result-images="([^"]+)"/g)].map(match=>match[1]),['run-1','retry-2','run-3','run-10']);
+    assert.equal((html.match(/data-result-images="old-2"/g)||[]).length,1);
+    assert.doesNotMatch(current,/data-result-images="old-2"/);
+  };
+  assertOrder();
+  assert.equal(JSON.stringify(runs),original,'rendering mutated the received archive order');
+  state.savedResults = [...runs].reverse().map(run=>run.id==='retry-2'?{...run,state:'running',startedAt:'2026-09-23T00:00:00Z'}:run);
+  api.renderSavedResults();
+  assertOrder();
 });

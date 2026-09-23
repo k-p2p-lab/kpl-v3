@@ -264,7 +264,7 @@ The new placement uses stack-specific `kpl.<stack>.agent` labels instead of the 
 
 | Setting | Placement behavior |
 |---|---|
-| `placement: balanced` (default) | Choose the online Agent with the lowest occupancy-to-capacity ratio. Break ties by Agent ID |
+| `placement: balanced` (default) | Choose the online Agent with the lowest projected occupancy after adding one Peer, divided by effective capacity. Break ties by current utilization, then Agent ID |
 | `placement: random` | Use the seed to choose among online Agents with available capacity |
 | `placement: single-agent` | Pin one join execution to one selected Agent. Each repeat selects again. Wait if that Agent is full rather than switching servers |
 | `agentId` | Pin placement to the specified Agent. Use an ID from `/api/v1/agents` for experiments pinned to a physical server |
@@ -273,6 +273,8 @@ The new placement uses stack-specific `kpl.<stack>.agent` labels instead of the 
 Capacity is a Peer-count admission limit, not a CPU or memory reservation or a cgroup limit. Changing the Agent's Swarm resource limits does not apply those limits to its sibling Peer containers. The supplied stack uses `KPL_AGENT_CAPACITY` as the startup default for every Agent. In **Dashboard → Agent status → Configure**, choose **Custom for this Agent** to override that default for the selected Agent ID, or **CLI default** to remove its override. For example, keep `KPL_AGENT_CAPACITY=200` and set one Agent to `100`; the other Agents continue to use `200`. Choose capacity based on measured CPU, RAM, file-descriptor, conntrack, and Docker daemon load.
 
 Per-Agent overrides are saved in `<controller-data-dir>/agent-capacities.json` and survive Controller/Agent restarts when the Controller volume and Agent ID remain the same. Keep this file in Controller backups. A changed Agent ID is a different configuration target. An offline Agent receives its saved setting when it reconnects. Both Controller and Agents must run a version supporting these settings; the UI disables Configure for older Agents.
+
+Balanced placement uses each Agent’s effective capacity, including Dashboard overrides. With otherwise idle Agents of capacity 100 and 50, 75 Peer reservations distribute as 50 and 25. Occupancy includes all experiments, pending reservations, and containers awaiting removal. Existing Peers stay in place; new joins and slots released during churn bring the ratios back into balance. Explicit `agentId`, `random`, and `single-agent` policies retain their requested placement behavior.
 
 Capacity changes apply through registration/heartbeats without a service restart. The table shows the CLI default or override and **Applying…** until acknowledged. A reduction limits new placement immediately and leaves existing Peers running; if occupancy exceeds the new limit, joins wait for space. Increases become available after the Agent acknowledges the current setting. The Agent also enforces the effective limit locally, and its capacity metric follows it.
 

@@ -182,7 +182,7 @@ curl -X POST http://control-node:8080/api/v1/experiments \
 | `group`, `count` | `join`, `publish`, `leave` | 필수 group과 양수 작업 수입니다. Publish의 각 반복은 조건에 맞는 서로 다른 publisher를 최대 `count`개 선택합니다. |
 | `type` | `join`, `publish`, `leave`, `wait-ready` | Join preset을 선택하거나 적용 완료된 type으로 기존 노드를 필터링합니다. |
 | `role`, `profile`, `node` | `join` | Role은 `boot` 또는 기본값 `worker`이며 profile과 inline node 설정으로 preset을 조정합니다. |
-| `placement`, `agentId` | `join` | 기본값 `balanced`는 사용률로 선택하고 `random`은 노드마다, `single-agent`는 batch마다 Agent 하나를 선택합니다. 명시적 `agentId`는 배치를 고정하며 admission은 가용 용량을 기다립니다. |
+| `placement`, `agentId` | `join` | 기본값 `balanced`는 다음 Peer를 포함한 예상 점유량/유효 Agent capacity(웹 예외값 포함)가 가장 낮은 곳을 선택하고 `random`은 노드마다, `single-agent`는 batch마다 Agent 하나를 선택합니다. 명시적 `agentId`는 배치를 고정하며 admission은 가용 용량을 기다립니다. |
 | `parallel`, `parallelism` | `join`, `publish`, `leave` | 기본값은 순차 실행입니다. Parallel을 켜고 parallelism을 생략하거나 0으로 설정하면 batch 전체의 동시 실행을 허용합니다. 명시한 값은 실행 중인 작업뿐 아니라 worker goroutine 수도 제한하며, 대기 중인 publish의 지연 시간은 batch 시작 시점 기준을 유지합니다. |
 | `interval`, `lifetime` | 간격이 있는 작업; lifetime은 `join`만 | 아래 시간 규칙을 따릅니다. Peer lifetime은 컨테이너 생성 성공 후 시작하므로 설정 복사, start, bootstrap을 포함하며 background job 완료와 독립적입니다. |
 | `topic`, `payloadSize`, `payloadEncoding` | `publish` | Topic 기본값은 publisher의 첫 설정 topic이며 `'*'`는 설정한 모든 topic으로 발행합니다. 0 이하 `payloadSize`는 `32`로 처리하며 16 MiB를 초과하는 값은 시나리오 검증에서 거부합니다. 기본값 `envelope`는 JSON/base64 metadata를 추가하고 `raw`는 PubSub data를 정확히 `payloadSize` byte로 만듭니다. |

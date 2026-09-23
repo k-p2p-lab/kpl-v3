@@ -673,30 +673,32 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 		agent, ok := s.state.agents[agentID]
 		return agent, ok && agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
 	}
+	var selected model.Agent
 	var candidates []model.Agent
+	found := false
+	now := time.Now()
 	for _, agent := range s.state.agents {
 		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
-		if agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
-			candidates = append(candidates, agent)
+		if !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
+			continue
 		}
+		if rng != nil {
+			candidates = append(candidates, agent)
+		} else if !found || balancedAgentBefore(agent, selected) {
+			// Balanced placement needs only the best candidate, not a sort
+			// of the entire fleet while holding the reservation lock.
+			selected = agent
+		}
+		found = true
 	}
-	if len(candidates) == 0 {
+	if !found {
 		return model.Agent{}, false
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if rng != nil {
-			return candidates[i].ID < candidates[j].ID
-		}
-		left, right := utilization(candidates[i]), utilization(candidates[j])
-		if left == right {
-			return candidates[i].ID < candidates[j].ID
-		}
-		return left < right
-	})
-	selected := candidates[0]
 	if rng != nil {
+		// Keep seeded random placement independent of map iteration order.
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
 		selected = candidates[rng.Intn(len(candidates))]
 	}
 	selected.ActiveNodes++
@@ -734,11 +736,27 @@ func (s *Server) selectBatchAgent(ctx context.Context, rng *rand.Rand) (string, 
 	}
 }
 
-func utilization(agent model.Agent) float64 {
-	if agent.Capacity <= 0 {
-		return float64(agent.ActiveNodes)
+// Use the effective capacity, including Dashboard overrides. Looking ahead
+// one Peer avoids filling a small Agent just because both Agents are idle.
+// ActiveNodes also includes reservations and containers still being removed.
+func balancedAgentBefore(a, b model.Agent) bool {
+	left, right := utilization(a, 1), utilization(b, 1)
+	if left != right {
+		return left < right
 	}
-	return float64(agent.ActiveNodes) / float64(agent.Capacity)
+	left, right = utilization(a, 0), utilization(b, 0)
+	if left != right {
+		return left < right
+	}
+	return a.ID < b.ID
+}
+
+func utilization(agent model.Agent, additional int) float64 {
+	occupied := float64(agent.ActiveNodes) + float64(additional)
+	if agent.Capacity <= 0 {
+		return occupied
+	}
+	return occupied / float64(agent.Capacity)
 }
 
 func (s *Server) releaseReservation(nodeID string) {

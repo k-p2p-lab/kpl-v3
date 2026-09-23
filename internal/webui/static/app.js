@@ -13,7 +13,6 @@ const state = {
   agentNumbers: loadAgentNumbers(),
   pendingStops: new Set(), pendingResumes: new Set(), deletedResultIDs: new Set(),
   pendingDelete: null, deletingResultId: null, loginRedirecting: false,
-  detailPanelObserver: null,
   topology: {
     layout: {},
     filters: { transport: false, kademlia: false, gossipsub: false, topic: "" },
@@ -523,37 +522,16 @@ function setupStreamLifecycle() {
   });
 }
 
-function isPanelCollapsed(id) {
-  return $("#panel-" + id + "-body")?.hidden === true;
+function isDashboardPanelHidden(id) {
+  return $("#" + id)?.hidden === true;
 }
 
-function syncDetailPanelHeight() {
-  const agents = $(".agents-panel");
-  const events = $(".events-panel");
-  if (!agents || !events) return;
-  if (isPanelCollapsed("agents") || isPanelCollapsed("events") || window.matchMedia?.("(max-width: 1050px)").matches) {
-    if (events.style.height) events.style.removeProperty("height");
-    return;
-  }
-  const height = agents.getBoundingClientRect().height;
-  if (height > 0 && events.style.height !== `${height}px`) events.style.height = `${height}px`;
-}
-
-function setupDetailPanelSizing() {
-  syncDetailPanelHeight();
-  if (typeof ResizeObserver === "undefined") return;
-  state.detailPanelObserver?.disconnect();
-  state.detailPanelObserver = new ResizeObserver(syncDetailPanelHeight);
-  state.detailPanelObserver.observe($(".agents-panel"));
-}
-
-function setupDashboardPanelHandling() {
-  document.addEventListener("dashboard:panel-toggle", (event) => {
-    syncDetailPanelHeight();
-    if (event.detail?.id !== "topology") return;
-    if (isPanelCollapsed("topology")) {
+function setupDashboardTabHandling() {
+  document.addEventListener("dashboard:tab-change", (event) => {
+    if (event.detail?.id !== "network") {
       state.topology.hovered = null;
       state.topology.drag = null;
+      $("#topology")?.classList.remove("is-panning");
       stopTopologyMotion();
     } else if (state.snapshot) {
       renderTopology(state.snapshot.nodes || [], state.snapshot.edges || []);
@@ -607,7 +585,6 @@ function render(snapshot) {
   renderRuns(snapshot.experiments || []);
   renderAgents(agents);
   renderEvents(snapshot.events || []);
-  syncDetailPanelHeight();
   renderTopology(nodes, edges);
 }
 
@@ -1200,6 +1177,7 @@ async function resumeSavedBatch(id, retry = false) {
       }
     }
     renderResultViews();
+    globalThis.KPLDashboardTabs?.show("experiments");
     showToast(retry ? `Queued ${remaining.length} unfinished ${remaining.length === 1 ? "run" : "runs"} from run ${remaining[0].iteration}. Previous Peers are cleaned up before execution.` : `Continuing ${remaining.length} remaining ${remaining.length === 1 ? "run" : "runs"}. Previous attempted runs are preserved.`);
     await refreshSavedResults();
   } catch (error) {
@@ -1278,7 +1256,7 @@ function restoreSavedResultFocus(focus) {
   const list = $("#savedResultsRows");
   const target = [...list.querySelectorAll(`[${focus.attribute}]`)].find(element => element.getAttribute(focus.attribute) === focus.id);
   const summary = [...list.querySelectorAll("[data-result-batch-toggle]")].find(element => element.dataset.resultBatchToggle === focus.batch);
-  const candidates = [target, summary, $("#refreshResults"), $('[data-panel-toggle="results"]')];
+  const candidates = [target, summary, $("#refreshResults"), $("#tab-results")];
   candidates.find(element => element && !element.disabled && element.getClientRects().length)?.focus({ preventScroll: true });
 }
 
@@ -1601,7 +1579,7 @@ function renderTopology(nodes, edges) {
   const populationLabel = peerPopulationLabel(peerPopulation(nodes));
   const topology = state.topology;
   stopTopologyMotion();
-  if (isPanelCollapsed("topology")) {
+  if (isDashboardPanelHidden("network")) {
     const links = filterTopologyEdges(nodes, edges, topology.filters).length;
     setText($("#topologyLinkCount"), `${populationLabel} · ${formatNumber(links)} visible links`);
     return;
@@ -1750,14 +1728,14 @@ function stopTopologyMotion() {
 
 function startTopologyMotion() {
   const topology = state.topology, motion = topology.motion;
-  if (!motion.enabled || document.hidden || isPanelCollapsed("topology") || !topology.graph?.nodes.length || motion.frame !== null) return;
+  if (!motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph?.nodes.length || motion.frame !== null) return;
   motion.frame = requestAnimationFrame(animateTopology);
 }
 
 function animateTopology(timestamp) {
   const topology = state.topology, motion = topology.motion;
   motion.frame = null;
-  if (!motion.enabled || document.hidden || isPanelCollapsed("topology") || !topology.graph) return;
+  if (!motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph) return;
   // Cap work at 30 frames/s and avoid a jump after a background-tab pause.
   if (topology.drag || timestamp - motion.lastFrame < 1000 / 30) { startTopologyMotion(); return; }
   motion.lastFrame = timestamp;
@@ -1969,7 +1947,10 @@ async function submitScenarioRun() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scenario: $("#scenarioText").value, repetitions }),
     }, "run");
-    if (state.scenarioEditorVersion === editorVersion && $("#scenarioDialog").open) $("#scenarioDialog").close();
+    if (state.scenarioEditorVersion === editorVersion && $("#scenarioDialog").open) {
+      $("#scenarioDialog").close();
+      globalThis.KPLDashboardTabs?.show("experiments");
+    }
     showToast(repetitions > 1 ? `Queued ${repetitions} runs: ${run.name}.` : `Submitted experiment: ${run.name}.`);
   } catch (caught) {
     error.textContent = caught.message;
@@ -2134,11 +2115,9 @@ globalThis.KPLResultImages?.init({ api, onJob: job => {
   if (!state.resultsRefreshTimer && !state.resultsLoading) state.resultsRefreshTimer = setTimeout(refreshSavedResults, 3000);
 } });
 setupTopologyControls();
-setupDashboardPanelHandling();
-setupDetailPanelSizing();
+setupDashboardTabHandling();
 renderSavedScenarios();
 window.addEventListener("resize", () => {
-  syncDetailPanelHeight();
   if (state.snapshot) renderTopology(state.snapshot.nodes || [], state.snapshot.edges || []);
 });
 refreshSavedResults();

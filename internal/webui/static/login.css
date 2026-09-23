@@ -10,10 +10,10 @@
 .login-card input { display: block; width: 100%; min-height: 2.8rem; padding: .7rem .85rem; color: var(--text); background: var(--bg-soft); border: 1px solid var(--line); border-radius: .55rem; }
 .login-card input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .login-error { min-height: 2.7em; margin: .85rem 0; font-size: .85rem; color: var(--red); }
-.login-card button { width: 100%; min-height: 2.8rem; justify-content: center; }
+.login-card button { width: 100%; min-height: var(--control-height); justify-content: center; }
 .login-footer { padding-top: 1.25rem; text-align: center; font-size: .8rem; }
 .login-footer a { color: var(--muted); text-decoration: none; }
 .login-footer a:hover { color: var(--text); }
 
 .login-required-actions { display: grid; gap: .75rem; }
-.login-required-actions a { width: 100%; min-height: 2.8rem; justify-content: center; text-decoration: none; }
+.login-required-actions a { width: 100%; min-height: var(--control-height); justify-content: center; text-decoration: none; }

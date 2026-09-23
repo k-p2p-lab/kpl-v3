@@ -85,7 +85,7 @@ test('metric rendering stays consistent from idle through a run and back to meas
       return elements.get(selector);
     },
   });
-  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight', 'renderTopology']) {
+  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'renderTopology']) {
     api[name] = () => {};
   }
   const render = (metrics) => api.render({
@@ -130,7 +130,7 @@ test('the carousel resets finished runs without changing snapshots or cluster co
     if (!elements.has(selector)) elements.set(selector, {textContent:''});
     return elements.get(selector);
   }});
-  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight', 'renderTopology']) api[name] = () => {};
+  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'renderTopology']) api[name] = () => {};
   const snapshot = {
     generatedAt:'2026-09-17T00:00:00Z',
     agents:[{id:'a', state:'online', capacity:10, activeNodes:2}],
@@ -704,19 +704,19 @@ test('fresh and reconnected snapshots hide failed and stopped peers while retain
 });
 
 
-test('collapsed topology stops rendering and motion, then reopens the latest snapshot without overriding pause', () => {
+test('switching away from the network tab stops motion, then restores the latest snapshot without overriding pause', () => {
   const {ids,document,sandbox,state,frames,render}=uiFixture();
   sandbox.setupTopologyControls();
-  sandbox.setupDashboardPanelHandling();
+  sandbox.setupDashboardTabHandling();
   render();
   state.topology.selected='one';
   state.topology.filters.transport=true;
   const svg=ids.get('topology'), graph=state.topology.graph;
-  const body=ids.get('panel-topology-body');
+  const body=ids.get('network');
   const world=svg.children[0];
   assert.equal(frames.queue.size,1);
   body.hidden=true;
-  document.emit('dashboard:panel-toggle',{detail:{id:'topology',collapsed:true}});
+  document.emit('dashboard:tab-change',{detail:{id:'events',previous:'network'}});
   assert.equal(frames.queue.size,0);
   assert.equal(state.topology.motion.enabled,true);
   const nodes=[peer('one'),peer('two'),peer('new','b'),peer('latest','b')];
@@ -730,7 +730,7 @@ test('collapsed topology stops rendering and motion, then reopens the latest sna
   assert.equal(frames.queue.size,0);
   body.hidden=false;
   svg.clientWidth=720;
-  document.emit('dashboard:panel-toggle',{detail:{id:'topology',collapsed:false}});
+  document.emit('dashboard:tab-change',{detail:{id:'network',previous:'events'}});
   assert.equal(state.topology.graph.nodes.length,4);
   assert.equal(state.topology.graph.width,720);
   assert.equal(state.topology.selected,'one');
@@ -738,9 +738,9 @@ test('collapsed topology stops rendering and motion, then reopens the latest sna
   assert.equal(frames.queue.size,1);
   ids.get('topologyMotion').emit('click');
   body.hidden=true;
-  document.emit('dashboard:panel-toggle',{detail:{id:'topology',collapsed:true}});
+  document.emit('dashboard:tab-change',{detail:{id:'events',previous:'network'}});
   body.hidden=false;
-  document.emit('dashboard:panel-toggle',{detail:{id:'topology',collapsed:false}});
+  document.emit('dashboard:tab-change',{detail:{id:'network',previous:'events'}});
   assert.equal(state.topology.motion.enabled,false);
   assert.equal(frames.queue.size,0);
 });
@@ -762,11 +762,11 @@ test('failed peers leave no selected node, edges, positions or animation frames'
   assert.equal(ids.get('topologyEmpty').hidden,false);
 });
 
-test('Ready card and topology explain the same cluster population through churn and collapse', () => {
+test('Ready card and topology explain the same cluster population through churn and tab changes', () => {
   const {ids, sandbox, state, document} = uiFixture();
-  for (const name of ['renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight']) sandbox[name] = () => {};
+  for (const name of ['renderRuns', 'renderAgents', 'renderEvents']) sandbox[name] = () => {};
   let collapsed = false;
-  sandbox.isPanelCollapsed = () => collapsed;
+  sandbox.isDashboardPanelHidden = () => collapsed;
   const renderSnapshot = (nodes, edges = []) => {
     state.snapshot = {
       nodes, edges, generatedAt:'2026-09-23T00:00:00Z',

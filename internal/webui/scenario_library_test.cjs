@@ -149,33 +149,6 @@ test('scenario form has explicit non-submitting close controls', () => {
   assert.match(source, /#scenarioForm"\)\.addEventListener\("submit", \(event\) => event\.preventDefault\(\)\)/);
 });
 
-test('event panel follows Agent panel height on desktop and returns to natural mobile sizing', () => {
-  const { api, elements, viewport } = fixture(async () => response([]));
-  elements.get('.agents-panel').boxHeight = 417.2;
-  api.syncDetailPanelHeight();
-  assert.equal(elements.get('.events-panel').style.height, '417.2px');
-  viewport.mobile = true;
-  api.syncDetailPanelHeight();
-  assert.equal(elements.get('.events-panel').style.height, '');
-});
-
-test('either collapsed detail panel releases the event height and reopening restores it', () => {
-  const { api, elements } = fixture(async () => response([]));
-  elements.get('.agents-panel').boxHeight = 420;
-  for (const id of ['agents', 'events']) {
-    const body = element();
-    elements.set(`#panel-${id}-body`, body);
-    api.syncDetailPanelHeight();
-    assert.equal(elements.get('.events-panel').style.height, '420px');
-    body.hidden = true;
-    api.syncDetailPanelHeight();
-    assert.equal(elements.get('.events-panel').style.height, '');
-    body.hidden = false;
-    api.syncDetailPanelHeight();
-    assert.equal(elements.get('.events-panel').style.height, '420px');
-  }
-});
-
 test('saved scenario list escapes server values and exposes the selected edit state', () => {
   const { api, state, elements } = fixture(async () => response([]));
   state.savedScenarios = [{

@@ -58,7 +58,7 @@ test('available slots count only online Agents and clamp occupied capacity at ze
     if (!elements.has(selector)) elements.set(selector, { textContent: '' });
     return elements.get(selector);
   };
-  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'syncDetailPanelHeight', 'renderTopology']) context[name] = () => {};
+  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'renderTopology']) context[name] = () => {};
   context.filterTopologyEdges = () => [];
   const agents = [
     { id: 'available', state: 'online', capacity: 10, activeNodes: 4 },

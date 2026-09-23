@@ -34,7 +34,7 @@ test('missing and stale bandwidth stays unavailable while measured zero and fina
 test('partial coverage is visible and actual main rendering clears bandwidth on run changes',()=>{
  const elements=new Map();
  sandbox.$=selector=>{if(!elements.has(selector))elements.set(selector,{textContent:''});return elements.get(selector)};
- for(const name of ['rememberAgents','renderRuns','renderAgents','renderEvents','syncDetailPanelHeight','renderTopology'])sandbox[name]=()=>{};
+ for(const name of ['rememberAgents','renderRuns','renderAgents','renderEvents','renderTopology'])sandbox[name]=()=>{};
  sandbox.filterTopologyEdges=()=>[];
  const bw=sample({rejectedSamples:3,currentRates:{available:true,sentBitsPerSecond:8000,receivedBitsPerSecond:16000,reportingSessions:1,staleSessions:1}});
  sandbox.render({generatedAt:'2026-09-09T00:00:00Z',experiments:[{id:'one',state:'running'}],metrics:{runId:'one',definition:'dispatch-cohort-v1',bandwidth:bw}});

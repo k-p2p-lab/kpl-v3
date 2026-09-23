@@ -98,7 +98,8 @@
     }
   });
   track.addEventListener('focusout', event => {
-    if (!track.contains(event.relatedTarget)) dismiss();
+    // Shared metrics stay open while moving between workspace tabs.
+    if (!track.contains(event.relatedTarget) && !event.relatedTarget?.closest('[data-dashboard-tab]')) dismiss();
   });
   track.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
@@ -117,7 +118,8 @@
     expand(cards[target], 'focus');
   });
   document.addEventListener('pointerdown', event => {
-    if (!track.contains(event.target)) dismiss();
+    // Collapsing a mobile card on pointerdown would move the tab before click.
+    if (!track.contains(event.target) && !event.target.closest('[data-dashboard-tab]')) dismiss();
   });
   for (const [control, direction] of [[previous, -1], [next, 1]]) {
     control.addEventListener('click', () => {

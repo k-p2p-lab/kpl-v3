@@ -38,12 +38,6 @@
         <h2>Network experiments</h2>
         <p class="workspace-intro">Monitor your cluster, follow active runs, and explore results.</p>
       </div>
-      <nav class="workspace-nav" aria-label="Dashboard sections">
-        <a href="#network" data-panel-link="topology">Network</a>
-        <a href="#experiments" data-panel-link="experiments">Experiments</a>
-        <a href="#agents" data-panel-link="agents">Agents</a>
-        <a href="#results" data-panel-link="results">Results <span aria-hidden="true">↗</span></a>
-      </nav>
     </header>
     <section class="metrics-section" aria-labelledby="metricsHeading">
       <header class="metrics-header">
@@ -214,21 +208,27 @@
       <p class="measurement-note" id="measurementNote">Each publication uses its configured deliveryWindow. Only mature publications and sessions subscribed throughout that window enter the main ratio. Ranges are logical bounds from missing evidence, not confidence intervals. Starting delivery and coverage are conditional on the known starting cohort. Sessions with unproved publication-time availability are outside that cohort; see observation quality for counts. Publications without the required measurement evidence are excluded.</p>
     </details>
 
-    <section class="workspace-grid">
-      <article class="panel topology-panel" data-panel="topology" id="network" tabindex="-1">
+    <div class="dashboard-tabs" role="tablist" aria-label="Dashboard views">
+      <button class="dashboard-tab" id="tab-network" type="button" role="tab" aria-selected="true" aria-controls="network" tabindex="0" data-dashboard-tab="network">Network Overview</button>
+      <button class="dashboard-tab" id="tab-experiments" type="button" role="tab" aria-selected="false" aria-controls="experiments" tabindex="-1" data-dashboard-tab="experiments">Exp Progress</button>
+      <button class="dashboard-tab" id="tab-agents" type="button" role="tab" aria-selected="false" aria-controls="agents" tabindex="-1" data-dashboard-tab="agents">Agent Status</button>
+      <button class="dashboard-tab" id="tab-events" type="button" role="tab" aria-selected="false" aria-controls="events" tabindex="-1" data-dashboard-tab="events">Recent Network Events</button>
+      <button class="dashboard-tab" id="tab-results" type="button" role="tab" aria-selected="false" aria-controls="results" tabindex="-1" data-dashboard-tab="results">Saved Results</button>
+    </div>
+    <div class="dashboard-content">
+      <article class="panel topology-panel" id="network" role="tabpanel" aria-labelledby="tab-network" tabindex="0">
         <header class="panel-header">
           <div>
             <p class="eyebrow">LIVE TOPOLOGY</p>
             <h2>Network overview</h2>
             <p class="panel-note" id="topologyLinkCount">0 Peers · 0 ready · 0 starting · 0 visible links</p>
           </div>
-          <div data-panel-expanded-only class="legend" aria-label="Node state legend">
+          <div class="legend" aria-label="Node state legend">
             <span><i class="legend-dot boot"></i>Boot</span>
             <span><i class="legend-dot ready"></i>Worker</span>
             <span><i class="legend-dot starting"></i>Starting</span>
             <span><i class="legend-dot issue"></i>Issue</span>
           </div>
-          <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-topology-body" data-panel-toggle="topology"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-topology-body">
           <div class="topology-toolbar">
@@ -262,14 +262,13 @@
         </div>
       </article>
 
-      <aside class="panel run-panel" data-panel="experiments" id="experiments" tabindex="-1">
+      <article class="panel run-panel" id="experiments" role="tabpanel" aria-labelledby="tab-experiments" tabindex="0" hidden>
         <header class="panel-header">
           <div>
             <p class="eyebrow">EXPERIMENTS</p>
             <h2>Experiment progress</h2>
           </div>
           <span class="count-badge" id="runCount">0</span>
-          <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-experiments-body" data-panel-toggle="experiments"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-experiments-body">
           <div class="run-batch-estimates" id="runBatchEstimates" aria-label="Group finish estimates" hidden></div>
@@ -277,18 +276,15 @@
             <div class="empty-copy">No experiments yet.</div>
           </div>
         </div>
-      </aside>
-    </section>
+      </article>
 
-    <section class="detail-grid" data-panel-pair="fleet">
-      <article class="panel agents-panel" data-panel="agents" id="agents" tabindex="-1">
+      <article class="panel agents-panel" id="agents" role="tabpanel" aria-labelledby="tab-agents" tabindex="0" hidden>
         <header class="panel-header">
           <div>
             <p class="eyebrow">FLEET</p>
             <h2>Agent status</h2>
             <p class="panel-note">Topology labels use these Agent numbers. Configure capacity per Agent below.</p>
           </div>
-          <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-agents-body" data-panel-toggle="agents"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-agents-body">
           <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
@@ -301,13 +297,12 @@
         </div>
       </article>
 
-      <article class="panel events-panel" data-panel="events" id="events" tabindex="-1">
+      <article class="panel events-panel" id="events" role="tabpanel" aria-labelledby="tab-events" tabindex="0" hidden>
         <header class="panel-header">
           <div>
             <p class="eyebrow">EVENT STREAM</p>
             <h2>Recent network events</h2>
           </div>
-          <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-events-body" data-panel-toggle="events"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
         </header>
         <div class="panel-body" id="panel-events-body">
           <ol class="event-list" id="eventList">
@@ -315,45 +310,42 @@
           </ol>
         </div>
       </article>
-    </section>
 
-
-
-    <section class="panel results-panel" data-panel="results" id="results" tabindex="-1" aria-labelledby="savedResultsHeading">
-      <header class="panel-header">
-        <div>
-          <p class="eyebrow">RESULT ARCHIVE</p>
-          <h2 id="savedResultsHeading">Saved results</h2>
+      <section class="panel results-panel" id="results" role="tabpanel" aria-labelledby="tab-results" tabindex="0" hidden>
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">RESULT ARCHIVE</p>
+            <h2 id="savedResultsHeading">Saved results</h2>
+          </div>
+          <button class="secondary-button" id="refreshResults" type="button">Refresh</button>
+        </header>
+        <div class="panel-body" id="panel-results-body">
+          <div class="results-toolbar" role="search" aria-label="Filter saved results">
+            <label class="results-search" for="resultSearch">Search results
+              <input id="resultSearch" type="search" placeholder="Name, batch or run ID" maxlength="256" autocomplete="off" aria-controls="savedResultsRows" aria-describedby="resultFilterHint">
+            </label>
+            <label for="resultStateFilter">Status
+              <select id="resultStateFilter" aria-controls="savedResultsRows">
+                <option value="all">All statuses</option>
+                <option value="active">In progress</option>
+                <option value="completed">Completed</option>
+                <option value="attention">Needs attention</option>
+              </select>
+            </label>
+            <button class="secondary-button" id="clearResultFilters" type="button" hidden>Clear filters</button>
+          </div>
+          <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
+          <details class="results-guide"><summary>About results, retries, and downloads</summary>
+            <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
+          </details>
+          <p class="results-status" id="savedResultsStatus" role="status" aria-live="polite">Loading saved results…</p>
+          <div id="savedResultsTable" hidden>
+            <div id="savedResultsRows" class="saved-results-list"></div>
+          </div>
         </div>
-        <button data-panel-expanded-only class="secondary-button" id="refreshResults" type="button">Refresh</button>
-        <button class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-results-body" data-panel-toggle="results"><span class="panel-toggle-label">Collapse</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg></button>
-      </header>
-      <div class="panel-body" id="panel-results-body">
-        <div class="results-toolbar" role="search" aria-label="Filter saved results">
-          <label class="results-search" for="resultSearch">Search results
-            <input id="resultSearch" type="search" placeholder="Name, batch or run ID" maxlength="256" autocomplete="off" aria-controls="savedResultsRows" aria-describedby="resultFilterHint">
-          </label>
-          <label for="resultStateFilter">Status
-            <select id="resultStateFilter" aria-controls="savedResultsRows">
-              <option value="all">All statuses</option>
-              <option value="active">In progress</option>
-              <option value="completed">Completed</option>
-              <option value="attention">Needs attention</option>
-            </select>
-          </label>
-          <button class="secondary-button" id="clearResultFilters" type="button" hidden>Clear filters</button>
-        </div>
-        <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
-        <details class="results-guide"><summary>About results, retries, and downloads</summary>
-          <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
-        </details>
-        <p class="results-status" id="savedResultsStatus" role="status" aria-live="polite">Loading saved results…</p>
-        <div id="savedResultsTable" hidden>
-          <div id="savedResultsRows" class="saved-results-list"></div>
-        </div>
-      </div>
-    </section>
+      </section>
 
+    </div>
   </main>
 
   <footer class="site-footer">
@@ -504,7 +496,7 @@
   <script src="/research-ui.js" defer></script>
   <script src="/batch-analysis.js" defer></script>
   <script src="/result-images.js" defer></script>
-  <script src="/dashboard-panels.js" defer></script>
+  <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
   <script src="/app.js" defer></script>
 </body>

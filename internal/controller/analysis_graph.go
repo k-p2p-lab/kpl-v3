@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	"golang.org/x/exp/rand"
 	"gonum.org/v1/gonum/graph/community"
@@ -230,85 +231,147 @@ func calculateGraph(ctx context.Context, raw analysisGraph) (graphStatistics, er
 	return out, ctx.Err()
 }
 
-// Expensive graph calculations run in the background worker. Raw graphs remain
-// in observations.jsonl; only derived series are retained in the download.
+// Cache both completed and in-flight calculations. Repeated snapshots share one
+// immutable result, and the existing 256-entry limit bounds retained statistics.
+type analysisGraphCalculation struct {
+	done  chan struct{}
+	stats graphStatistics
+	err   error
+}
+
+type analysisGraphCache struct {
+	mu      sync.Mutex
+	entries map[[32]byte]*analysisGraphCalculation
+}
+
+func (cache *analysisGraphCache) calculate(ctx context.Context, raw analysisGraph) (graphStatistics, error) {
+	if err := ctx.Err(); err != nil {
+		return graphStatistics{}, err
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return graphStatistics{}, err
+	}
+	key := sha256.Sum256(data)
+	cache.mu.Lock()
+	if cached := cache.entries[key]; cached != nil {
+		cache.mu.Unlock()
+		select {
+		case <-cached.done:
+			return cached.stats, cached.err
+		case <-ctx.Done():
+			return graphStatistics{}, ctx.Err()
+		}
+	}
+	if len(cache.entries) >= 256 {
+		cache.mu.Unlock()
+		return calculateGraph(ctx, raw)
+	}
+	if cache.entries == nil {
+		cache.entries = make(map[[32]byte]*analysisGraphCalculation)
+	}
+	calculation := &analysisGraphCalculation{done: make(chan struct{})}
+	cache.entries[key] = calculation
+	cache.mu.Unlock()
+	calculation.stats, calculation.err = calculateGraph(ctx, raw)
+	close(calculation.done)
+	return calculation.stats, calculation.err
+}
+
+// Expensive graph calculations run in bounded workers. Each observation owns
+// its output, so completion order never changes the saved timeline or groups.
 func enrichAnalysisGraphs(ctx context.Context, observations []analysisObservation) error {
-	cache := make(map[[32]byte]graphStatistics)
-	for index := range observations {
-		observation := &observations[index]
-		reportAnalysisProgress(ctx, fmt.Sprintf("graph metrics %d/%d", index+1, len(observations)), 0)
-		for _, raw := range observation.Graphs {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			data, _ := json.Marshal(raw)
-			key := sha256.Sum256(data)
-			calculated, ok := cache[key]
-			if !ok {
-				var err error
-				calculated, err = calculateGraph(ctx, raw)
-				if err != nil {
-					return err
-				}
-				if len(cache) < 256 {
-					cache[key] = calculated
-				}
-			}
-			for gi := range observation.Groups {
-				group := &observation.Groups[gi]
-				for li := range group.Layers {
-					layer := &group.Layers[li]
-					if layer.Protocol != raw.Protocol {
-						continue
-					}
-					layer.Metrics = make(map[string]*float64)
-					if group.Group == "" {
-						for key, value := range calculated.Values {
-							layer.Metrics[key] = value
-						}
-						layer.Clustering = calculated.Values["clustering_coefficient"]
-						continue
-					}
-					for key, values := range calculated.PerNode {
-						count, mean := 0, 0.
-						for i, v := range values {
-							if i < len(raw.Groups) && raw.Groups[i] == group.Group {
-								count++
-								mean += (v - mean) / float64(count)
-							}
-						}
-						if count > 0 {
-							layer.Metrics[key] = numberPointer(mean)
-							if key == "clustering_coefficient" {
-								layer.Clustering = layer.Metrics[key]
-							}
-						}
-					}
-				}
-			}
+	return enrichAnalysisGraphsWithWorkers(ctx, observations, analysisParallelism())
+}
+
+func enrichAnalysisGraphsWithWorkers(ctx context.Context, observations []analysisObservation, workers int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cache analysisGraphCache
+	var progressMu sync.Mutex
+	completed := 0
+	reportAnalysisProgress(ctx, fmt.Sprintf("graph metrics 0/%d", len(observations)), 0)
+	return parallelAnalysis(ctx, len(observations), workers, func(ctx context.Context, index int) error {
+		if err := enrichAnalysisObservation(ctx, &observations[index], &cache); err != nil {
+			return err
+		}
+		// Existing progress callbacks need serialized calls and monotonically
+		// increasing completed counts even when workers finish out of order.
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		completed++
+		reportAnalysisProgress(ctx, fmt.Sprintf("graph metrics %d/%d", completed, len(observations)), 0)
+		return nil
+	})
+}
+
+func enrichAnalysisObservation(ctx context.Context, observation *analysisObservation, cache *analysisGraphCache) error {
+	for _, raw := range observation.Graphs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		calculated, err := cache.calculate(ctx, raw)
+		if err != nil {
+			return err
 		}
 		for gi := range observation.Groups {
-			for li := range observation.Groups[gi].Layers {
-				layer := &observation.Groups[gi].Layers[li]
-				if layer.Metrics == nil {
-					layer.Metrics = map[string]*float64{}
+			group := &observation.Groups[gi]
+			for li := range group.Layers {
+				layer := &group.Layers[li]
+				if layer.Protocol != raw.Protocol {
+					continue
 				}
-				if _, ok := layer.Metrics["average_degree_excluding_leaves"]; !ok {
-					total, core := 0., 0.
-					for _, p := range layer.Degrees {
-						total += p.X * p.Y
-						if p.X > 1 {
-							core += p.Y
+				layer.Metrics = make(map[string]*float64)
+				if group.Group == "" {
+					for key, value := range calculated.Values {
+						layer.Metrics[key] = value
+					}
+					layer.Clustering = calculated.Values["clustering_coefficient"]
+					continue
+				}
+				for key, values := range calculated.PerNode {
+					count, mean := 0, 0.
+					for i, v := range values {
+						if i < len(raw.Groups) && raw.Groups[i] == group.Group {
+							count++
+							mean += (v - mean) / float64(count)
 						}
 					}
-					layer.Metrics["average_degree_excluding_leaves"] = nil
-					if core > 0 {
-						layer.Metrics["average_degree_excluding_leaves"] = numberPointer(total / core)
+					if count > 0 {
+						layer.Metrics[key] = numberPointer(mean)
+						if key == "clustering_coefficient" {
+							layer.Clustering = layer.Metrics[key]
+						}
 					}
 				}
 			}
 		}
-		observation.Graphs = nil
 	}
-	return nil
+	for gi := range observation.Groups {
+		for li := range observation.Groups[gi].Layers {
+			layer := &observation.Groups[gi].Layers[li]
+			if layer.Metrics == nil {
+				layer.Metrics = map[string]*float64{}
+			}
+			if _, ok := layer.Metrics["average_degree_excluding_leaves"]; !ok {
+				total, core := 0., 0.
+				for _, p := range layer.Degrees {
+					total += p.X * p.Y
+					if p.X > 1 {
+						core += p.Y
+					}
+				}
+				layer.Metrics["average_degree_excluding_leaves"] = nil
+				if core > 0 {
+					layer.Metrics["average_degree_excluding_leaves"] = numberPointer(total / core)
+				}
+			}
+		}
+	}
+	observation.Graphs = nil
+	return ctx.Err()
 }

@@ -6,6 +6,7 @@ const state = {
   resultQuery: "", resultStatus: "all",
   agentSettingsID: null, agentSettingsSaving: false,
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
+  scenarioQuery: "", scenarioActionScope: "editor",
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
   selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false,
   scenarioValidating: false, scenarioValidation: null, scenarioValidationVersion: 0,
@@ -763,7 +764,7 @@ function formatResultTime(value) {
 }
 
 function formatScenarioID(value) {
-  return value.length > 10 ? `${value.slice(0, 10)}…` : value;
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
 function validateSavedScenario(value, requireYAML = false) {
@@ -847,6 +848,26 @@ async function validateEditedScenario() {
   }
 }
 
+function filteredSavedScenarios() {
+  const query = (state.scenarioQuery || "").trim().toLowerCase();
+  return (state.savedScenarios || []).filter(item => !query || `${item.name} ${item.id}`.toLowerCase().includes(query));
+}
+
+function setScenarioView(view) {
+  if (view !== "library" && view !== "editor") return;
+  $(".scenario-workspace").dataset.scenarioView = view;
+  for (const button of document.querySelectorAll("button[data-scenario-view]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.scenarioView === view));
+  }
+}
+
+function searchSavedScenarios(query) {
+  state.scenarioQuery = query;
+  state.pendingScenarioDeleteId = null;
+  renderSavedScenarios();
+  $("#scenarioLibraryList").scrollTop = 0;
+}
+
 function renderSavedScenarios() {
   renderScenarioValidation();
   const scenarios = state.savedScenarios || [];
@@ -854,7 +875,7 @@ function renderSavedScenarios() {
   const busy = scenarioOperationBusy();
   $(".scenario-library").setAttribute("aria-busy", String(busy));
   $("#refreshScenarios").disabled = busy;
-  $("#refreshScenarios").textContent = state.scenariosLoading ? "Refreshing…" : "Refresh";
+  $("#refreshScenarios").setAttribute("aria-label", state.scenariosLoading ? "Refreshing saved scenarios" : "Refresh saved scenarios");
   $("#newScenario").disabled = busy;
   $("#saveScenario").disabled = busy;
   $("#saveScenario").textContent = state.scenarioSaving ? "Saving…"
@@ -866,34 +887,46 @@ function renderSavedScenarios() {
   $("#runRepetitions").disabled = busy;
   $("#runScenario").disabled = busy;
   $("#runScenario").textContent = state.scenarioSubmitting ? "Submitting…" : "Run";
-  $("#scenarioLibraryError").textContent = state.scenarioActionError;
+  $("#scenarioLibraryError").textContent = state.scenarioActionScope === "library" ? "" : state.scenarioActionError;
+  $("#scenarioListError").textContent = state.scenarioActionScope === "library" ? state.scenarioActionError : "";
+  $("#scenarioListError").hidden = !$("#scenarioListError").textContent;
+  const visible = filteredSavedScenarios();
+  const query = (state.scenarioQuery || "").trim();
+  $("#scenarioSearch").disabled = busy;
+  $("#clearScenarioSearch").hidden = !state.scenarioQuery;
+  $("#clearScenarioSearch").disabled = busy;
+  $("#scenarioLibraryCount").textContent = scenarios.length;
+  $("#scenarioLibrarySummary").textContent = query ? `${visible.length} of ${scenarios.length} scenarios` : `${scenarios.length} saved · Most recent first`;
   status.classList.toggle("error", Boolean(state.scenariosError));
   status.setAttribute("role", state.scenariosError ? "alert" : "status");
   status.textContent = state.scenariosLoading ? "Loading saved scenarios…"
     : state.scenariosError ? `Could not load saved scenarios: ${state.scenariosError}${scenarios.length ? " Showing the last loaded list." : ""}`
     : state.savedScenarios === null ? "Open the editor to load saved scenarios."
-    : scenarios.length ? "" : "No saved scenarios yet.";
-  status.hidden = !status.textContent;
+    : "";
+  status.hidden = !status.textContent || !$("#scenarioListError").hidden;
 
   const selected = scenarios.find((item) => item.id === state.selectedScenarioId);
   $("#scenarioEditingStatus").textContent = state.selectedScenarioId
     ? `Editing saved scenario · ${selected?.name || state.selectedScenarioId}`
     : "New unsaved scenario";
-  $("#scenarioLibraryList").innerHTML = scenarios.map((item) => {
+  const empty = !visible.length && !state.scenariosLoading && !state.scenariosError && state.savedScenarios !== null
+    ? `<li class="scenario-library-empty"><strong>${query ? "No matching scenarios" : "Your scenario library is empty"}</strong><p>${query ? "Try another name or scenario ID." : "Choose New, edit your scenario, then save it here to use again."}</p></li>` : "";
+  setHTML($("#scenarioLibraryList"), empty || visible.map((item) => {
     const name = item.name || item.id;
     const isSelected = item.id === state.selectedScenarioId;
     const confirmingDelete = item.id === state.pendingScenarioDeleteId;
     const isDeleting = item.id === state.scenarioDeletingId;
     const isLoading = item.id === state.scenarioLoadingId;
     const updated = formatResultTime(item.updatedAt);
-    const controls = confirmingDelete
-      ? `<button class="secondary-button" type="button" data-cancel-scenario-delete="${escapeHTML(item.id)}" ${busy ? "disabled" : ""}>Cancel</button><button class="danger-button confirm-delete-scenario" type="button" data-confirm-scenario-delete="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Confirm deletion of saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>${isDeleting ? "Deleting…" : "Confirm delete"}</button>`
-      : `<button class="secondary-button load-scenario-button" type="button" data-load-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Load saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>${isLoading ? "Loading…" : "Load"}</button><button class="secondary-button delete-scenario-button" type="button" data-delete-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Delete saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>Delete</button>`;
     return `<li class="scenario-library-item${isSelected ? " selected" : ""}"${isSelected ? ' aria-current="true"' : ""}>
-      <div class="scenario-item-summary"><strong title="${escapeHTML(name)}">${escapeHTML(name)}</strong><small class="scenario-item-meta"><span>Updated ${escapeHTML(updated)}</span><span class="scenario-item-id" title="${escapeHTML(`Scenario ID: ${item.id}`)}"><span aria-hidden="true">ID ${escapeHTML(formatScenarioID(item.id))}</span><span class="visually-hidden">Scenario ID: ${escapeHTML(item.id)}</span></span></small></div>
-      <div class="scenario-item-actions">${controls}</div>
+      <button class="load-scenario-button" type="button" data-load-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Load saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>
+        <span class="scenario-item-heading"><strong title="${escapeHTML(name)}">${escapeHTML(name)}</strong><span class="scenario-item-state">${isLoading ? "Loading…" : isSelected ? "Editing" : "Load →"}</span></span>
+        <span class="scenario-item-meta"><span>Updated ${escapeHTML(updated)}</span><span class="scenario-item-id" title="${escapeHTML(`Scenario ID: ${item.id}`)}"><span aria-hidden="true">ID ${escapeHTML(formatScenarioID(item.id))}</span><span class="visually-hidden">Scenario ID: ${escapeHTML(item.id)}</span></span></span>
+      </button>
+      <button class="icon-button delete-scenario-button" type="button" data-delete-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Delete saved scenario: ${name}`)}" title="${escapeHTML(`Delete saved scenario: ${name}`)}" ${busy || confirmingDelete ? "disabled" : ""}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg></button>
+      ${confirmingDelete ? `<div class="scenario-delete-confirmation"><p>Delete this saved scenario? This cannot be undone.</p><div class="scenario-item-actions"><button class="secondary-button" type="button" data-cancel-scenario-delete="${escapeHTML(item.id)}" ${busy ? "disabled" : ""}>Cancel</button><button class="danger-button confirm-delete-scenario" type="button" data-confirm-scenario-delete="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Confirm deletion of saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>${isDeleting ? "Deleting…" : "Confirm delete"}</button></div></div>` : ""}
     </li>`;
-  }).join("");
+  }).join(""));
 }
 
 async function refreshSavedScenarios() {
@@ -925,7 +958,9 @@ async function refreshSavedScenarios() {
 async function loadSavedScenario(id) {
   if (scenarioOperationBusy() || !(state.savedScenarios || []).some((item) => item.id === id)) return;
   const version = ++state.scenarioLoadVersion;
+  let loaded = false;
   state.scenarioLoadingId = id;
+  state.scenarioActionScope = "library";
   state.pendingScenarioDeleteId = null;
   state.scenarioActionError = "";
   renderSavedScenarios();
@@ -936,17 +971,23 @@ async function loadSavedScenario(id) {
     $("#scenarioName").value = item.name;
     $("#scenarioText").value = item.yaml;
     resetScenarioValidation();
-    $("#scenarioText").focus();
+    loaded = true;
   } catch (error) {
     if (version === state.scenarioLoadVersion) state.scenarioActionError = `Could not load the saved scenario: ${error.message}`;
   } finally {
     if (version === state.scenarioLoadVersion) state.scenarioLoadingId = null;
     renderSavedScenarios();
+    if (loaded && version === state.scenarioLoadVersion) {
+      setScenarioView("editor");
+      $(window.matchMedia("(max-width: 860px)").matches ? "#scenarioEditorHeading" : "#scenarioText").focus();
+    }
   }
 }
 
 function startNewScenario() {
   if (scenarioOperationBusy()) return;
+  state.scenarioActionScope = "editor";
+  setScenarioView("editor");
   ++state.scenarioLoadVersion;
   state.selectedScenarioId = null;
   state.pendingScenarioDeleteId = null;
@@ -973,6 +1014,7 @@ function focusScenarioListAction(attribute, id) {
 
 async function saveEditedScenario(asNew = false) {
   if (scenarioOperationBusy()) return;
+  state.scenarioActionScope = "editor";
   const name = $("#scenarioName").value.trim();
   const yaml = $("#scenarioText").value;
   if (!name) {
@@ -1018,6 +1060,7 @@ async function saveEditedScenario(asNew = false) {
 function requestScenarioDeletion(id) {
   if (scenarioOperationBusy() || !(state.savedScenarios || []).some((item) => item.id === id)) return;
   state.pendingScenarioDeleteId = id;
+  state.scenarioActionScope = "library";
   state.scenarioActionError = "";
   renderSavedScenarios();
   focusScenarioListAction("data-confirm-scenario-delete", id);
@@ -1034,10 +1077,12 @@ async function confirmScenarioDeletion(id) {
   if (scenarioOperationBusy() || state.pendingScenarioDeleteId !== id) return;
   const item = (state.savedScenarios || []).find((saved) => saved.id === id);
   if (!item) return;
-  const index = state.savedScenarios.indexOf(item);
-  const focusAfterDelete = state.savedScenarios[index + 1]?.id || state.savedScenarios[index - 1]?.id;
+  const visible = filteredSavedScenarios();
+  const index = visible.indexOf(item);
+  const focusAfterDelete = visible[index + 1]?.id || visible[index - 1]?.id;
   let deleted = false;
   state.scenarioDeletingId = id;
+  state.scenarioActionScope = "library";
   state.scenarioActionError = "";
   renderSavedScenarios();
   try {
@@ -2007,6 +2052,15 @@ $("#clearResultFilters").addEventListener("click", clearResultFilters);
 $("#openScenario").addEventListener("click", openScenarioEditor);
 $("#refreshScenarios").addEventListener("click", refreshSavedScenarios);
 $("#newScenario").addEventListener("click", startNewScenario);
+for (const button of document.querySelectorAll("button[data-scenario-view]")) button.addEventListener("click", () => setScenarioView(button.dataset.scenarioView));
+$("#scenarioEditor").addEventListener("focusin", () => setScenarioView("editor"));
+$("#scenarioLibrary").addEventListener("focusin", () => setScenarioView("library"));
+$("#scenarioSearch").addEventListener("input", event => searchSavedScenarios(event.target.value));
+$("#clearScenarioSearch").addEventListener("click", () => {
+  $("#scenarioSearch").value = "";
+  searchSavedScenarios("");
+  $("#scenarioSearch").focus();
+});
 $("#saveScenario").addEventListener("click", () => saveEditedScenario(false));
 $("#saveScenarioCopy").addEventListener("click", () => saveEditedScenario(true));
 $("#runScenario").addEventListener("click", submitScenarioRun);

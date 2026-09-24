@@ -21,6 +21,7 @@ function element(value = '') {
     style,
     boxHeight: 0,
     attributes: {},
+    dataset: {},
     classList: {
       add: (name) => classes.add(name),
       remove: (name) => classes.delete(name),
@@ -48,12 +49,14 @@ function response(body, status = 200) {
 function fixture(fetch) {
   const elements = new Map();
   for (const id of [
+    'scenarioSearch', 'clearScenarioSearch', 'scenarioLibraryCount', 'scenarioLibrarySummary', 'scenarioListError', 'scenarioEditorHeading',
     'scenarioLibraryStatus', 'refreshScenarios', 'newScenario', 'saveScenario', 'saveScenarioCopy',
     'scenarioLibraryError', 'scenarioEditingStatus', 'scenarioLibraryList', 'scenarioName',
     'scenarioText', 'scenarioError', 'runRepetitions', 'runScenario', 'scenarioDialog', 'toast',
     'validateScenario', 'scenarioValidation', 'scenarioValidationTitle', 'scenarioValidationMessage',
   ]) elements.set(`#${id}`, element());
   elements.set('.scenario-library', element());
+  elements.set('.scenario-workspace', element());
   elements.set('.agents-panel', element());
   elements.set('.events-panel', element());
   elements.get('#scenarioText').value = 'version: 1\nname: current\n';
@@ -161,7 +164,7 @@ test('saved scenario list escapes server values and exposes the selected edit st
 
   const html = elements.get('#scenarioLibraryList').innerHTML;
   assert.ok(!html.includes('<script>'));
-  assert.ok(!html.includes('<svg'));
+  assert.ok(!html.includes('<svg/onload'));
   assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
   assert.match(html, /aria-current="true"/);
   assert.equal(elements.get('#saveScenario').textContent, 'Save changes');
@@ -592,4 +595,49 @@ test('a successful submission closes the original editor normally', async () => 
   assert.equal(elements.get('#scenarioDialog').open, false);
   assert.equal(elements.get('#scenarioDialog').closedWith, '');
   assert.equal(state.scenarioSubmitting, false);
+});
+
+test('scenario search matches names and IDs without changing the editor or server order', () => {
+  const { api, state, elements } = fixture(async () => response([]));
+  state.savedScenarios = [
+    { id: 'newer', name: 'Alpha' },
+    { id: 'older', name: 'Alpha' },
+    { id: 'special-ID', name: 'Beta' },
+  ];
+  state.selectedScenarioId = 'older';
+  state.pendingScenarioDeleteId = 'newer';
+  api.searchSavedScenarios(' ALPHA ');
+  assert.deepEqual(Array.from(api.filteredSavedScenarios(), item => item.id), ['newer', 'older']);
+  assert.equal(elements.get('#scenarioLibrarySummary').textContent, '2 of 3 scenarios');
+  assert.equal(state.selectedScenarioId, 'older');
+  assert.equal(state.pendingScenarioDeleteId, null);
+  assert.equal(elements.get('#scenarioText').value, 'version: 1\nname: current\n');
+  api.searchSavedScenarios('SPECIAL-id');
+  assert.deepEqual(Array.from(api.filteredSavedScenarios(), item => item.id), ['special-ID']);
+  api.searchSavedScenarios('not found');
+  assert.match(elements.get('#scenarioLibraryList').innerHTML, /No matching scenarios/);
+  api.searchSavedScenarios('');
+  assert.equal(api.filteredSavedScenarios().length, 3);
+  assert.equal(elements.get('#clearScenarioSearch').hidden, true);
+});
+
+test('mobile Load opens the editor without focusing the text input and failed loads stay in the library', async () => {
+  const { api, state, elements, viewport } = fixture(async () => response({
+    id: 'one', name: 'Baseline', yaml: 'version: 1\nname: loaded\n',
+  }));
+  viewport.mobile = true;
+  state.savedScenarios = [{ id: 'one', name: 'Baseline' }];
+  await api.loadSavedScenario('one');
+  assert.equal(elements.get('.scenario-workspace').dataset.scenarioView, 'editor');
+  assert.equal(elements.get('#scenarioEditorHeading').focused, true);
+  assert.equal(elements.get('#scenarioText').focused, undefined);
+
+  const failed = fixture(async () => response({ error: 'Unavailable' }, 503));
+  failed.state.savedScenarios = [{ id: 'one', name: 'Baseline' }];
+  failed.api.setScenarioView('library');
+  await failed.api.loadSavedScenario('one');
+  assert.equal(failed.elements.get('.scenario-workspace').dataset.scenarioView, 'library');
+  assert.equal(failed.elements.get('#scenarioListError').hidden, false);
+  assert.match(failed.elements.get('#scenarioListError').textContent, /Could not load/);
+  assert.equal(failed.elements.get('#scenarioLibraryError').textContent, '');
 });

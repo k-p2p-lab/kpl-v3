@@ -422,25 +422,36 @@
         </div>
         <button class="icon-button" aria-label="Close scenario editor" type="button" data-scenario-close><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
       </header>
-      <div class="scenario-workspace">
-        <section class="scenario-library" aria-labelledby="scenarioLibraryHeading" aria-busy="false">
+      <div class="scenario-workspace" data-scenario-view="library">
+        <div class="scenario-view-switcher" role="group" aria-label="Scenario workspace">
+          <button type="button" data-scenario-view="library" aria-controls="scenarioLibrary" aria-pressed="true">Saved scenarios</button>
+          <button type="button" data-scenario-view="editor" aria-controls="scenarioEditor" aria-pressed="false">Editor</button>
+        </div>
+        <section id="scenarioLibrary" class="scenario-library" aria-labelledby="scenarioLibraryHeading" aria-busy="false">
           <header>
-            <div>
+            <div class="scenario-library-title">
               <h3 id="scenarioLibraryHeading">Saved scenarios</h3>
-              <p>Stored on this Controller.</p>
+              <span class="count-badge" id="scenarioLibraryCount" aria-label="Saved scenario count">0</span>
             </div>
             <div class="scenario-library-toolbar">
-              <button class="secondary-button" id="newScenario" type="button">New</button>
-              <button class="secondary-button" id="refreshScenarios" type="button">Refresh</button>
+              <button class="secondary-button" id="newScenario" type="button" aria-label="New scenario">+ New</button>
+              <button class="icon-button" id="refreshScenarios" type="button" aria-label="Refresh saved scenarios" title="Refresh saved scenarios"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 7a6.5 6.5 0 1 0 .4 5M16 3v4h-4"/></svg></button>
             </div>
           </header>
+          <div class="scenario-library-search">
+            <label class="visually-hidden" for="scenarioSearch">Search saved scenarios by name or ID</label>
+            <input id="scenarioSearch" type="search" placeholder="Name or ID" maxlength="256" autocomplete="off" aria-controls="scenarioLibraryList" aria-describedby="scenarioLibrarySummary">
+            <button class="icon-button" id="clearScenarioSearch" type="button" aria-label="Clear scenario search" title="Clear search" hidden>×</button>
+          </div>
+          <p class="scenario-library-summary" id="scenarioLibrarySummary" role="status" aria-live="polite">Most recent first</p>
           <p class="scenario-library-status" id="scenarioLibraryStatus" role="status" aria-live="polite">Open the editor to load saved scenarios.</p>
+          <p class="scenario-list-error" id="scenarioListError" role="alert" hidden></p>
           <ul class="scenario-library-list" id="scenarioLibraryList" aria-label="Saved scenarios"></ul>
         </section>
-        <section class="scenario-editor" aria-labelledby="scenarioEditorHeading">
+        <section id="scenarioEditor" class="scenario-editor" aria-labelledby="scenarioEditorHeading">
           <div class="scenario-editor-heading">
             <div>
-              <h3 id="scenarioEditorHeading">Scenario editor</h3>
+              <h3 id="scenarioEditorHeading" tabindex="-1">Scenario editor</h3>
               <p id="scenarioEditingStatus">New unsaved scenario</p>
             </div>
           </div>

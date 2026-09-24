@@ -277,6 +277,7 @@
         svg += `<text x="${f(x(i))}" y="286" fill="#536575" text-anchor="middle">${escape(String(label).length > 18 ? String(label).slice(0, 16) + "…" : label)}</text>`;
       });
     svg += `<text x="342" y="310" fill="#34485b" text-anchor="middle">${escape(xLabel)}</text><text transform="translate(16 150) rotate(-90)" fill="#34485b" text-anchor="middle">${escape(yLabel)}</text>`;
+    let uncertainty = "", data = "";
     series.forEach((s, index) => {
       const color = colors[index % colors.length];
       let d = "",
@@ -287,33 +288,71 @@
       );
       const barWidth = grouped ? width / series.length : width;
       const plotX = value => x(value) + (grouped ? (index - (series.length - 1) / 2) * barWidth : 0);
+      let shade = "", band = [];
+      const rectangle = (left, top, right, bottom) => {
+        const width = right - left, height = bottom - top;
+        if (![left, top, width, height].every(finite) || width <= 0 || height <= 0) return "";
+        return `<rect x="${f(left)}" y="${f(top)}" width="${f(width)}" height="${f(height)}"/>`;
+      };
+      const flushBand = () => {
+        if (band.length === 1) {
+          const p = band[0];
+          shade += rectangle(p.x - 4, p.top, p.x + 4, p.bottom);
+        } else if (band.length > 1) {
+          let path = `M${f(band[0].x)} ${f(band[0].top)}`;
+          for (let i = 1; i < band.length; i++) {
+            const p = band[i];
+            path += mode === "step" ? `H${f(p.x)}V${f(p.top)}` : `L${f(p.x)} ${f(p.top)}`;
+          }
+          path += `L${f(band.at(-1).x)} ${f(band.at(-1).bottom)}`;
+          // Reverse the step corners along the lower edge to match the mean.
+          for (let i = band.length - 2; i >= 0; i--) {
+            const p = band[i];
+            path += mode === "step" ? `V${f(p.bottom)}H${f(p.x)}` : `L${f(p.x)} ${f(p.bottom)}`;
+          }
+          shade += `<path d="${path}Z"/>`;
+        }
+        band = [];
+      };
       for (const p of s.points) {
         if (!eligible(p)) {
           previous = null;
+          flushBand();
           continue;
         }
         const description = `${p.label || s.name}: ${number(p.x)} ${xLabel}, ${number(p.y)} ${yLabel}`;
         const pointColor = finite(p.colorValue)
           ? `hsl(${Math.max(0, Math.min(1, p.colorValue)) * 120},65%,35%)`
           : color;
-        if (finite(p.error) && finite(p.y - p.error) && finite(p.y + p.error))
-          svg += `<path d="M${f(plotX(p.x))} ${f(y(p.y - p.error))}V${f(y(p.y + p.error))}M${f(plotX(p.x) - 4)} ${f(y(p.y - p.error))}h8M${f(plotX(p.x) - 4)} ${f(y(p.y + p.error))}h8" fill="none" stroke="${color}"/>`;
-        if (
-          finite(p.xError) &&
-          eligible({ x: p.x - p.xError, y: p.y }) &&
-          eligible({ x: p.x + p.xError, y: p.y })
-        )
-          svg += `<path d="M${f(plotX(p.x - p.xError))} ${f(y(p.y))}H${f(plotX(p.x + p.xError))}" stroke="${color}"/>`;
+        const error = finite(p.error) ? Math.abs(p.error) : null;
+        const vertical = error !== null && finite(p.y - error) && finite(p.y + error);
+        const xError = finite(p.xError) ? Math.abs(p.xError) : null;
+        const horizontal = xError !== null && xError > 0 &&
+          eligible({ x: p.x - xError, y: p.y }) && eligible({ x: p.x + xError, y: p.y });
+        if (mode !== "bar" && mode !== "scatter") {
+          const range = vertical ? { x: plotX(p.x), top: y(p.y + error), bottom: y(p.y - error) } : null;
+          if (range && Object.values(range).every(finite)) band.push(range);
+          else flushBand();
+          if (horizontal) shade += rectangle(plotX(p.x - xError), y(p.y) - 3, plotX(p.x + xError), y(p.y) + 3);
+        } else if ((vertical && error > 0) || horizontal) {
+          const halfWidth = mode === "bar" ? barWidth / 2 : 5;
+          shade += rectangle(
+            horizontal ? plotX(p.x - xError) : plotX(p.x) - halfWidth,
+            vertical && error > 0 ? y(p.y + error) : y(p.y) - 3,
+            horizontal ? plotX(p.x + xError) : plotX(p.x) + halfWidth,
+            vertical && error > 0 ? y(p.y - error) : y(p.y) + 3,
+          );
+        }
         if (p.from && eligible(p.from)) {
           const ax = x(p.from.x),
             ay = y(p.from.y),
             bx = plotX(p.x),
             by = y(p.y),
             angle = Math.atan2(by - ay, bx - ax);
-          svg += `<path d="M${f(ax)} ${f(ay)}L${f(bx)} ${f(by)}M${f(bx - 8 * Math.cos(angle - 0.4))} ${f(by - 8 * Math.sin(angle - 0.4))}L${f(bx)} ${f(by)}L${f(bx - 8 * Math.cos(angle + 0.4))} ${f(by - 8 * Math.sin(angle + 0.4))}" fill="none" stroke="${color}" opacity=".5"/>`;
+          data += `<path d="M${f(ax)} ${f(ay)}L${f(bx)} ${f(by)}M${f(bx - 8 * Math.cos(angle - 0.4))} ${f(by - 8 * Math.sin(angle - 0.4))}L${f(bx)} ${f(by)}L${f(bx - 8 * Math.cos(angle + 0.4))} ${f(by - 8 * Math.sin(angle + 0.4))}" fill="none" stroke="${color}" opacity=".5"/>`;
         }
         if (mode === "bar") {
-          svg += `<rect x="${f(plotX(p.x) - barWidth / 2)}" y="${f(Math.min(y(0), y(p.y)))}" width="${f(barWidth)}" height="${f(Math.abs(y(0) - y(p.y)))}" fill="${color}"><title>${escape(description)}</title></rect>`;
+          data += `<rect x="${f(plotX(p.x) - barWidth / 2)}" y="${f(Math.min(y(0), y(p.y)))}" width="${f(barWidth)}" height="${f(Math.abs(y(0) - y(p.y)))}" fill="${color}"><title>${escape(description)}</title></rect>`;
         } else if (mode !== "scatter") {
           d += previous
             ? mode === "step"
@@ -321,12 +360,19 @@
               : `L${f(plotX(p.x))} ${f(y(p.y))}`
             : `M${f(plotX(p.x))} ${f(y(p.y))}`;
         }
-        svg += `<circle cx="${f(plotX(p.x))}" cy="${f(y(p.y))}" r="${mode === "scatter" ? 6 : 2}" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
+        data += `<circle cx="${f(plotX(p.x))}" cy="${f(y(p.y))}" r="${mode === "scatter" ? 6 : 2}" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
         previous = p;
       }
+      flushBand();
+      // Apply opacity once per series so dense, overlapping ranges within a
+      // series do not build back up into an opaque block.
+      if (shade) uncertainty += `<g fill="${color}" opacity="0.14" stroke="none">${shade}</g>`;
       if (d)
-        svg += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
+        data += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>`;
     });
+    // Clip uncertainty to the plot and place ALL of it behind ALL data series.
+    // A nested viewport avoids clip-path ID collisions in multi-panel exports.
+    svg += `<svg class="chart-uncertainty" x="68" y="28" width="548" height="238" viewBox="68 28 548 238" overflow="hidden" pointer-events="none" aria-hidden="true">${uncertainty}</svg><g class="chart-data">${data}</g>`;
     series.forEach((s, i) => {
       svg += `<rect x="68" y="${326 + i * 20}" width="9" height="9" fill="${colors[i % colors.length]}"/><text x="84" y="${335 + i * 20}" fill="#34485b"><title>${escape(s.name)}</title>${escape(s.name.length > 76 ? s.name.slice(0, 73) + "…" : s.name)}</text>`;
     });

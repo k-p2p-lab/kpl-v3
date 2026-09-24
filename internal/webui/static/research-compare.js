@@ -487,7 +487,7 @@
       {
         mode: "scatter",
         zeroX: false,
-        note: `Color: red (reach 0) to green (reach 1). Arrows from case ${reference} within each series. Error bars: between-run SD.`,
+        note: `Color: red (reach 0) to green (reach 1). Arrows from case ${reference} within each series. Shaded ranges: ±1 between-run SD.`,
       },
     );
     for (const [id, three] of [
@@ -933,7 +933,7 @@
           points: er.map((row) => ({ x: row[0], y: row[2], error: row[6] })),
         },
       ],
-      note: "Original supplied yerr retained; empirical error type was not established by the source. ER bars are reported SE.",
+      note: "Original supplied yerr retained; empirical error type was not established by the source. ER shaded ranges are reported SE.",
     };
     const duplicate = {
       id: "v2-reference-duplicates",

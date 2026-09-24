@@ -81,7 +81,7 @@
       const base = copies[0], names = [...new Set(copies.flatMap(c => c.series.map(s => s.name)))];
       const isCDF = cumulativeIDs.has(base.id), timeSeries = /Elapsed|elapsed/.test(base.xLabel || "");
       const mode = isCDF ? "cdf" : base.mode === "bar" ? "discrete" : base.mode === "step" ? "step" : "line";
-      let note = "Equal weight per run; error bars are between-run sample SD. Missing evidence is excluded; n in CSV is the contributing run count. One run has no sample SD.";
+      let note = "Equal weight per run; shaded ranges show ±1 between-run sample SD. Missing evidence is excluded; n in CSV is the contributing run count. One run has no sample SD.";
       if (copies.some(c => c.series.some(s => s.name.startsWith("Group: ") || s.name === "Unknown Group"))) note += " Receiver groups are matched by name across runs; absent groups are excluded, while measured zero receipts contribute zero. Each group uses its own eligible receiver denominator.";
       if (timeSeries) note += " Time is relative to each run start; lines interpolate within observed segments, steps hold within recorded intervals. No extrapolation beyond each series; at most 720 displayed time points.";
       if (base.id === "latency-distribution") note += " Common 30-bin histogram; source-bin counts are distributed uniformly over overlapping bins. Count mass is preserved; within-bin locations are approximate.";

@@ -269,7 +269,7 @@
         labels[key],
         [{ name: "Message metric", points: messageSeries(a, key) }],
         {
-          note: "One point per message; large sets are grouped into at most 360 points. FRT bars show population SD within a message; grouped points show between-message sample SD. Eager/lazy counts are estimates; unknown_count reports unclassified receipts.",
+          note: "One point per message; large sets are grouped into at most 360 points. FRT shading shows ±1 population SD within a message; grouped points show ±1 between-message sample SD. Eager/lazy counts are estimates; unknown_count reports unclassified receipts.",
         },
       );
     const origins = r.overview?.originCounts || { eager: 0, lazy: 0, unknown: 0 };

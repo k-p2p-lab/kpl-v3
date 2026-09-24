@@ -45,6 +45,7 @@ type researchControlBin struct {
 }
 
 type researchAnalysis struct {
+	ReceiverGroups      []researchReceiverGroup      `json:"receiverGroups,omitempty"`
 	Overview            *researchOverview            `json:"overview,omitempty"`
 	OriginMethod        string                       `json:"originMethod"`
 	OriginWindowSeconds float64                      `json:"originWindowSeconds"`
@@ -88,6 +89,8 @@ type researchGraphEvent struct {
 	node, peer, remote, topic, kind string
 }
 type researchAccumulator struct {
+	nodeGroups     map[string]string
+	groupConflicts map[string]bool
 	publications   map[messageMetricKey]researchPublication
 	peers          map[string]string
 	inference      []originMetadataEvent
@@ -97,7 +100,7 @@ type researchAccumulator struct {
 }
 
 func newResearchAccumulator() *researchAccumulator {
-	return &researchAccumulator{publications: map[messageMetricKey]researchPublication{}, peers: map[string]string{}, duplicateTimes: map[messageMetricKey]map[duplicateResearchKey]int{}, controls: map[int64]map[string]float64{}}
+	return &researchAccumulator{nodeGroups: map[string]string{}, groupConflicts: map[string]bool{}, publications: map[messageMetricKey]researchPublication{}, peers: map[string]string{}, duplicateTimes: map[messageMetricKey]map[duplicateResearchKey]int{}, controls: map[int64]map[string]float64{}}
 }
 func (a *researchAccumulator) addControl(at time.Time, key string, n float64) {
 	if at.IsZero() {
@@ -110,6 +113,7 @@ func (a *researchAccumulator) addControl(at time.Time, key string, n float64) {
 	a.controls[bin][key] += n
 }
 func (a *researchAccumulator) observe(e model.TraceEvent) {
+	a.observeNodeGroup(e.NodeID, e.Group)
 	if e.PeerID != "" && e.NodeID != "" {
 		a.peers[e.PeerID] = e.NodeID
 	}

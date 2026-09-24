@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 )
 
 type batchSeriesPoint struct {
@@ -66,9 +67,17 @@ func compactBatchAnalysis(a *resultAnalysis) {
 	if r.EligiblePopulation > 0 && a.Metrics.Duplicates == 0 && len(r.DuplicateCDF) == 0 {
 		r.DuplicateCDF = []analysisPoint{{X: 0, Y: 0}}
 	}
+	overview.MessageSeries = researchMessageSeries(r.Messages, a.Result.StartedAt)
+	r.MessageCount = len(r.Messages)
+	r.Messages = []researchMessage{}
+	r.Overview = overview
+}
+
+func researchMessageSeries(messages []researchMessage, origin time.Time) map[string][]batchSeriesPoint {
+	series := map[string][]batchSeriesPoint{}
 	for _, key := range []string{"frt", "eager_frt", "reachability", "eager_reachability", "drc", "drc_per_node_count", "eager_count", "lazy_count", "unknown_count"} {
 		rows := []researchMessage{}
-		for _, message := range r.Messages {
+		for _, message := range messages {
 			if message.Metrics[key].Average != nil && !message.At.IsZero() {
 				rows = append(rows, message)
 			}
@@ -86,17 +95,15 @@ func compactBatchAnalysis(a *resultAnalysis) {
 			if chunk == 1 {
 				deviation = rows[i].Metrics[key].Deviation
 			}
-			origin := a.Result.StartedAt
-			if origin.IsZero() {
-				origin = rows[0].At
+			pointOrigin := origin
+			if pointOrigin.IsZero() {
+				pointOrigin = rows[0].At
 			}
-			points = append(points, batchSeriesPoint{X: rows[i].At.Sub(origin).Seconds(), Y: stat.Average, Error: deviation})
+			points = append(points, batchSeriesPoint{X: rows[i].At.Sub(pointOrigin).Seconds(), Y: stat.Average, Error: deviation})
 		}
-		overview.MessageSeries[key] = points
+		series[key] = points
 	}
-	r.MessageCount = len(r.Messages)
-	r.Messages = []researchMessage{}
-	r.Overview = overview
+	return series
 }
 
 // Sample SD describes variation between runs. One run has no sample SD.

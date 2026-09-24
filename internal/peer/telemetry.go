@@ -228,6 +228,7 @@ func (t *telemetry) identifyLockedWithClock(event model.TraceEvent, reading cont
 	event.Sequence = t.sequence
 	event.RunID = t.node.RunID
 	event.NodeID = t.node.ID
+	event.Group = t.node.Group
 	event.AgentID = t.node.AgentID
 	if event.EventID == "" {
 		// Assigned at the source, so Agent queue retries retain the same ID.

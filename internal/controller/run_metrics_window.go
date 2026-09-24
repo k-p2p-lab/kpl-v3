@@ -398,7 +398,7 @@ func (w *sessionWindowAccumulator) summarizeContext(ctx context.Context, runID s
 				value := receipt.ontime.value
 				if value.latencyAvailable && value.latencyMS >= 0 && !math.IsNaN(value.latencyMS) && !math.IsInf(value.latencyMS, 0) {
 					latencies = append(latencies, value.latencyMS)
-					samples = append(samples, propagationSample{propagationSeriesKey{value.agentID, publication.key.topic}, value.latencyMS / 1000})
+					samples = append(samples, propagationSample{key: propagationSeriesKey{value.agentID, publication.key.topic}, seconds: value.latencyMS / 1000, nodeID: key.nodeID})
 				} else if value.latencyAvailable {
 					result.InvalidLatencySamples++
 				}

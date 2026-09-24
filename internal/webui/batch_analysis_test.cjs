@@ -139,3 +139,48 @@ test('batch graph variants preserve protocol groups and average only the same la
   }
   assert.equal(new Set(charts.map(chart => chart.id)).size, charts.length);
 });
+
+test('receiver group charts and batch means preserve identity, zero receipts, missing groups, and exports', () => {
+  const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T01:00:00Z', 30);
+  function receiverGroup(group, seconds, reached, histogramCount) {
+    return { group, messageCount: 1, eligiblePopulation: 2,
+      propagationCDF: [{ x: seconds, y: reached }], duplicateCDF: [{ x: seconds, y: 0 }],
+      hopPDF: [{ x: 2, y: 1 }], hopCDF: [{ x: 2, y: 1 }], eagerCDF: [], lazyCDF: [],
+      latencyCDF: histogramCount ? [{ x: seconds*1000, y: 1 }] : [], latencyHistogram: histogramCount ? [{ x: seconds*1000, y: histogramCount }] : [],
+      overview: { messageSeries: { reachability: [{ x: 1, y: reached }] }, originCounts: { eager: 0, lazy: 0, unknown: reached ? 1 : 0 }, receiversTime: [{ x: seconds, y: reached*2 }], receiversHop: [{ x: 2, y: reached*2 }] }
+    };
+  }
+  a.research.receiverGroups = [receiverGroup('A', .1, .5, 1), receiverGroup('B', .2, 1, 2), receiverGroup('', .3, 1, 1)];
+  b.research.receiverGroups = [receiverGroup('A', 0, 0, 0), receiverGroup('B', .4, .5, 1)];
+  const before = JSON.stringify([a,b]), individual = images.buildCharts(a), charts = batch.build(data([a,b]), images.buildCharts);
+  for (const id of ['latency-cdf', 'latency-distribution', 'research-propagationCDF', 'research-duplicateCDF', 'research-hopPDF', 'research-hopCDF', 'messages-reachability', 'origin-estimates', 'mean-receivers-time', 'mean-receivers-hop', 'mean-receivers-time-increments', 'mean-receivers-hop-increments']) {
+    const chart = individual.find(c=>c.id===id);
+    assert.deepEqual(chart.series.map(s=>s.name), ['All Peers','Group: A','Group: B','Unknown Group'], id);
+    assert.match(files.chartCSV(chart), /Group: A/);
+    assert.match(images.chartSVG(chart), /Group: B/);
+    assert.doesNotMatch(images.chartSVG(chart), /NaN|Infinity/);
+    assert.equal(charts.find(c=>c.id===id).series.length, 4, `batch ${id}`);
+  }
+  const groupSeries = (id, name) => charts.find(c=>c.id===id).series.find(s=>s.name===name).points;
+  assert.equal(groupSeries('research-propagationCDF','Group: A').at(-1).y,.25);
+  assert.equal(groupSeries('research-propagationCDF','Group: A').at(-1).n,2);
+  assert.equal(groupSeries('research-propagationCDF','Unknown Group').at(-1).n,1);
+  assert.equal(groupSeries('messages-reachability','Group: B')[0].y,.75);
+  assert.equal(groupSeries('mean-receivers-hop-increments','Group: A')[0].y,.5);
+  assert.equal(groupSeries('mean-receivers-hop-increments','Group: A')[0].n,2);
+  for (const [name,count] of [['Group: A',1],['Group: B',1.5],['Unknown Group',1]]) {
+    approx(groupSeries('latency-distribution',name).reduce((sum,p)=>sum+p.y,0),count);
+  }
+  assert.equal(JSON.stringify([a,b]), before, 'chart generation mutated saved group values');
+});
+
+test('grouped bars remain distinct without changing numeric sample positions', () => {
+  const series = ['All Peers','Group: A','Group: B'].map(name=>({name,points:[{x:1,y:2,error:.5}]}));
+  const chart = {title:'Groups',xLabel:'Hop',yLabel:'Count',mode:'bar',groupedBars:true,series};
+  const before = JSON.stringify(chart), svg = images.chartSVG(chart);
+  const bars = [...svg.matchAll(/<rect x="([\d.]+)" y="[\d.]+" width="([\d.]+)" height="[\d.]+" fill="#[0-9a-f]+"><title>/g)];
+  assert.equal(bars.length,3);
+  assert.equal(new Set(bars.map(m=>m[1])).size,3);
+  assert.equal(JSON.stringify(chart),before);
+  assert.ok(series.every(s=>s.points[0].x===1));
+});

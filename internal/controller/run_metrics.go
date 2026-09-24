@@ -226,6 +226,7 @@ type propagationSeriesKey struct{ agentID, topic string }
 type propagationSample struct {
 	key     propagationSeriesKey
 	seconds float64
+	nodeID  string
 }
 
 func (a *runMetricAccumulator) summarize(runID string, asOf ...time.Time) (model.Metrics, []propagationSample) {
@@ -371,7 +372,7 @@ func (a *runMetricAccumulator) summarizeLegacyContext(ctx context.Context, runID
 					continue
 				}
 				latencies = append(latencies, latency)
-				samples = append(samples, propagationSample{propagationSeriesKey{delivery.agentID, key.topic}, latency / 1000})
+				samples = append(samples, propagationSample{key: propagationSeriesKey{delivery.agentID, key.topic}, seconds: latency / 1000, nodeID: receiver})
 			}
 		}
 	}

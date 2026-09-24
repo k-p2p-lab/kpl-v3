@@ -64,10 +64,12 @@
   const cumulativeIDs = new Set(["latency-cdf", "degree-cdf", "research-propagationCDF", "research-duplicateCDF", "research-hopCDF", "propagation-log-time", "eager-lazy-latency", "mean-receivers-time", "mean-receivers-hop"]);
   function build(data, buildRunCharts) {
     validate(data, data.batchId);
-    const histograms = commonHistograms(data.runs), chartMap = new Map();
+    const histograms = commonHistograms(data.runs.flatMap(run => [run, ...(run.research?.receiverGroups || [])])), chartMap = new Map();
+    let histogramIndex = 0;
     const protocols = [...new Set(data.runs.flatMap(a => (a.bandwidthTimeline || []).flatMap(b => (b.protocols || []).map(p => p.protocol))))];
     for (const [index, original] of data.runs.entries()) {
-      const a = { ...original, timeOrigin: original.result.startedAt, latencyHistogram: histograms[index], bandwidthTimeline: (original.bandwidthTimeline || []).map(b => ({ ...b, protocols: protocols.map(protocol => b.protocols?.find(p => p.protocol === protocol) || { protocol, sentBytes: 0, receivedBytes: 0 }) })) };
+      const a = { ...original, timeOrigin: original.result.startedAt, latencyHistogram: histograms[histogramIndex++], bandwidthTimeline: (original.bandwidthTimeline || []).map(b => ({ ...b, protocols: protocols.map(protocol => b.protocols?.find(p => p.protocol === protocol) || { protocol, sentBytes: 0, receivedBytes: 0 }) })) };
+      if (original.research?.receiverGroups) a.research = { ...original.research, receiverGroups: original.research.receiverGroups.map(group => ({ ...group, latencyHistogram: histograms[histogramIndex++] })) };
       for (const chart of buildRunCharts(a)) {
         if (chart.panels || chart.tree || chart.id.endsWith("-increments")) continue;
         if (!chartMap.has(chart.id)) chartMap.set(chart.id, []);
@@ -80,6 +82,7 @@
       const isCDF = cumulativeIDs.has(base.id), timeSeries = /Elapsed|elapsed/.test(base.xLabel || "");
       const mode = isCDF ? "cdf" : base.mode === "bar" ? "discrete" : base.mode === "step" ? "step" : "line";
       let note = "Equal weight per run; error bars are between-run sample SD. Missing evidence is excluded; n in CSV is the contributing run count. One run has no sample SD.";
+      if (copies.some(c => c.series.some(s => s.name.startsWith("Group: ") || s.name === "Unknown Group"))) note += " Receiver groups are matched by name across runs; absent groups are excluded, while measured zero receipts contribute zero. Each group uses its own eligible receiver denominator.";
       if (timeSeries) note += " Time is relative to each run start; lines interpolate within observed segments, steps hold within recorded intervals. No extrapolation beyond each series; at most 720 displayed time points.";
       if (base.id === "latency-distribution") note += " Common 30-bin histogram; source-bin counts are distributed uniformly over overlapping bins. Count mass is preserved; within-bin locations are approximate.";
       if (base.id === "degree-student-t") note += " Mean of individual fitted densities, not a refit of pooled samples.";
@@ -91,17 +94,21 @@
     for (const kind of ["time", "hop"]) {
       const parent = charts.find(c => c.id === `mean-receivers-${kind}`);
       if (parent) {
-        const originals = chartMap.get(parent.id), curves = originals.map(c => points(c.series[0]?.points || []));
-        let previousX = null;
-        const increments = parent.series[0].points.map(p => {
-          const stat = R.stats(curves.map(c => {
-            if (!c.length) return null;
-            return valueAt(c, p.x, "cdf") - (previousX === null ? 0 : valueAt(c, previousX, "cdf"));
-          }));
-          previousX = p.x;
-          return { x: p.x, y: stat.mean, error: stat.sd, n: stat.n, label: `n=${stat.n} runs` };
+        const originals = chartMap.get(parent.id);
+        const series = parent.series.map(parentSeries => {
+          const curves = originals.map(c => points(c.series.find(s => s.name === parentSeries.name)?.points || []));
+          let previousX = null;
+          const increments = parentSeries.points.map(p => {
+            const stat = R.stats(curves.map(c => {
+              if (!c.length) return null;
+              return valueAt(c, p.x, "cdf") - (previousX === null ? 0 : valueAt(c, previousX, "cdf"));
+            }));
+            previousX = p.x;
+            return { x: p.x, y: stat.mean, error: stat.sd, n: stat.n, label: `n=${stat.n} runs` };
+          });
+          return { name: parentSeries.name, points: increments };
         });
-        charts.push({ ...parent, id: `${parent.id}-increments`, title: `Mean first-receiver increments by ${kind} · run mean`, yLabel: "New receivers / published message", mode: "bar", series: [{ name: "Increment of mean receiver count", points: increments }], note: "Per-run differences on the common displayed cumulative grid, then equal-run mean/sample SD. Counts per displayed interval, not a density per second." });
+        charts.push({ ...parent, id: `${parent.id}-increments`, title: `Mean first-receiver increments by ${kind} · run mean`, yLabel: "New receivers / published message", mode: "bar", groupedBars: series.length > 1, series, note: "Per-run differences on the common displayed cumulative grid, then equal-run mean/sample SD. Counts per displayed interval, not a density per second. Group identity follows receiving peers." });
       }
     }
     for (const key of Object.keys(metricLabels)) {

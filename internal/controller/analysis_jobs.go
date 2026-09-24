@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const currentAnalysisVersion = 3
+const currentAnalysisVersion = 4
 const analysisJobLimit = 32
 const analysisJobFile = "analysis-job.json"
 const analysisResultFile = "analysis-result.json"

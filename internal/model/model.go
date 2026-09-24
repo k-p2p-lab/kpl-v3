@@ -57,6 +57,7 @@ type Node struct {
 }
 
 type TraceEvent struct {
+	Group        string           `json:"group,omitempty"`
 	Bandwidth    *BandwidthSample `json:"bandwidth,omitempty"`
 	SessionID    string           `json:"sessionId,omitempty"`
 	Sequence     uint64           `json:"sequence,omitempty"`

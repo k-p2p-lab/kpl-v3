@@ -32,11 +32,11 @@ func TestTelemetryEventIdentitySurvivesQueueAndResend(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer endpoint.Close()
-	tel := newTelemetry(model.Node{ID: "node", RunID: "run"}, endpoint.URL, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tel := newTelemetry(model.Node{ID: "node", RunID: "run", Group: "receivers"}, endpoint.URL, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	input := model.TraceEvent{Type: "duplicate", MessageID: "message", Timestamp: time.Now().UTC()}
 	tel.emit(input)
 	first := <-tel.events
-	if first.EventID == "" || first.NodeID != "node" || first.RunID != "run" || first.SessionID == "" || first.Sequence != 1 {
+	if first.Group != "receivers" || first.EventID == "" || first.NodeID != "node" || first.RunID != "run" || first.SessionID == "" || first.Sequence != 1 {
 		t.Fatalf("source event has no identity: %+v", first)
 	}
 	tel.flush(context.Background(), []model.TraceEvent{first})

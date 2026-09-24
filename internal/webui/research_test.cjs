@@ -282,13 +282,13 @@ test("old analysis cache upgrades once without explicit refresh", async () => {
         posts++;
         return {
           version: 1,
-          analysisVersion: 3,
+          analysisVersion: 4,
           id: "new",
           runId: "old",
           state: "completed",
         };
       }
-      return { version: 1, id: "previous", runId: "old", state: "completed" };
+      return { version: 1, analysisVersion: 3, id: "previous", runId: "old", state: "completed" };
     },
   });
   await ui.open("old");

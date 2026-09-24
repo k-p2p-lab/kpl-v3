@@ -255,7 +255,8 @@
       finite(yMax) ? yMax : ymax,
       finite(yMax) ? 0 : 0.08,
     );
-    const x = (v) => 68 + xAxis.position(logX ? Math.log10(v) : v) * 548;
+    const grouped = chart.groupedBars && mode === "bar" && series.length > 1;
+    const x = (v) => (grouped ? 84 : 68) + xAxis.position(logX ? Math.log10(v) : v) * (grouped ? 516 : 548);
     const y = (v) => 266 - yAxis.position(v) * 238;
     const tick = (value) =>
       value !== 0 && (Math.abs(value) >= 1e9 || Math.abs(value) < 0.01)
@@ -268,7 +269,7 @@
         yv = yAxis.value(i / 4);
       svg += `<path d="M68 ${f(266 - (238 * i) / 4)}H616" stroke="#dce4eb"/><text x="60" y="${f(270 - (238 * i) / 4)}" fill="#536575" text-anchor="end">${escape(tick(yv))}</text>`;
       if (!xTicks)
-        svg += `<text x="${f(68 + (548 * i) / 4)}" y="286" fill="#536575" text-anchor="middle">${escape(tick(xv))}</text>`;
+        svg += `<text x="${f(x(xv))}" y="286" fill="#536575" text-anchor="middle">${escape(tick(xv))}</text>`;
     }
     if (xTicks)
       xTicks.forEach((label, i) => {
@@ -282,8 +283,10 @@
         previous = null;
       const width = Math.max(
         2,
-        Math.min(xTicks ? 18 : 32, 480 / Math.max(s.points.length, 1)),
+        Math.min(xTicks ? 18 : 32, 480 / Math.max(grouped ? Math.max(...series.map(s => s.points.length)) : s.points.length, 1)),
       );
+      const barWidth = grouped ? width / series.length : width;
+      const plotX = value => x(value) + (grouped ? (index - (series.length - 1) / 2) * barWidth : 0);
       for (const p of s.points) {
         if (!eligible(p)) {
           previous = null;
@@ -294,31 +297,31 @@
           ? `hsl(${Math.max(0, Math.min(1, p.colorValue)) * 120},65%,35%)`
           : color;
         if (finite(p.error) && finite(p.y - p.error) && finite(p.y + p.error))
-          svg += `<path d="M${f(x(p.x))} ${f(y(p.y - p.error))}V${f(y(p.y + p.error))}M${f(x(p.x) - 4)} ${f(y(p.y - p.error))}h8M${f(x(p.x) - 4)} ${f(y(p.y + p.error))}h8" fill="none" stroke="${color}"/>`;
+          svg += `<path d="M${f(plotX(p.x))} ${f(y(p.y - p.error))}V${f(y(p.y + p.error))}M${f(plotX(p.x) - 4)} ${f(y(p.y - p.error))}h8M${f(plotX(p.x) - 4)} ${f(y(p.y + p.error))}h8" fill="none" stroke="${color}"/>`;
         if (
           finite(p.xError) &&
           eligible({ x: p.x - p.xError, y: p.y }) &&
           eligible({ x: p.x + p.xError, y: p.y })
         )
-          svg += `<path d="M${f(x(p.x - p.xError))} ${f(y(p.y))}H${f(x(p.x + p.xError))}" stroke="${color}"/>`;
+          svg += `<path d="M${f(plotX(p.x - p.xError))} ${f(y(p.y))}H${f(plotX(p.x + p.xError))}" stroke="${color}"/>`;
         if (p.from && eligible(p.from)) {
           const ax = x(p.from.x),
             ay = y(p.from.y),
-            bx = x(p.x),
+            bx = plotX(p.x),
             by = y(p.y),
             angle = Math.atan2(by - ay, bx - ax);
           svg += `<path d="M${f(ax)} ${f(ay)}L${f(bx)} ${f(by)}M${f(bx - 8 * Math.cos(angle - 0.4))} ${f(by - 8 * Math.sin(angle - 0.4))}L${f(bx)} ${f(by)}L${f(bx - 8 * Math.cos(angle + 0.4))} ${f(by - 8 * Math.sin(angle + 0.4))}" fill="none" stroke="${color}" opacity=".5"/>`;
         }
         if (mode === "bar") {
-          svg += `<rect x="${f(x(p.x) - width / 2)}" y="${f(Math.min(y(0), y(p.y)))}" width="${f(width)}" height="${f(Math.abs(y(0) - y(p.y)))}" fill="${color}"><title>${escape(description)}</title></rect>`;
+          svg += `<rect x="${f(plotX(p.x) - barWidth / 2)}" y="${f(Math.min(y(0), y(p.y)))}" width="${f(barWidth)}" height="${f(Math.abs(y(0) - y(p.y)))}" fill="${color}"><title>${escape(description)}</title></rect>`;
         } else if (mode !== "scatter") {
           d += previous
             ? mode === "step"
-              ? `H${f(x(p.x))}V${f(y(p.y))}`
-              : `L${f(x(p.x))} ${f(y(p.y))}`
-            : `M${f(x(p.x))} ${f(y(p.y))}`;
+              ? `H${f(plotX(p.x))}V${f(y(p.y))}`
+              : `L${f(plotX(p.x))} ${f(y(p.y))}`
+            : `M${f(plotX(p.x))} ${f(y(p.y))}`;
         }
-        svg += `<circle cx="${f(x(p.x))}" cy="${f(y(p.y))}" r="${mode === "scatter" ? 6 : 2}" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
+        svg += `<circle cx="${f(plotX(p.x))}" cy="${f(y(p.y))}" r="${mode === "scatter" ? 6 : 2}" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
         previous = p;
       }
       if (d)
@@ -332,6 +335,7 @@
 
   function buildCharts(a) {
     validateResponse(a, a?.result?.id);
+    a = { ...a, timeOrigin: a.timeOrigin || a.result.startedAt };
     const m = a.metrics;
     const source = `${a.result.name || a.result.id} · ${a.result.id} · ${timeLabel(a.asOf)}`;
     const latencyNote = `${number(m.latencySamples)} eligible first receipts; mean ${number(metricValue(m, "averageLatencyMs"))} ms, P95 ${number(metricValue(m, "p95LatencyMs"))} ms. ${m.definition || "Unknown definition"}. Windows: ${(m.deliveryWindows || []).join(", ") || "N/A"}. ${m.measurementIncomplete ? "Incomplete evidence." : ""}`;
@@ -381,6 +385,16 @@
         note: `Recorded event counts, including local and late receipts; ${a.binSeconds}-second bins. These counts are not delivery ratios.`,
       },
     ];
+    for (const [id, field] of [["latency-cdf", "latencyCDF"], ["latency-distribution", "latencyHistogram"]]) {
+      const chart = charts.find(chart => chart.id === id);
+      chart.series[0].name = "All Peers";
+      for (const group of a.research?.receiverGroups || []) {
+        const points = group[field] || [];
+        chart.series.push({ name: research.receiverGroupLabel(group), points: field === "latencyCDF" && points.length ? [{ x: 0, y: 0 }, ...points.map(p => ({ x: p.x, y: p.y * 100 }))] : points });
+      }
+      chart.groupedBars = chart.mode === "bar" && chart.series.length > 1;
+      if (chart.series.length > 1) chart.note += " Receiver groups use the same eligibility and latency definition as All Peers; each CDF is normalized to its own available samples.";
+    }
     const controls = m.gossipsubControl || [];
     if (controls.length) {
       const types = ["ihave", "iwant", "idontwant", "graft", "prune"];
@@ -947,7 +961,7 @@
         if (
           refresh ||
           job.state === "idle" ||
-          (job.state === "completed" && (job.analysisVersion || 0) < 3) ||
+          (job.state === "completed" && (job.analysisVersion || 0) < 4) ||
           (retry && ["failed", "interrupted", "canceled"].includes(job.state))
         ) {
           job = await request(

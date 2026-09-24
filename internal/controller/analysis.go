@@ -245,6 +245,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 				if latestObservation.At.IsZero() || observation.At.After(latestObservation.At) {
 					latestObservation = observation
 				}
+				accumulator.research.observeGroups(observation)
 				result.ObservationCount++
 				if (result.ObservationCount-1)%stride != 0 {
 					return nil
@@ -306,6 +307,10 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 		return result, err
 	}
 	research, err := accumulator.research.finish(ctx, accumulator, result.Observations)
+	if err != nil {
+		return result, err
+	}
+	research.ReceiverGroups, err = accumulator.research.receiverGroups(ctx, accumulator, research.Messages, result.Observations, samples, result.Result.StartedAt)
 	if err != nil {
 		return result, err
 	}

@@ -192,110 +192,13 @@
     if (points.length) points.push({ x: end, y: points.at(-1).y });
     return points;
   }
-  function buildCharts(a, helpers) {
-    const r = a.research || {},
-      charts = [];
+  function receiverGroupLabel(group) {
+    return group.group ? `Group: ${group.group}` : "Unknown Group";
+  }
+  function deliveryCharts(a) {
+    const r = a.research || {}, charts = [];
     const add = (id, title, xLabel, yLabel, series, extra = {}) =>
       charts.push({ id, title, xLabel, yLabel, series, category: "gossipsub", ...extra });
-    const groups = [
-      ...new Set(
-        (a.observations || []).flatMap((o) => o.groups.map((g) => g.group)),
-      ),
-    ].sort();
-    if (!groups.length) groups.push("");
-    add("graph-node_count", labels.node_count, "Elapsed time (s)", labels.node_count,
-      ["gossipsub", "kademlia", "transport"].flatMap(protocol => groups.map(group => ({
-        name: `${categoryLabels[protocol]} · ${group || "All Peers"}`,
-        points: graphPoints(a, protocol, group, "node_count"),
-      }))), {
-        category: "common",
-        note: "Fresh participating nodes in each protocol graph, including isolates. GossipSub and Kademlia require overlay reports and enabled protocols, so their counts can differ from Transport. Missing observations remain gaps; counts are not added together.",
-      });
-    for (const key of graphKeys.filter(key => key !== "node_count")) {
-      const globalOnly = [
-        "diameter",
-        "shortest_path_length",
-        "assortativity",
-        "modularity",
-        "connected_pair_fraction",
-        "average_degree_excluding_leaves",
-      ].includes(key);
-      for (const [protocol, protocolLabel] of [
-        ["gossipsub", "GossipSub"],
-        ["kademlia", "Kademlia"],
-        ["transport", "Transport"],
-      ]) {
-        const series = (globalOnly ? [""] : groups).map((group) => ({
-          name: `${protocolLabel} · ${group || "All Peers"}`,
-          points: graphPoints(a, protocol, group, key),
-        }));
-        const populated = series.filter((s) => s.points.some((p) => finite(p.y)));
-        add(
-          `graph-${key}-${protocol}`,
-          `${labels[key]} · ${protocolLabel}`,
-          "Elapsed time (s)",
-          labels[key],
-          populated.length ? populated : [series[0]],
-          {
-            protocol,
-            category: protocol,
-            groupId: `graph-${key}`,
-            groupTitle: labels[key],
-            note:
-              key === "average_degree_excluding_leaves"
-                ? "v2 definition retained: sum of ALL degrees / count of nodes with degree > 1. Zero denominator is N/A."
-                : "Fresh, undirected unique-neighbor graph. Includes isolates. Unreachable/self pairs excluded from distances; see connected pair fraction. Missing historical edges yield N/A; no topology is invented.",
-          },
-        );
-      }
-    }
-    add(
-      "degree-probability",
-      "Degree distribution",
-      "Degree",
-      "Probability",
-      [
-        {
-          name: "Snapshot-mean probability",
-          points: r.degreeDistribution || [],
-        },
-      ],
-      {
-        mode: "bar",
-        note: "Each saved snapshot has equal weight; isolated nodes remain at degree 0.",
-      },
-    );
-    let degreeSum = 0;
-    add(
-      "degree-cdf",
-      "Cumulative degree distribution",
-      "Degree",
-      "Probability",
-      [
-        {
-          name: "Degree CDF",
-          points: (r.degreeDistribution || []).map((p) => ({
-            x: p.x,
-            y: (degreeSum += p.y),
-          })),
-        },
-      ],
-      { mode: "step", yMax: 1 },
-    );
-    const fit = r.degreeFit;
-    add(
-      "degree-student-t",
-      "Degree distribution · Student-t fit",
-      "Degree",
-      "Probability / continuous density",
-      [
-        { name: "Observed probability", points: r.degreeDistribution || [] },
-        { name: "Fitted density", points: fit?.density || [] },
-      ],
-      {
-        note: `${fit?.status || "No degree observations"}. ${fit?.method || ""}. df=${fit?.df ?? "N/A"}, location=${fit?.location ?? "N/A"}, scale=${fit?.scale ?? "N/A"}. Density is a continuous approximation to integer degrees.`,
-      },
-    );
     for (const [key, title] of [
       ["propagationCDF", "Receivers over propagation time"],
       ["duplicateCDF", "Duplicate copies over propagation time"],
@@ -453,6 +356,130 @@
         },
       );
     }
+    return charts;
+  }
+  function buildCharts(a, helpers) {
+    a = { ...a, timeOrigin: a.timeOrigin || a.result?.startedAt };
+    const r = a.research || {},
+      charts = [];
+    const add = (id, title, xLabel, yLabel, series, extra = {}) =>
+      charts.push({ id, title, xLabel, yLabel, series, category: "gossipsub", ...extra });
+    const groups = [
+      ...new Set(
+        (a.observations || []).flatMap((o) => o.groups.map((g) => g.group)),
+      ),
+    ].sort();
+    if (!groups.length) groups.push("");
+    add("graph-node_count", labels.node_count, "Elapsed time (s)", labels.node_count,
+      ["gossipsub", "kademlia", "transport"].flatMap(protocol => groups.map(group => ({
+        name: `${categoryLabels[protocol]} · ${group || "All Peers"}`,
+        points: graphPoints(a, protocol, group, "node_count"),
+      }))), {
+        category: "common",
+        note: "Fresh participating nodes in each protocol graph, including isolates. GossipSub and Kademlia require overlay reports and enabled protocols, so their counts can differ from Transport. Missing observations remain gaps; counts are not added together.",
+      });
+    for (const key of graphKeys.filter(key => key !== "node_count")) {
+      const globalOnly = [
+        "diameter",
+        "shortest_path_length",
+        "assortativity",
+        "modularity",
+        "connected_pair_fraction",
+        "average_degree_excluding_leaves",
+      ].includes(key);
+      for (const [protocol, protocolLabel] of [
+        ["gossipsub", "GossipSub"],
+        ["kademlia", "Kademlia"],
+        ["transport", "Transport"],
+      ]) {
+        const series = (globalOnly ? [""] : groups).map((group) => ({
+          name: `${protocolLabel} · ${group || "All Peers"}`,
+          points: graphPoints(a, protocol, group, key),
+        }));
+        const populated = series.filter((s) => s.points.some((p) => finite(p.y)));
+        add(
+          `graph-${key}-${protocol}`,
+          `${labels[key]} · ${protocolLabel}`,
+          "Elapsed time (s)",
+          labels[key],
+          populated.length ? populated : [series[0]],
+          {
+            protocol,
+            category: protocol,
+            groupId: `graph-${key}`,
+            groupTitle: labels[key],
+            note:
+              key === "average_degree_excluding_leaves"
+                ? "v2 definition retained: sum of ALL degrees / count of nodes with degree > 1. Zero denominator is N/A."
+                : "Fresh, undirected unique-neighbor graph. Includes isolates. Unreachable/self pairs excluded from distances; see connected pair fraction. Missing historical edges yield N/A; no topology is invented.",
+          },
+        );
+      }
+    }
+    add(
+      "degree-probability",
+      "Degree distribution",
+      "Degree",
+      "Probability",
+      [
+        {
+          name: "Snapshot-mean probability",
+          points: r.degreeDistribution || [],
+        },
+      ],
+      {
+        mode: "bar",
+        note: "Each saved snapshot has equal weight; isolated nodes remain at degree 0.",
+      },
+    );
+    let degreeSum = 0;
+    add(
+      "degree-cdf",
+      "Cumulative degree distribution",
+      "Degree",
+      "Probability",
+      [
+        {
+          name: "Degree CDF",
+          points: (r.degreeDistribution || []).map((p) => ({
+            x: p.x,
+            y: (degreeSum += p.y),
+          })),
+        },
+      ],
+      { mode: "step", yMax: 1 },
+    );
+    const fit = r.degreeFit;
+    add(
+      "degree-student-t",
+      "Degree distribution · Student-t fit",
+      "Degree",
+      "Probability / continuous density",
+      [
+        { name: "Observed probability", points: r.degreeDistribution || [] },
+        { name: "Fitted density", points: fit?.density || [] },
+      ],
+      {
+        note: `${fit?.status || "No degree observations"}. ${fit?.method || ""}. df=${fit?.df ?? "N/A"}, location=${fit?.location ?? "N/A"}, scale=${fit?.scale ?? "N/A"}. Density is a continuous approximation to integer degrees.`,
+      },
+    );
+    const delivery = deliveryCharts(a);
+    const receiverGroups = r.receiverGroups || [];
+    for (const chart of delivery) {
+      chart.series = chart.series.map(series => ({ ...series, name: chart.series.length === 1 ? "All Peers" : `All Peers · ${series.name}` }));
+      if (receiverGroups.length) {
+        chart.groupedBars = chart.mode === "bar";
+        chart.note += " Group series classify receiving peers; ratios use each group's own eligible population. Only messages with an eligible receiver or recorded receipt/duplicate in that group contribute. Cross-group paths retain their full hop count. Unknown Group means missing or conflicting group metadata.";
+      }
+    }
+    for (const group of receiverGroups) {
+      for (const chart of deliveryCharts({ ...a, research: group })) {
+        const target = delivery.find(candidate => candidate.id === chart.id);
+        const name = receiverGroupLabel(group);
+        target.series.push(...chart.series.map(series => ({ ...series, name: chart.series.length === 1 ? name : `${name} · ${series.name}` })));
+      }
+    }
+    charts.push(...delivery);
     for (const [id, title, keys] of [
       [
         "control-raw",
@@ -673,6 +700,7 @@
   }
   const exported = {
     categoryLabels,
+    receiverGroupLabel,
     metricTitle,
     formatChart,
     labels,

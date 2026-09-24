@@ -210,7 +210,7 @@
               let job = await request(path, {}, signal);
               if (
                 !["queued", "running"].includes(job.state) &&
-                (job.state !== "completed" || (job.analysisVersion || 0) < 3)
+                (job.state !== "completed" || (job.analysisVersion || 0) < 4)
               )
                 job = await request(path, { method: "POST" }, signal);
               onJob(job);

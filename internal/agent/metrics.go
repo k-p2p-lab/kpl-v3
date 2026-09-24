@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"

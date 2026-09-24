@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/k-p2p-lab/v3/internal/auth"
-	"github.com/k-p2p-lab/v3/internal/controller"
+	"github.com/k-p2p-lab/kpl-v3/internal/auth"
+	"github.com/k-p2p-lab/kpl-v3/internal/controller"
 )
 
 var controllerTestToken = auth.InternalToken("agent-integration", "test-password")

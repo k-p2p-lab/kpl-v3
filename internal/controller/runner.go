@@ -20,9 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/auth"
-	"github.com/k-p2p-lab/v3/internal/model"
-	"github.com/k-p2p-lab/v3/internal/scenario"
+	"github.com/k-p2p-lab/kpl-v3/internal/auth"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 type ServerConfig struct {

@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 var errCapacityReached = errors.New("agent capacity reached")

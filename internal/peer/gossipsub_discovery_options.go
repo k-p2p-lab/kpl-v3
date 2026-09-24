@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/libp2p/go-libp2p/core/host"

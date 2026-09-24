@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"net/http"
 	"net/http/httptest"
 	"os"

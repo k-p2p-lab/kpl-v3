@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 type analysisLayer struct {

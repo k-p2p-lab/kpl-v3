@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/k-p2p-lab/v3/internal/scenario"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 // handleScenarioValidation checks editor input without creating storage, jobs,

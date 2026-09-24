@@ -1,6 +1,6 @@
 version: "3.8"
 
-# Deploy with scripts/swarm.sh. See https://github.com/k-p2p-lab/v3/wiki/Swarm-Deployment.
+# Deploy with scripts/swarm.sh. See https://github.com/k-p2p-lab/kpl-v3/wiki/Swarm-Deployment.
 # scripts/swarm.sh resolves a configured tag to one digest for this deployment.
 services:
   controller:

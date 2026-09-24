@@ -3,7 +3,7 @@ name: protocol-options
 seed: 20260907
 
 # Omitted score.enabled is disabled. Only this worker profile opts into scoring.
-# See https://github.com/k-p2p-lab/v3/wiki/Protocol-Options for every field and built-in callback policy.
+# See https://github.com/k-p2p-lab/kpl-v3/wiki/Protocol-Options for every field and built-in callback policy.
 profiles:
   tuned:
     type: full

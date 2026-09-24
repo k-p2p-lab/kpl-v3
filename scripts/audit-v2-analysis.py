@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the inventory documented at https://github.com/k-p2p-lab/v3/wiki/V2-Analysis-Coverage.
+"""Verify the inventory documented at https://github.com/k-p2p-lab/kpl-v3/wiki/V2-Analysis-Coverage.
 
 This detects unreviewed v2 files/outputs; it does NOT prove v3 feature parity.
 It uses only the Python standard library and is independent of the running app.

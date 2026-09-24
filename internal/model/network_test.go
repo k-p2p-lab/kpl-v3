@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/k-p2p-lab/v3/internal/distribution"
+	"github.com/k-p2p-lab/kpl-v3/internal/distribution"
 )
 
 func TestNetworkConfigValidation(t *testing.T) {

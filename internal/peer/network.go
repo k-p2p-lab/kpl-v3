@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/model"
-	"github.com/k-p2p-lab/v3/internal/netem"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/netem"
 	"github.com/multiformats/go-multiaddr"
 )
 

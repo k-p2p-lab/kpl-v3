@@ -11,11 +11,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/k-p2p-lab/v3/internal/agent"
-	"github.com/k-p2p-lab/v3/internal/auth"
-	"github.com/k-p2p-lab/v3/internal/controller"
-	"github.com/k-p2p-lab/v3/internal/peer"
-	"github.com/k-p2p-lab/v3/internal/scenario"
+	"github.com/k-p2p-lab/kpl-v3/internal/agent"
+	"github.com/k-p2p-lab/kpl-v3/internal/auth"
+	"github.com/k-p2p-lab/kpl-v3/internal/controller"
+	"github.com/k-p2p-lab/kpl-v3/internal/peer"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 const version = "v3-dev"

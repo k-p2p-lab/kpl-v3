@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 func receiverGroupByName(t *testing.T, groups []researchReceiverGroup, name string) researchReceiverGroup {

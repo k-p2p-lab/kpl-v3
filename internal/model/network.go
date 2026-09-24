@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/k-p2p-lab/v3/internal/distribution"
+	"github.com/k-p2p-lab/kpl-v3/internal/distribution"
 )
 
 // NetworkConfig configures Linux netem on a peer container's outbound traffic.

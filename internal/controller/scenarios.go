@@ -16,7 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/k-p2p-lab/v3/internal/scenario"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 const (

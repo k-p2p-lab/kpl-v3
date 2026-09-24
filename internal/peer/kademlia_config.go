@@ -14,7 +14,7 @@ import (
 	"github.com/ipfs/boxo/ipns"
 	ds "github.com/ipfs/go-datastore"
 	dssync "github.com/ipfs/go-datastore/sync"
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-kad-dht/amino"
 	pb "github.com/libp2p/go-libp2p-kad-dht/pb"

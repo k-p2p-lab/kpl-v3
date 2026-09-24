@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/k-p2p-lab/v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 const resumeScenario = "name: resume-test\nseed: 42\njobShutdownTimeout: 1s\nphases:\n  - action: join\n    group: workers\n    count: 1\n"

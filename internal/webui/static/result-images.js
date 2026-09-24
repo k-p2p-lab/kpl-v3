@@ -38,11 +38,22 @@
         )
       : "N/A";
   const pointOK = (point) => point && finite(point.x) && finite(point.y);
+  // Keep the English UI and exported chart labels independent of browser
+  // language, while retaining the viewer's local time zone.
+  const timeFormatter = new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
   const timeLabel = (value) =>
     value &&
     !String(value).startsWith("0001-") &&
     Number.isFinite(Date.parse(value))
-      ? new Date(value).toLocaleString()
+      ? timeFormatter.format(new Date(value))
       : "N/A";
 
   function metricValue(metrics, key) {

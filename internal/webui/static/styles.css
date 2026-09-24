@@ -327,7 +327,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 table { width: 100%; border-collapse: collapse; }
 th, td { vertical-align: middle; line-height: 1.4; padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--line-soft); text-align: left; white-space: nowrap; font-size: 0.82rem; }
 th { color: var(--muted); font-weight: 600; }
-tbody tr:last-child td { border-bottom: 0; }
+tbody:last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
 .agent-name { display: block; color: var(--text); font-weight: 650; }
 .agent-number { color: var(--cyan); font-weight: 750; font-variant-numeric: tabular-nums; }
 .agent-id { display: block; margin-top: 0.18rem; color: var(--muted); font-size: 0.7rem; }

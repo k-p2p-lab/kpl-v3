@@ -2,6 +2,20 @@
 (function (root) {
   "use strict";
   const finite = (v) => typeof v === "number" && Number.isFinite(v);
+  const categoryLabels = { common: "Common", gossipsub: "GossipSub", kademlia: "Kademlia", transport: "Transport" };
+  // Display names use title case while units, acronyms and technical names keep
+  // their spelling. Data keys, protocol IDs and user-provided series stay intact.
+  function metricTitle(text) {
+    const lower = new Set(["and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "over", "per", "the", "to", "vs", "with", "without", "s", "ms", "v2", "v3"]);
+    return String(text).replace(/\b[a-z][a-z0-9]*\b/g, (word, offset) =>
+      (lower.has(word) && offset > 0 || word === "t" && String(text).slice(0, offset).endsWith("Student-"))
+        ? word : word[0].toUpperCase() + word.slice(1));
+  }
+  function formatChart(chart) {
+    return { ...chart, title: metricTitle(chart.title),
+      ...(chart.groupTitle ? { groupTitle: metricTitle(chart.groupTitle) } : {}),
+      ...(chart.panels ? { panels: chart.panels.map(formatChart) } : {}) };
+  }
   const labels = {
     node_count: "Node count",
     average_degree: "Mean degree",
@@ -42,6 +56,7 @@
     bandwidth_sent: "Sent stream bytes",
     bandwidth_received: "Received stream bytes",
   };
+  for (const key of Object.keys(labels)) labels[key] = metricTitle(labels[key]);
   const graphKeys = Object.keys(labels).slice(0, 14);
   const value = (a, key) => {
     if (key === "bandwidth_sent")
@@ -181,14 +196,22 @@
     const r = a.research || {},
       charts = [];
     const add = (id, title, xLabel, yLabel, series, extra = {}) =>
-      charts.push({ id, title, xLabel, yLabel, series, ...extra });
+      charts.push({ id, title, xLabel, yLabel, series, category: "gossipsub", ...extra });
     const groups = [
       ...new Set(
         (a.observations || []).flatMap((o) => o.groups.map((g) => g.group)),
       ),
     ].sort();
     if (!groups.length) groups.push("");
-    for (const key of graphKeys) {
+    add("graph-node_count", labels.node_count, "Elapsed time (s)", labels.node_count,
+      ["gossipsub", "kademlia", "transport"].flatMap(protocol => groups.map(group => ({
+        name: `${categoryLabels[protocol]} · ${group || "All Peers"}`,
+        points: graphPoints(a, protocol, group, "node_count"),
+      }))), {
+        category: "common",
+        note: "Fresh participating nodes in each protocol graph, including isolates. GossipSub and Kademlia require overlay reports and enabled protocols, so their counts can differ from Transport. Missing observations remain gaps; counts are not added together.",
+      });
+    for (const key of graphKeys.filter(key => key !== "node_count")) {
       const globalOnly = [
         "diameter",
         "shortest_path_length",
@@ -199,11 +222,11 @@
       ].includes(key);
       for (const [protocol, protocolLabel] of [
         ["gossipsub", "GossipSub"],
-        ["kademlia", "Kad"],
+        ["kademlia", "Kademlia"],
         ["transport", "Transport"],
       ]) {
         const series = (globalOnly ? [""] : groups).map((group) => ({
-          name: `${protocol} · ${group || "all peers"}`,
+          name: `${protocolLabel} · ${group || "All Peers"}`,
           points: graphPoints(a, protocol, group, key),
         }));
         const populated = series.filter((s) => s.points.some((p) => finite(p.y)));
@@ -215,6 +238,7 @@
           populated.length ? populated : [series[0]],
           {
             protocol,
+            category: protocol,
             groupId: `graph-${key}`,
             groupTitle: labels[key],
             note:
@@ -531,6 +555,7 @@
         title,
         observed((g) => g[key]),
         {
+          category: key === "reporting" ? "common" : "gossipsub",
           note: "Fresh reporting peers, grouped by observer. Missing reports remain gaps.",
         },
       );
@@ -546,7 +571,7 @@
           y: o.groups.find((g) => g.group === "")?.[key],
         })),
       })),
-      { mode: "step" },
+      { mode: "step", category: "common" },
     );
     const bandwidth = a.metrics?.bandwidth,
       protocols = [
@@ -566,7 +591,7 @@
         name: direction,
         points: helpers.bandwidthPoints(a, "*", direction, true),
       })),
-      { note: bwNote },
+      { note: bwNote, category: "common" },
     );
     if (!protocols.length) protocols.push("No protocol observations");
     for (const direction of ["send", "recv"])
@@ -580,9 +605,9 @@
             name: protocol,
             points: helpers.bandwidthPoints(a, protocol, direction, cumulative),
           })),
-          { mode: cumulative ? "line" : "step", note: bwNote },
+          { mode: cumulative ? "line" : "step", note: bwNote, category: "common" },
         );
-    return charts;
+    return charts.map(formatChart);
   }
   function messageCharts(a, index) {
     const m = a.research?.messages?.[index];
@@ -640,12 +665,16 @@
       },
     ];
     return charts.map((c) => ({
-      ...c,
+      ...formatChart(c),
+      category: "gossipsub",
       source,
       note: `${nodes.length} unique non-publisher receivers; ${nodes.filter((n) => !finite(n.hop)).length} unresolved paths, ${nodes.filter((n) => n.source === "unknown").length} unclassified origins. Eager/lazy colors are metadata estimates, not direct source measurements. Full IDs and membership are in analysis JSON.`,
     }));
   }
   const exported = {
+    categoryLabels,
+    metricTitle,
+    formatChart,
     labels,
     graphKeys,
     value,

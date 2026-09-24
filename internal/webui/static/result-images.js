@@ -464,7 +464,7 @@
         panels: pair,
         series: [],
       });
-    return charts.map((chart) => ({ ...chart, source }));
+    return charts.map((chart) => research.formatChart({ ...chart, source, category: chart.category || chart.protocol || (chart.id === "p2p-throughput" ? "common" : "gossipsub") }));
   }
 
   function validateResponse(data, id) {
@@ -633,6 +633,40 @@
     return `${phase} · ${mb(job.processedBytes)} / ${mb(job.totalBytes)} MiB read`;
   }
 
+  const metricTypes = {
+    population: "Nodes & Peers",
+    topology: "Topology",
+    delivery: "Delivery & Propagation",
+    control: "Control Traffic",
+    scores: "Peer Scores",
+    bandwidth: "Bandwidth",
+    comparison: "Comparisons & Models",
+  };
+  function metricType(chart) {
+    const id = chart.id;
+    if (["graph-node_count", "peer-lifecycle", "observers-reporting"].includes(id)) return "population";
+    if (/bandwidth|throughput/.test(id)) return "bandwidth";
+    if (id === "peer-scores" || id.startsWith("observers-")) return "scores";
+    if (id.startsWith("control-") || ["gossipsub-control", "mesh-transitions"].includes(id)) return "control";
+    if (id.startsWith("graph-") || id.startsWith("degree-") || id === "mesh-degree") return "topology";
+    return chart.category || chart.protocol ? "delivery" : "comparison";
+  }
+  function filterMetricGroups(groups, { category = "common", query = "", type = "all", sort = "default" } = {}) {
+    const normalize = value => String(value).toLocaleLowerCase("en-US").replace(/[_-]/g, " ");
+    const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
+    const filtered = groups.flatMap((group, index) => {
+      const chart = group.charts.find(chart => (chart.category || chart.protocol || "common") === category);
+      if (!chart) return [];
+      const kind = metricType(chart);
+      const text = normalize([group.title, chart.title, chart.id, metricTypes[kind], chart.xLabel, chart.yLabel].join(" "));
+      if ((type !== "all" && type !== kind) || !terms.every(term => text.includes(term))) return [];
+      return [{ ...group, index, chart, type: kind }];
+    });
+    if (sort === "asc" || sort === "desc") filtered.sort((a, b) =>
+      (sort === "asc" ? 1 : -1) * a.title.localeCompare(b.title, "en", { numeric: true, sensitivity: "base" }));
+    return filtered;
+  }
+
   function groupCharts(charts) {
     const groups = new Map();
     for (const chart of charts) {
@@ -659,9 +693,18 @@
       currentData = null,
       objectURLs = [];
     let researchTools = null;
-    let imageGroups = [], imageAssets = new Map(), selectedProtocol = "gossipsub", imageFailure = "";
+    let imageGroups = [], imageAssets = new Map(), selectedProtocol = "common", imageFailure = "";
     const protocolControls = $("resultImageProtocols");
     const imageList = $("resultImagesGrid");
+    const expandedGroups = new Set();
+    const searchInput = $("resultMetricSearch"), typeInput = $("resultMetricType"), sortInput = $("resultMetricSort");
+    typeInput.innerHTML = '<option value="all">All Types</option>' + Object.entries(metricTypes).map(([id, title]) => `<option value="${id}">${escape(title)}</option>`).join("");
+    function resetMetricFilters() {
+      searchInput.value = "";
+      typeInput.value = "all";
+      sortInput.value = "default";
+    }
+    resetMetricFilters();
     function status(message, error = false) {
       $("resultImagesStatus").textContent = message;
       $("resultImagesStatus").classList.toggle("error", error);
@@ -672,6 +715,8 @@
     function clearImages() {
       imageList.innerHTML = "";
       imageGroups = [];
+      expandedGroups.clear();
+      $("resultMetricTools").hidden = true;
       imageAssets.clear();
       imageFailure = "";
       protocolControls.hidden = true;
@@ -693,13 +738,13 @@
       return url;
     }
     function selectedChart(group) {
-      return group.charts.find(chart => !chart.protocol || chart.protocol === selectedProtocol);
+      return group.charts.find(chart => (chart.category || chart.protocol || "common") === selectedProtocol);
     }
     function updateImage(details) {
       const group = imageGroups[Number(details.dataset.imageIndex)];
       if (!group) return;
       const body = details.querySelector(".result-image-body");
-      if (!details.open) {
+      if (!details.open || details.hidden) {
         body.innerHTML = "";
         delete body.dataset.imageAsset;
         return;
@@ -707,7 +752,7 @@
       const chart = selectedChart(group), asset = chart && imageAssets.get(chart.id);
       if (!asset) {
         delete body.dataset.imageAsset;
-        const message = !chart ? "No image is available for this protocol."
+        const message = !chart ? "No image is available in this category."
           : imageFailure ? "This image could not be prepared. Use Retry to try again."
           : `Preparing ${chart.title}…`;
         body.innerHTML = `<p class="result-image-placeholder">${escape(message)}</p>`;
@@ -717,30 +762,68 @@
       body.innerHTML = `<figure><a href="${asset.pngURL}" download="${escape(asset.filename)}.png" aria-label="${escape(`Download ${chart.title} as PNG`)}"><img src="${asset.pngURL}" alt="${escape(chart.title)}" loading="lazy"></a><figcaption><span>${escape(chart.title)}</span><a href="${asset.pngURL}" download="${escape(asset.filename)}.png">PNG ↓</a>${asset.csvURL ? `<a href="${asset.csvURL}" download="${escape(asset.filename)}.csv">CSV ↓</a>` : ""}</figcaption></figure>`;
       body.dataset.imageAsset = chart.id;
     }
+    function renderMetricList() {
+      for (const details of imageList.querySelectorAll("details[data-image-index]")) {
+        const id = imageGroups[Number(details.dataset.imageIndex)]?.id;
+        if (id) { if (details.open) expandedGroups.add(id); else expandedGroups.delete(id); }
+      }
+      const filters = { category: selectedProtocol, query: searchInput.value, type: typeInput.value, sort: sortInput.value };
+      const visible = filterMetricGroups(imageGroups, filters);
+      const total = filterMetricGroups(imageGroups, { category: selectedProtocol }).length;
+      $("resultMetricCount").textContent = `${visible.length} of ${total} metrics`;
+      $("clearResultMetricFilters").hidden = !searchInput.value && typeInput.value === "all";
+      const sections = Object.entries(metricTypes).map(([type, title]) => {
+        const groups = visible.filter(group => group.type === type);
+        if (!groups.length) return "";
+        return `<section class="result-metric-group" aria-labelledby="metric-type-${type}"><h3 id="metric-type-${type}">${escape(title)}<span>${groups.length}</span></h3><div class="result-metric-items">${groups.map(group => `<details class="result-image" data-image-group="${escape(group.id)}" data-image-index="${group.index}"${expandedGroups.has(group.id) ? " open" : ""}>
+          <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg><span>${escape(group.title)}</span></summary>
+          <div class="result-image-body"></div>
+        </details>`).join("")}</div></section>`;
+      }).join("");
+      imageList.innerHTML = sections || '<p class="result-metrics-empty">No matching metrics. Try another name or clear the filters.</p>';
+      for (const details of imageList.querySelectorAll("details[open]")) updateImage(details);
+    }
     function showImageList(charts) {
       imageGroups = groupCharts(charts);
-      protocolControls.hidden = !charts.some(chart => chart.protocol);
-      for (const input of protocolControls.querySelectorAll('input[name="resultImageProtocol"]')) input.checked = input.value === selectedProtocol;
-      imageList.innerHTML = imageGroups.map((group, index) => `<details class="result-image" data-image-group="${escape(group.id)}" data-image-index="${index}">
-        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg><span>${escape(group.title)}</span></summary>
-        <div class="result-image-body"></div>
-      </details>`).join("");
+      expandedGroups.clear();
+      imageList.innerHTML = "";
+      resetMetricFilters();
+      const categories = new Set(charts.map(chart => chart.category || chart.protocol || "common"));
+      if (!categories.has(selectedProtocol)) selectedProtocol = Object.keys(research.categoryLabels).find(category => categories.has(category)) || "common";
+      protocolControls.hidden = categories.size < 2;
+      $("resultMetricTools").hidden = false;
+      for (const input of protocolControls.querySelectorAll('input[name="resultImageProtocol"]')) {
+        input.checked = input.value === selectedProtocol;
+        input.disabled = !categories.has(input.value);
+      }
+      renderMetricList();
     }
-    // Native toggle does not bubble. Only attach images for expanded entries;
-    // changing protocols updates their bodies without replacing the disclosures.
+    // Disclosure state belongs to the metric, not its filtered DOM position.
     imageList.addEventListener("toggle", event => {
-      if (event.target.matches("details[data-image-index]")) updateImage(event.target);
+      const details = event.target;
+      if (!details.matches("details[data-image-index]")) return;
+      const id = imageGroups[Number(details.dataset.imageIndex)]?.id;
+      if (id) { if (details.open) expandedGroups.add(id); else expandedGroups.delete(id); }
+      updateImage(details);
     }, true);
     protocolControls.addEventListener("change", event => {
       const input = event.target;
-      if (input.name !== "resultImageProtocol" || !input.checked || !["gossipsub", "kademlia", "transport"].includes(input.value)) return;
+      if (input.name !== "resultImageProtocol" || !input.checked || input.disabled || !Object.hasOwn(research.categoryLabels, input.value)) return;
       selectedProtocol = input.value;
-      for (const details of imageList.querySelectorAll("details[open]")) {
-        if (imageGroups[Number(details.dataset.imageIndex)]?.charts.some(chart => chart.protocol)) updateImage(details);
-      }
+      renderMetricList();
+    });
+    searchInput.addEventListener("input", renderMetricList);
+    typeInput.addEventListener("change", renderMetricList);
+    sortInput.addEventListener("change", renderMetricList);
+    $("clearResultMetricFilters").addEventListener("click", () => {
+      searchInput.value = "";
+      typeInput.value = "all";
+      renderMetricList();
+      searchInput.focus();
     });
     async function prepareImages(charts, id, view, requestRevision, extra) {
       const bundle = [];
+      charts = charts.map(research.formatChart);
       showImageList(charts);
       try {
         for (const [index, chart] of charts.entries()) {
@@ -840,7 +923,7 @@
     }
     async function open(id, { refresh = false, retry = false, isBatch = false } = {}) {
       if (!id || (currentID === id && currentBatch === isBatch && controller)) return;
-      if (!dialog.open || currentID !== id || currentBatch !== isBatch) selectedProtocol = "gossipsub";
+      if (!dialog.open || currentID !== id || currentBatch !== isBatch) selectedProtocol = "common";
       cancel();
       currentID = id;
       currentBatch = isBatch;
@@ -925,7 +1008,7 @@
           const summary = $("batchAnalysisSummary");
           if (summary) {
             summary.hidden = false;
-            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary><p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead><tbody>${Object.entries(data.summary).sort(([a],[b]) => a.localeCompare(b)).map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody></table></div>`;
+            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary><p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead>${batch.summaryGroups(data.summary).map(group => `<tbody><tr class="metric-category-row"><th colspan="4" scope="rowgroup">${escape(research.categoryLabels[group.category])}</th></tr>${group.rows.map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody>`).join("")}</table></div>`;
           }
           await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns });
         } else {
@@ -975,6 +1058,8 @@
   const exported = {
     buildCharts,
     groupCharts,
+    filterMetricGroups,
+    metricTypes,
     chartSVG,
     metricValue,
     trafficPoints,

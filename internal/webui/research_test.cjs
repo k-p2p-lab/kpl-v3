@@ -361,7 +361,7 @@ test('peak normalization scales imported standard deviations in the same units a
 test("graph metrics have separate protocol variants without mixing group series", () => {
   const a = analysis("layers", {});
   const protocols = ["gossipsub", "kademlia", "transport"];
-  const protocolLabels = ["GossipSub", "Kad", "Transport"];
+  const protocolLabels = ["GossipSub", "Kademlia", "Transport"];
   a.observations = [
     {
       at: "2026-09-13T00:00:00Z",
@@ -378,25 +378,30 @@ test("graph metrics have separate protocol variants without mixing group series"
     },
   ];
   const charts = I.buildCharts(a).filter(chart => chart.id.startsWith("graph-"));
-  assert.equal(charts.length, R.graphKeys.length * protocols.length);
+  assert.equal(charts.length, (R.graphKeys.length - 1) * protocols.length + 1);
   assert.equal(new Set(charts.map(chart => chart.id)).size, charts.length);
-  for (const key of R.graphKeys) {
+  for (const key of R.graphKeys.filter(key => key !== "node_count")) {
     const variants = charts.filter(chart => chart.groupId === "graph-" + key);
     assert.deepEqual(variants.map(chart => chart.protocol), protocols);
     for (const [index, chart] of variants.entries()) {
       assert.equal(chart.id, "graph-" + key + "-" + protocols[index]);
       assert.equal(chart.groupTitle, R.labels[key]);
       assert.equal(chart.title, R.labels[key] + " · " + protocolLabels[index]);
-      assert.ok(chart.series.every(series => series.name.startsWith(chart.protocol + " · ")));
+      assert.ok(chart.series.every(series => series.name.startsWith(protocolLabels[index] + " · ")));
     }
   }
+  const nodes = charts.find(chart => chart.id === "graph-node_count");
+  assert.equal(nodes.category, "common");
+  assert.equal(nodes.protocol, undefined);
+  assert.deepEqual(nodes.series.map(series => series.points[0].y), [10, 11, 20, 21, 30, 31]);
+  assert.match(nodes.note, /counts can differ/);
   for (const [index, protocol] of protocols.entries()) {
     const degree = charts.find(chart => chart.id === "graph-average_degree-" + protocol);
-    assert.deepEqual(degree.series.map(series => series.name), [protocol + " · all peers", protocol + " · workers"]);
+    assert.deepEqual(degree.series.map(series => series.name), [protocolLabels[index] + " · All Peers", protocolLabels[index] + " · workers"]);
     assert.deepEqual(degree.series.map(series => series.points[0].y), [(index + 1) * 2, (index + 1) * 2 + 1]);
     const diameter = charts.find(chart => chart.id === "graph-diameter-" + protocol);
     assert.equal(diameter.series.length, 1);
-    assert.equal(diameter.series[0].name, protocol + " · all peers");
+    assert.equal(diameter.series[0].name, protocolLabels[index] + " · All Peers");
   }
 });
 
@@ -410,11 +415,19 @@ test("unobserved graph protocols remain unavailable instead of borrowing another
   assert.equal(charts.find(chart => chart.id === "graph-average_degree-gossipsub").series[0].points[0].y, 4);
   for (const protocol of ["kademlia", "transport"]) {
     const chart = charts.find(chart => chart.id === "graph-average_degree-" + protocol);
-    assert.deepEqual(chart.series, [{ name: protocol + " · all peers", points: [{ x: 0, y: null }] }]);
+    assert.deepEqual(chart.series, [{ name: R.categoryLabels[protocol] + " · All Peers", points: [{ x: 0, y: null }] }]);
     assert.match(I.chartSVG(chart), /No eligible observations available/);
   }
   // Stream protocol IDs have different attribution semantics from graph layers.
   const bandwidth = charts.filter(chart => chart.id.startsWith("bandwidth-protocol-"));
   assert.equal(bandwidth.length, 4);
   assert.ok(bandwidth.every(chart => chart.protocol === undefined && chart.groupId === undefined));
+});
+
+
+test("metric title case preserves protocol names, acronyms and measurement units", () => {
+  assert.equal(R.metricTitle("GossipSub degree distribution · Student-t fit (ms)"), "GossipSub Degree Distribution · Student-t Fit (ms)");
+  assert.equal(R.metricTitle("PageRank and FRT (s) · run mean"), "PageRank and FRT (s) · Run Mean");
+  assert.equal(R.labels.node_count, "Node Count");
+  assert.equal(R.labels.send_ihave, "Sent IHAVE RPCs");
 });

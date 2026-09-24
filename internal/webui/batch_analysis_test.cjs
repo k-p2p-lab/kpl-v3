@@ -106,31 +106,36 @@ test('batch graph variants preserve protocol groups and average only the same la
   const c = run('c', '2026-09-13T02:00:00Z', 30);
   const observation = (source, degrees) => ({
     at: source.result.startedAt,
-    groups: [{ group: '', layers: Object.entries(degrees).map(([protocol, averageDegree]) => ({ protocol, nodes: 10, averageDegree })) }],
+    groups: [{ group: '', layers: Object.entries(degrees).map(([protocol, averageDegree]) => ({ protocol, nodes: averageDegree * 10, averageDegree })) }],
   });
   a.observations = [observation(a, { gossipsub: 2, kademlia: 20, transport: 100 })];
   b.observations = [observation(b, { gossipsub: 6, kademlia: 40, transport: 300 })];
   c.observations = [observation(c, { gossipsub: 10 })];
   const charts = batch.build(data([a, b, c]), images.buildCharts);
+  const nodes = charts.find(chart => chart.id === 'graph-node_count');
+  assert.equal(nodes.category, 'common');
+  for (const [index, expected] of [60, 300, 2000].entries()) approx(nodes.series[index].points[0].y, expected);
+  assert.deepEqual(nodes.series.map(series => series.points[0].n), [3, 2, 2]);
+  assert.equal(batch.label('research.node_count'), 'GossipSub Node Count');
   for (const [protocol, label, mean, count, error] of [
     ['gossipsub', 'GossipSub', 6, 3, 4],
-    ['kademlia', 'Kad', 30, 2, Math.sqrt(200)],
+    ['kademlia', 'Kademlia', 30, 2, Math.sqrt(200)],
     ['transport', 'Transport', 200, 2, Math.sqrt(20000)],
   ]) {
     const chart = charts.find(chart => chart.id === 'graph-average_degree-' + protocol);
     assert.equal(chart.protocol, protocol);
     assert.equal(chart.groupId, 'graph-average_degree');
-    assert.equal(chart.groupTitle, 'Mean degree · run mean');
-    assert.equal(chart.title, 'Mean degree · ' + label + ' · run mean');
+    assert.equal(chart.groupTitle, 'Mean Degree · Run Mean');
+    assert.equal(chart.title, 'Mean Degree · ' + label + ' · Run Mean');
     assert.equal(chart.series.length, 1);
-    assert.equal(chart.series[0].name, protocol + ' · all peers');
+    assert.equal(chart.series[0].name, label + ' · All Peers');
     const point = chart.series[0].points[0];
     assert.equal(point.x, 0);
     approx(point.y, mean);
     assert.equal(point.n, count, 'unobserved layers must not contribute zero-valued runs');
     approx(point.error, error);
     const exported = files.csvRows(files.chartCSV(chart));
-    assert.equal(exported[1][exported[0].indexOf('series')], protocol + ' · all peers');
+    assert.equal(exported[1][exported[0].indexOf('series')], label + ' · All Peers');
   }
   assert.equal(new Set(charts.map(chart => chart.id)).size, charts.length);
 });

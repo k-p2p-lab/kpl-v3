@@ -356,8 +356,8 @@
   <dialog class="result-images-dialog" id="resultImagesDialog" aria-labelledby="resultImagesHeading" aria-describedby="resultImagesName">
     <div class="result-images-shell">
       <header class="result-images-header">
-        <div><p class="eyebrow">SAVED RESULT</p><h2 id="resultImagesHeading">Graph images</h2><p id="resultImagesName"></p><p id="resultImagesDate"></p></div>
-        <button class="icon-button" id="closeResultImages" type="button" aria-label="Close graph images" autofocus><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
+        <div><p class="eyebrow">SAVED RESULT</p><h2 id="resultImagesHeading">Result Metrics</h2><p id="resultImagesName"></p><p id="resultImagesDate"></p></div>
+        <button class="icon-button" id="closeResultImages" type="button" aria-label="Close result metrics" autofocus><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
       </header>
       <p class="dialog-help">Analysis continues on the server when you close this window or browser. Return to Saved results to check progress and download completed images.</p>
       <div class="result-images-feedback"><p id="resultImagesStatus" role="status" aria-live="polite"></p><button class="secondary-button" id="retryResultImages" type="button" hidden>Retry</button></div>
@@ -384,12 +384,19 @@
       </details>
       <details id="batchAnalysisSummary" class="batch-analysis-summary" hidden></details>
       <fieldset class="result-image-protocols" id="resultImageProtocols" hidden>
-        <legend>Graph protocol</legend>
-        <label><input type="radio" name="resultImageProtocol" value="gossipsub" checked> GossipSub</label>
-        <label><input type="radio" name="resultImageProtocol" value="kademlia"> Kad</label>
-        <label><input type="radio" name="resultImageProtocol" value="transport"> Transport</label>
-        <span>Applies to topology graph metrics. The ZIP includes all three protocols.</span>
+        <legend>Metrics</legend>
+        <label><input type="radio" name="resultImageProtocol" value="common" checked> <span>Common</span></label>
+        <label><input type="radio" name="resultImageProtocol" value="gossipsub"> <span>GossipSub</span></label>
+        <label><input type="radio" name="resultImageProtocol" value="kademlia"> <span>Kademlia</span></label>
+        <label><input type="radio" name="resultImageProtocol" value="transport"> <span>Transport</span></label>
+        <p>Common shows node counts, peer status and stream traffic. The ZIP includes every category.</p>
       </fieldset>
+      <div class="result-metric-tools" id="resultMetricTools" hidden>
+        <label class="result-metric-search">Search Metrics<input id="resultMetricSearch" type="search" placeholder="Name or keyword" maxlength="256" autocomplete="off" aria-controls="resultImagesGrid"></label>
+        <label>Metric Type<select id="resultMetricType" aria-controls="resultImagesGrid"><option value="all">All Types</option></select></label>
+        <label>Sort Within Groups<select id="resultMetricSort" aria-controls="resultImagesGrid"><option value="default">Default Order</option><option value="asc">Name (A–Z)</option><option value="desc">Name (Z–A)</option></select></label>
+        <div class="result-metric-filter-status"><p id="resultMetricCount" role="status" aria-live="polite"></p><button class="secondary-button" id="clearResultMetricFilters" type="button" hidden>Clear Filters</button></div>
+      </div>
       <p class="dialog-help">Select an image name to expand its preview and PNG / CSV downloads.</p>
       <div class="result-images-list" id="resultImagesGrid"></div>
     </div>

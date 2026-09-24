@@ -107,14 +107,23 @@
     for (const key of Object.keys(metricLabels)) {
       const stat = data.summary[key];
       if (!stat) continue;
-      charts.push({ id: `summary-${key.replaceAll(".", "-")}`, title: label(key), source, mode: "bar", xLabel: "Completed runs", yLabel: label(key), xTicks: ["Run mean"], series: [{ name: "Mean and sample SD", points: [{ x: 0, y: stat.average, error: stat.deviation, n: stat.count, label: `n=${stat.count} runs` }] }], note: "Equal run weight; between-run sample SD. Missing values are excluded. P95 is the mean of run P95 values, not a pooled percentile." });
+      charts.push({ id: `summary-${key.replaceAll(".", "-")}`, category: summaryCategory(key), title: label(key), source, mode: "bar", xLabel: "Completed runs", yLabel: label(key), xTicks: ["Run mean"], series: [{ name: "Mean and sample SD", points: [{ x: 0, y: stat.average, error: stat.deviation, n: stat.count, label: `n=${stat.count} runs` }] }], note: "Equal run weight; between-run sample SD. Missing values are excluded. P95 is the mean of run P95 values, not a pooled percentile." });
     }
     const panels = charts.filter(c => ["research-propagationCDF", "research-duplicateCDF"].includes(c.id));
     if (panels.length === 2) charts.push({ id: "propagation-duplicate-panels", title: "Propagation and duplicate accumulation · run mean", panels, series: [], source });
-    return charts;
+    return charts.map(chart => R.formatChart({ ...chart, category: chart.category || chart.protocol || "gossipsub" }));
   }
   const metricLabels = { "metrics.averageLatencyMs": "Mean first-delivery latency (ms)", "metrics.p95LatencyMs": "Mean of run P95 latency (ms)", "metrics.reachability": "Continuous-session delivery ratio", "metrics.stableCoverage": "Stable coverage", "metrics.initialDeliveryRatio": "Initial delivery ratio", "metrics.averageDuplicates": "Mean duplicate copies", "bandwidth.sentBytes": "Sent stream bytes", "bandwidth.receivedBytes": "Received stream bytes" };
-  function label(key) { return metricLabels[key] || (key.startsWith("research.") ? R.labels[key.slice(9)] : null) || key.split(".").at(-1).replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " "); }
+  function label(key) {
+    if (key === "research.node_count") return "GossipSub Node Count";
+    return R.metricTitle(metricLabels[key] || (key.startsWith("research.") ? R.labels[key.slice(9)] : null) || key.split(".").at(-1).replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " "));
+  }
+  function summaryCategory(key) { return key.startsWith("bandwidth.") || key === "research.node_count" ? "common" : "gossipsub"; }
+  function summaryGroups(summary) {
+    return Object.keys(R.categoryLabels).map(category => ({ category,
+      rows: Object.entries(summary).filter(([key]) => summaryCategory(key) === category).sort(([a], [b]) => label(a).localeCompare(label(b))),
+    })).filter(group => group.rows.length);
+  }
   function summaryCSV(summary) {
     const quote = value => '"' + String(value ?? "").replaceAll('"', '""') + '"';
     return [["metric", "label", "mean", "sample_sd", "n"], ...Object.entries(summary).sort(([a], [b]) => a.localeCompare(b)).map(([key, stat]) => [key, label(key), stat.average, stat.deviation, stat.count])].map(row => row.map(quote).join(",")).join("\n") + "\n";
@@ -123,6 +132,6 @@
     const excluded = data.excluded.map(r => `Run ${r.iteration || r.id}: ${r.state}`).join("; ");
     return `${data.runs.length}/${data.expectedRuns} runs included · equal run weight · ${data.missingRuns} missing/unreadable${excluded ? ` · Excluded: ${excluded}` : ""}`;
   }
-  const exported = { validate, average, valueAt, commonHistograms, build, label, summaryCSV, description };
+  const exported = { validate, average, valueAt, commonHistograms, build, label, summaryGroups, summaryCSV, description };
   if (typeof module !== "undefined" && module.exports) module.exports = exported; else root.KPLBatchAnalysis = exported;
 })(globalThis);

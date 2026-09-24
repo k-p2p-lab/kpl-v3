@@ -39,6 +39,8 @@ function fixture(api, renderImage = async () => png, options = {}) {
         textContent: "",
         open: false,
         hidden: false,
+        value: "",
+        focus() {},
         listeners: {},
         classList: { toggle() {} },
         querySelectorAll() { return []; },
@@ -236,7 +238,7 @@ test("a new result starts once, polls byte progress, and downloads the completed
   assert.equal(element("resultImagesName").textContent, "Example <run>");
   assert.equal(
     (element("resultImagesGrid").innerHTML.match(/<details/g) || []).length,
-    images.groupCharts(images.buildCharts(sample())).length,
+    images.filterMetricGroups(images.groupCharts(images.buildCharts(sample()))).length,
   );
   assert.match(
     element("downloadResultAnalysis").href,
@@ -265,7 +267,7 @@ test("closing detaches from server analysis and reopening completed work does no
   resolveStatus(job("one", "running"));
   await first;
   await second;
-  assert.match(element("resultImagesGrid").innerHTML, /data-image-group="latency-cdf"/);
+  assert.match(element("resultImagesGrid").innerHTML, /data-image-group="graph-node_count"/);
   assert.equal(element("downloadAllResultImages").download, "two-images.zip");
   assert.match(element("downloadResultAnalysis").href, /two\/result\?jobId=two-job$/);
   assert.ok(calls.every((call) => !call.options.method));
@@ -399,15 +401,15 @@ test("image families keep one closed title per graph metric without losing any p
   const groups = images.groupCharts(charts);
   const graphGroups = groups.filter(group => group.id.startsWith("graph-"));
   assert.equal(graphGroups.length, 14);
-  for (const group of graphGroups) {
+  for (const group of graphGroups.filter(group => group.id !== "graph-node_count")) {
     assert.deepEqual(group.charts.map(chart => chart.protocol), ["gossipsub", "kademlia", "transport"]);
     assert.equal(new Set(group.charts.map(chart => chart.id)).size, 3);
   }
-  assert.equal(groups.length, charts.length - 28);
+  assert.equal(groups.length, charts.length - 26);
   const { ui, element } = fixture(completedAPI);
   await ui.open("run");
   const markup = element("resultImagesGrid").innerHTML;
-  assert.equal((markup.match(/<details /g) || []).length, groups.length);
+  assert.equal((markup.match(/<details /g) || []).length, images.filterMetricGroups(groups).length);
   assert.doesNotMatch(markup, /<img|<figure|<details[^>]*\bopen(?:[\s=>])/);
   assert.equal(element("resultImageProtocols").hidden, false);
   element("resultImagesDialog").close();
@@ -435,7 +437,7 @@ test("the complete image ZIP contains separately named PNG and CSV files for all
   const definitions = JSON.parse(entries.get("run-chart-definitions.json").toString());
   const diameter = definitions.charts.filter(chart => chart.groupId === "graph-diameter");
   assert.equal(diameter.length, 3);
-  for (const chart of diameter) assert.ok(chart.series.every(series => series.name.startsWith(chart.protocol + " · ")));
+  for (const chart of diameter) assert.ok(chart.series.every(series => series.name.startsWith(({ gossipsub: "GossipSub", kademlia: "Kademlia", transport: "Transport" })[chart.protocol] + " · ")));
   element("resultImagesDialog").close();
 });
 
@@ -443,6 +445,7 @@ test("the complete image ZIP contains separately named PNG and CSV files for all
 test("opening an image uses a CSP-compatible preview and protocol switching keeps its disclosure open", async () => {
   const { ui, element } = fixture(completedAPI);
   await ui.open("run");
+  element("resultImageProtocols").listeners.change({ target: { name: "resultImageProtocol", checked: true, value: "gossipsub" } });
   const groups = images.groupCharts(images.buildCharts(sample()));
   const body = { innerHTML: "", dataset: {} };
   const details = {
@@ -467,5 +470,62 @@ test("opening an image uses a CSP-compatible preview and protocol switching keep
   details.open = false;
   grid.listeners.toggle({ target: details });
   assert.equal(body.innerHTML, "");
+  element("resultImagesDialog").close();
+});
+
+
+test("metric categories separate common evidence and protocol-specific metrics", () => {
+  const charts = images.buildCharts(sample());
+  const groups = images.groupCharts(charts);
+  const ids = category => images.filterMetricGroups(groups, { category }).map(group => group.id);
+  assert.ok(ids("common").includes("graph-node_count"));
+  assert.ok(ids("common").includes("peer-lifecycle"));
+  assert.ok(ids("common").includes("bandwidth-cumulative"));
+  assert.ok(!ids("common").includes("latency-cdf"));
+  assert.ok(ids("gossipsub").includes("latency-cdf"));
+  assert.ok(ids("gossipsub").includes("control-raw"));
+  for (const category of ["kademlia", "transport"]) {
+    assert.equal(ids(category).length, 13);
+    assert.ok(ids(category).every(id => id.startsWith("graph-") && id !== "graph-node_count"));
+  }
+  assert.equal(charts.find(chart => chart.id === "graph-average_degree-kademlia").title, "Mean Degree · Kademlia");
+});
+
+test("metric search, type filters and natural name sorting preserve the chart inputs", () => {
+  const groups = images.groupCharts(images.buildCharts(sample()));
+  const original = JSON.stringify(groups);
+  const search = images.filterMetricGroups(groups, { category: "gossipsub", query: "  MEAN degree " });
+  assert.deepEqual(search.map(group => group.id), ["graph-average_degree"]);
+  assert.deepEqual(images.filterMetricGroups(groups, { query: "node_count" }).map(group => group.id), ["graph-node_count"]);
+  assert.equal(images.filterMetricGroups(groups, { query: "<not-found>" }).length, 0);
+  assert.equal(images.filterMetricGroups(groups, { category: "transport", type: "delivery" }).length, 0);
+  const topology = images.filterMetricGroups(groups, { category: "gossipsub", type: "topology", sort: "asc" });
+  assert.ok(topology.every(group => group.type === "topology"));
+  const descending = images.filterMetricGroups(groups, { category: "gossipsub", type: "topology", sort: "desc" });
+  assert.deepEqual(descending.map(group => group.id), topology.map(group => group.id).reverse());
+  assert.equal(JSON.stringify(groups), original);
+});
+
+test("filtering metrics keeps expanded charts and does not request or render images again", async () => {
+  let requests = 0, renders = 0;
+  const { ui, element } = fixture(async (...args) => { requests++; return completedAPI(...args); }, async () => { renders++; return png; });
+  await ui.open("run");
+  const before = { requests, renders };
+  const groups = images.groupCharts(images.buildCharts(sample()));
+  const index = groups.findIndex(group => group.id === "graph-node_count");
+  const details = { dataset: { imageIndex: String(index) }, open: true, matches: () => true, querySelector: () => ({ innerHTML: "", dataset: {} }) };
+  const grid = element("resultImagesGrid");
+  grid.listeners.toggle({ target: details });
+  element("resultMetricSearch").value = "NOT FOUND";
+  element("resultMetricSearch").listeners.input();
+  assert.match(grid.innerHTML, /No matching metrics/);
+  assert.equal(element("resultMetricCount").textContent, "0 of 8 metrics");
+  element("clearResultMetricFilters").listeners.click();
+  assert.match(grid.innerHTML, new RegExp(`data-image-index="${index}" open`));
+  assert.match(grid.innerHTML, /Nodes &amp; Peers/);
+  element("resultMetricSort").value = "desc";
+  element("resultMetricSort").listeners.change();
+  assert.match(grid.innerHTML, new RegExp(`data-image-index="${index}" open`));
+  assert.deepEqual({ requests, renders }, before);
   element("resultImagesDialog").close();
 });

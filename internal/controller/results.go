@@ -31,6 +31,7 @@ var (
 )
 
 type savedResult struct {
+	Note                   *resultNoteSummary   `json:"note,omitempty"`
 	PreviousRunIDs         []string             `json:"previousRunIds,omitempty"`
 	BatchAnalysis          *batchAnalysisStatus `json:"batchAnalysis,omitempty"`
 	Analysis               *analysisJobStatus   `json:"analysis,omitempty"`
@@ -301,6 +302,11 @@ func removeResultDirectory(parent *os.Root, id string) error {
 }
 
 func (s *Server) handleResultAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/results/")
+	if id, found := strings.CutSuffix(path, "/note"); found {
+		s.handleResultNote(w, r, id)
+		return
+	}
 	if r.Method != http.MethodDelete {
 		methodNotAllowed(w)
 		return
@@ -435,7 +441,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 			}
 			if err != nil {
 				s.logger.Warn("read saved result metadata", "run", id, "error", err)
-				result = savedResult{ID: id, Name: id, State: "unreadable", SourceBytes: result.SourceBytes}
+				result = savedResult{ID: id, Name: id, State: "unreadable", SourceBytes: result.SourceBytes, Note: result.Note}
 			} else if !result.Active && result.State != "queued" && s.hasPreparedResultArchive(id) {
 				snapshot, snapshotErr := s.captureResultFiles(id, false)
 				if snapshotErr == nil {
@@ -555,7 +561,7 @@ func (s *Server) extendPendingResultArchiveCache(results []savedResult, now time
 
 // Only persisted source inputs count here. Derived analysis caches, generated
 // ZIP entries and filesystem allocation overhead are not original result data.
-var resultSourceFiles = [...]string{"scenario.yaml", "experiment.json", "events.jsonl", "observations.jsonl"}
+var resultSourceFiles = [...]string{"scenario.yaml", "experiment.json", "events.jsonl", "observations.jsonl", resultNoteFile}
 
 func resultSourceBytes(root *os.Root) (*int64, error) {
 	var total int64
@@ -598,24 +604,35 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	root, err := openResultDirectory(runs, id)
 	var file resultFile
 	var sourceBytes *int64
+	var noteFile resultFile
+	var noteErr error
 	if err == nil {
 		var sizeErr error
 		sourceBytes, sizeErr = resultSourceBytes(root)
 		if sizeErr != nil {
 			s.logger.Warn("stat saved result sources", "run", id, "error", sizeErr)
 		}
+		noteFile, noteErr = openResultFile(root, resultNoteFile)
 		file, err = openResultFile(root, "experiment.json")
 		_ = root.Close()
 	}
 	active := s.resultActive(id)
 	s.state.persistMu.Unlock()
+	var note resultNote
+	if noteFile.file != nil {
+		note, noteErr = decodeResultNote(noteFile, id)
+	}
+	if noteErr != nil && !errors.Is(noteErr, os.ErrNotExist) {
+		s.logger.Warn("read saved result note", "run", id, "error", noteErr)
+	}
 	if err != nil {
-		return savedResult{SourceBytes: sourceBytes}, err
+		return savedResult{SourceBytes: sourceBytes, Note: note.summary()}, err
 	}
 	defer file.file.Close()
 	result, err := readResultMetadata(file, id, active)
 	// Never trust a size supplied by experiment.json; stat the current inputs.
 	result.SourceBytes = sourceBytes
+	result.Note = note.summary()
 	return result, err
 }
 
@@ -661,10 +678,10 @@ func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, 
 		defer root.Close()
 		for _, name := range resultSourceFiles {
 			file, err := openResultFile(root, name)
-			if err != nil && !((name == "events.jsonl" || name == "observations.jsonl") && errors.Is(err, os.ErrNotExist)) {
+			if err != nil && !((name == "events.jsonl" || name == "observations.jsonl" || name == resultNoteFile) && errors.Is(err, os.ErrNotExist)) {
 				return fmt.Errorf("open %s: %w", name, err)
 			}
-			if name == "observations.jsonl" && file.file == nil {
+			if (name == "observations.jsonl" || name == resultNoteFile) && file.file == nil {
 				continue
 			}
 			snapshot.files = append(snapshot.files, file)

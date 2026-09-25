@@ -490,12 +490,35 @@
     </form>
   </dialog>
 
+  <dialog id="resultNoteDialog" aria-labelledby="resultNoteHeading" aria-describedby="resultNoteName resultNoteID">
+    <form id="resultNoteForm" class="dialog-shell">
+      <header><h2 id="resultNoteHeading">Result note</h2></header>
+      <p class="delete-result-name" id="resultNoteName"></p>
+      <p class="result-id" id="resultNoteID"></p>
+      <label for="resultNoteText">Note</label>
+      <textarea id="resultNoteText" rows="8" placeholder="Record observations, configuration changes, or follow-up ideas…" aria-describedby="resultNoteHelp resultNoteCount"></textarea>
+      <p class="dialog-help" id="resultNoteHelp">Shared with everyone who can view this result. Leave empty and save to clear the note.</p>
+      <p class="dialog-help" id="resultNoteCount"></p>
+      <p class="dialog-help" id="resultNoteStatus" role="status" aria-live="polite"></p>
+      <p class="dialog-error" id="resultNoteError" role="alert"></p>
+      <section id="resultNoteConflict" hidden>
+        <label for="latestResultNote">Latest saved note</label>
+        <textarea id="latestResultNote" rows="4" readonly></textarea>
+      </section>
+      <footer>
+        <button class="secondary-button" id="reloadResultNote" type="button" hidden>Retry loading</button>
+        <button class="secondary-button" id="cancelResultNote" type="button">Cancel</button>
+        <button class="primary-button" id="saveResultNote" type="submit" disabled>Save note</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="deleteResultDialog" aria-labelledby="deleteResultHeading">
     <form method="dialog" class="dialog-shell">
       <header><h2 id="deleteResultHeading">Delete saved result?</h2></header>
       <p class="delete-result-name" id="deleteResultName"></p>
       <p class="result-id" id="deleteResultID"></p>
-      <p class="dialog-help" id="deleteResultHelp">Delete this run's saved scenario, metadata, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.</p>
+      <p class="dialog-help" id="deleteResultHelp">Delete this run's saved scenario, metadata, note, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.</p>
       <p class="dialog-error" id="deleteResultError" role="alert"></p>
       <footer>
         <button class="secondary-button" id="cancelDeleteResult" value="cancel" type="submit">Cancel</button>
@@ -514,6 +537,7 @@
   <script src="/research-ui.js" defer></script>
   <script src="/batch-analysis.js" defer></script>
   <script src="/result-images.js" defer></script>
+  <script src="/result-notes.js" defer></script>
   <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
   <script src="/app.js" defer></script>

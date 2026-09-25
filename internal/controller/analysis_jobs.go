@@ -46,7 +46,8 @@ type analysisJob struct {
 	cancel context.CancelFunc
 }
 
-// Callers acquire analysisJobMu before persistMu. Never recreate a deleted run.
+// Callers must hold persistMu. If analysisJobMu is needed, acquire it first.
+// Never recreate a deleted run.
 func (s *Server) analysisDirectory(id string) (*os.Root, error) {
 	if !validResultID(id) {
 		return nil, errResultNotFound

@@ -733,8 +733,8 @@ function resultDownloadLink(run) {
   const active = isPendingRun(run);
   const label = active ? "Download snapshot" : "Download results";
   const path = `/api/v1/experiments/${encodeURIComponent(run.id)}/download`;
-  const title = active ? "Download a ZIP snapshot of the scenario, metadata, and events recorded so far."
-    : "Download the saved scenario, metadata, and events as a ZIP file.";
+  const title = active ? "Download a ZIP snapshot of the scenario, metadata, notes, and events recorded so far."
+    : "Download the saved scenario, metadata, notes, and events as a ZIP file.";
   return `<a class="download-link" data-result-download="${escapeHTML(run.id)}" href="${escapeHTML(path)}" download="${escapeHTML(`${run.id}.zip`)}" target="_blank" rel="noopener" title="${title}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}">${label}</a>`;
 }
 
@@ -743,7 +743,7 @@ function resultSourceSize(run) {
   const size = Number.isSafeInteger(bytes) && bytes >= 0 ? (bytes === 0 ? "0 B" : formatBytes(bytes)) : "";
   if (!size) return '<span class="download-size" title="Source file sizes could not be read at the last refresh.">Source · —</span>';
   const live = isPendingRun(run);
-  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events and observations. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source " : "Source "}${escapeHTML(size)}</span>`;
+  return `<span class="download-size${live ? " live" : ""}" title="Uncompressed source files at the last refresh: scenario, experiment metadata, events, observations and notes. Excludes generated analysis files.${live ? " This run is still recording." : ""}">${live ? "Live source " : "Source "}${escapeHTML(size)}</span>`;
 }
 
 function runSourceSize(run) {
@@ -1292,7 +1292,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1386,13 +1386,17 @@ function renderSavedResults() {
   updateSavedResultsList(savedResultsMarkup(visible));
 }
 
+function resultNoteMarkup(run) {
+  return `<div class="result-note"><button class="result-note-button secondary-button" type="button" data-result-note="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${run.note ? "Edit" : "Add"} note: ${run.name || run.id}`)}">${run.note ? "Edit note" : "Add note"}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</div>`;
+}
+
 function savedResultRow(run) {
   const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
   const retry = singleBatch && !singleBatch.previousRuns.length ? retryBatchButton(singleBatch, resultLocked(run)) : "";
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span></td>
+    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span>${resultNoteMarkup(run)}</td>
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
@@ -2126,6 +2130,14 @@ document.addEventListener("click", async (event) => {
     if (!confirmScenarioDeleteButton.disabled) confirmScenarioDeletion(confirmScenarioDeleteButton.dataset.confirmScenarioDelete);
     return;
   }
+  const noteButton = event.target.closest("[data-result-note]");
+  if (noteButton) {
+    if (!noteButton.disabled) {
+      rememberResultDialogFocus("#resultNoteDialog", noteButton);
+      void globalThis.KPLResultNotes?.open((state.savedResults || []).find(run => run.id === noteButton.dataset.resultNote));
+    }
+    return;
+  }
   const imagesButton = event.target.closest("[data-result-images]");
   if (imagesButton) {
     if (!imagesButton.disabled) {
@@ -2160,6 +2172,10 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
+globalThis.KPLResultNotes?.init({ api, formatTime: formatResultTime, onSaved: () => {
+  showToast("Note saved.");
+  void refreshSavedResults();
+} });
 globalThis.KPLResultImages?.init({ api, onJob: job => {
   const run = (state.savedResults || []).find(run => run.id === job.runId);
   if (job.batchId) {

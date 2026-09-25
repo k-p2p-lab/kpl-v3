@@ -717,3 +717,16 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
   .dashboard-tab { padding-inline: .7rem; }
   .dashboard-tabs { margin-top: .65rem; }
 }
+
+/* Notes stay with the run name, leaving the compact result actions unchanged. */
+.result-note { display: flex; align-items: flex-start; gap: .55rem; margin-top: .5rem; min-width: 0; }
+.result-note-button { flex: 0 0 auto; padding: .2rem .5rem; font-size: .75rem; min-height: 1.75rem; }
+.result-note-preview { min-width: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#resultNoteDialog { width: min(42rem, calc(100% - 1rem)); }
+#resultNoteForm { min-width: 0; }
+#resultNoteForm p { margin: 0; overflow-wrap: anywhere; }
+#resultNoteForm textarea { width: 100%; min-width: 0; min-height: 6rem; max-height: 45dvh; resize: vertical; font: inherit; line-height: 1.5; }
+#resultNoteForm footer { flex-wrap: wrap; }
+#resultNoteConflict { min-width: 0; }
+#resultNoteConflict label { display: block; margin-bottom: .4rem; }
+#resultNoteText[aria-invalid="true"] { border-color: var(--red); }

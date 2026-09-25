@@ -594,10 +594,12 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; padding: .4rem 0 1.75rem; }
 .workspace-heading h2 { margin: .45rem 0; font-size: clamp(1.45rem, 2.4vw, 1.9rem); letter-spacing: -.04em; font-weight: 700; }
 .workspace-intro { color: var(--muted); font-size: .875rem; }
-.results-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: .85rem; padding: 1.2rem 1.2rem .6rem; }
+.results-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(10rem, 12rem) 7rem; align-items: end; gap: .85rem; padding: 1.2rem 1.2rem .6rem; }
 .results-toolbar label { display: grid; gap: .4rem; min-width: 0; color: var(--muted); font-size: .8125rem; }
-.results-toolbar .results-search { flex: 1 1 16rem; }
-.results-toolbar select { min-width: 11rem; }
+.results-toolbar .results-search { min-width: 0; }
+.results-toolbar select { min-width: 0; width: 100%; }
+.results-filter-reset { min-height: var(--control-height); min-width: 0; }
+.results-filter-reset button { width: 100%; white-space: nowrap; padding-inline: .5rem; font-size: .8125rem; }
 .results-toolbar input, .results-toolbar select { min-height: var(--control-height); font-size: .875rem; background: var(--bg-soft); }
 .results-toolbar input::placeholder { color: var(--muted); opacity: .8; }
 .results-toolbar button { min-height: var(--control-height); }
@@ -629,8 +631,8 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 }
 @media (max-width: 860px) {
   .table-scroll-hint { display: block; }
-  .results-toolbar .results-search { flex-basis: 100%; }
-  .results-toolbar > label:not(.results-search) { flex: 1; }
+  .results-toolbar { grid-template-columns: minmax(0, 1fr) 7rem; }
+  .results-toolbar .results-search { grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
   /* Result actions stay beside their run instead of outside the viewport. */

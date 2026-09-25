@@ -1168,6 +1168,7 @@ function savedResultBatches(results, includeSingles = false) {
       completed: runs.filter(run => run.state === "completed").length,
       active: batch.runs.some(isPendingRun),
       job: batch.runs.find(run => run.batchAnalysis)?.batchAnalysis,
+      note: batch.runs.find(run => run.groupNote)?.groupNote,
     };
   });
 }
@@ -1254,7 +1255,7 @@ function savedResultBatch(batch) {
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
-      <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span></span>
+      <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
         ${retryBatchButton(batch, locked)}
@@ -1292,7 +1293,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1396,8 +1397,10 @@ function resultStorageMarkup(run) {
   return `<span class="result-storage ${escapeHTML(status)}" title="${escapeHTML(help)}">${labels[status]}</span>`;
 }
 
-function resultNoteMarkup(run) {
-  return `<div class="result-note"><button class="result-note-button secondary-button" type="button" data-result-note="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${run.note ? "Edit" : "Add"} note: ${run.name || run.id}`)}">${run.note ? "Edit note" : "Add note"}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</div>`;
+function resultNoteMarkup(run, group = false) {
+  const label = `${run.note ? "Edit" : "Add"} ${group ? "group note" : "note"}`;
+  const tag = group ? "span" : "div";
+  return `<${tag} class="result-note"><button class="result-note-button secondary-button" type="button" ${group ? "data-group-note" : "data-result-note"}="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}">${label}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</${tag}>`;
 }
 
 function savedResultRow(run) {
@@ -2138,6 +2141,18 @@ document.addEventListener("click", async (event) => {
   const confirmScenarioDeleteButton = event.target.closest("[data-confirm-scenario-delete]");
   if (confirmScenarioDeleteButton) {
     if (!confirmScenarioDeleteButton.disabled) confirmScenarioDeletion(confirmScenarioDeleteButton.dataset.confirmScenarioDelete);
+    return;
+  }
+  const groupNoteButton = event.target.closest("[data-group-note]");
+  if (groupNoteButton) {
+    event.preventDefault();
+    if (!groupNoteButton.disabled) {
+      const group = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === groupNoteButton.dataset.groupNote);
+      if (group) {
+        rememberResultDialogFocus("#resultNoteDialog", groupNoteButton);
+        void globalThis.KPLResultNotes?.open({id: group.id, name: group.name, isBatch: true});
+      }
+    }
     return;
   }
   const noteButton = event.target.closest("[data-result-note]");

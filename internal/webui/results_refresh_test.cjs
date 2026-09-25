@@ -427,3 +427,22 @@ test('result filters survive refresh and can be cleared without changing saved m
   assert.equal(state.savedResults.length,2);
   assert.equal(focused,1);
 });
+
+test('group note preview is independent of run notes and survives filtering and previous attempts', () => {
+  const runs = [
+    {id:'old', batchId:'group', name:'Repeated', repetitions:2, iteration:1, state:'failed', groupNote:{preview:'<script>group</script>'}},
+    {id:'retry', batchId:'group', name:'Repeated', repetitions:2, iteration:1, state:'completed', previousRunIds:['old'], note:{preview:'Run observation'}},
+    {id:'second', batchId:'group', name:'Repeated', repetitions:2, iteration:2, state:'completed'},
+    {id:'unrelated', batchId:'other', name:'Other', repetitions:2, iteration:1, state:'completed'},
+  ];
+  const {api, state, element} = fixture(runs);
+  state.resultQuery = 'retry'; state.resultStatus = 'completed'; api.renderSavedResults();
+  const html = element('#savedResultsRows').innerHTML;
+  assert.equal(html.split('data-group-note="group"').length - 1, 1);
+  assert.match(html, /Edit group note/);
+  assert.match(html, /&lt;script&gt;group&lt;\/script&gt;/);
+  assert.ok(!html.includes('<script>'));
+  assert.match(html, /Run observation/);
+  assert.ok(!html.includes('data-group-note="other"'));
+  assert.equal(api.savedResultBatches(runs)[0].note.preview, '<script>group</script>');
+});

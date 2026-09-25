@@ -22,7 +22,8 @@ const resultNoteFileLimit = 6*resultNoteTextLimit + 4096
 var errResultNoteConflict = errors.New("this note changed in another window; load the latest note before saving")
 
 type resultNote struct {
-	RunID     string     `json:"runId"`
+	RunID     string     `json:"runId,omitempty"`
+	BatchID   string     `json:"batchId,omitempty"`
 	Text      string     `json:"text"`
 	Revision  string     `json:"revision"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
@@ -45,19 +46,37 @@ func (note resultNote) summary() *resultNoteSummary {
 }
 
 func readResultNote(root *os.Root, id string) (resultNote, error) {
+	return readScopedNote(root, id, false)
+}
+
+func emptyResultNote(id string, group bool) resultNote {
+	note := resultNote{Revision: "0"}
+	if group {
+		note.BatchID = id
+	} else {
+		note.RunID = id
+	}
+	return note
+}
+
+func readScopedNote(root *os.Root, id string, group bool) (resultNote, error) {
 	file, err := openResultFile(root, resultNoteFile)
 	if errors.Is(err, os.ErrNotExist) {
-		return resultNote{RunID: id, Revision: "0"}, nil
+		return emptyResultNote(id, group), nil
 	}
 	if err != nil {
 		return resultNote{}, err
 	}
-	return decodeResultNote(file, id)
+	return decodeScopedNote(file, id, group)
 }
 
 // The caller owns the captured descriptor; decode it after releasing persistMu
 // when listing results, so note previews do not delay experiment writes.
 func decodeResultNote(file resultFile, id string) (resultNote, error) {
+	return decodeScopedNote(file, id, false)
+}
+
+func decodeScopedNote(file resultFile, id string, group bool) (resultNote, error) {
 	defer file.file.Close()
 	if file.size > resultNoteFileLimit {
 		return resultNote{}, errors.New("saved note is too large")
@@ -70,7 +89,11 @@ func decodeResultNote(file resultFile, id string) (resultNote, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return resultNote{}, errors.New("invalid saved note JSON")
 	}
-	if note.RunID != id || note.Revision == "" || note.Revision == "0" || note.UpdatedAt == nil || note.UpdatedAt.IsZero() || len(note.Text) > resultNoteTextLimit {
+	validIdentity := note.RunID == id && note.BatchID == ""
+	if group {
+		validIdentity = note.BatchID == id && note.RunID == ""
+	}
+	if !validIdentity || note.Revision == "" || note.Revision == "0" || note.UpdatedAt == nil || note.UpdatedAt.IsZero() || len(note.Text) > resultNoteTextLimit {
 		return resultNote{}, errors.New("invalid saved note")
 	}
 	return note, nil
@@ -86,7 +109,15 @@ func (s *Server) resultNote(id string, text *string, revision string) (resultNot
 		return resultNote{}, err
 	}
 	defer root.Close()
-	note, err := readResultNote(root, id)
+	note, err := saveScopedNote(root, id, false, text, revision)
+	if err == nil && text != nil {
+		s.state.markRunArchiveDirty(id)
+	}
+	return note, err
+}
+
+func saveScopedNote(root *os.Root, id string, group bool, text *string, revision string) (resultNote, error) {
+	note, err := readScopedNote(root, id, group)
 	if err != nil || text == nil {
 		return note, err
 	}
@@ -97,17 +128,22 @@ func (s *Server) resultNote(id string, text *string, revision string) (resultNot
 		return note, nil
 	}
 	now := time.Now().UTC()
-	note = resultNote{RunID: id, Text: *text, Revision: rand.Text(), UpdatedAt: &now}
-	// Keep an empty note's revision as well: a stale editor must not resurrect
-	// text after somebody has cleared it. Publish atomically for ZIP snapshots.
+	note = emptyResultNote(id, group)
+	note.Text, note.Revision, note.UpdatedAt = *text, rand.Text(), &now
+	// Retain a revision after clearing so stale editors cannot restore old text.
 	if err := writeAnalysisJSON(root, resultNoteFile, note); err != nil {
 		return resultNote{}, err
 	}
-	s.state.markRunArchiveDirty(id)
 	return note, nil
 }
 
 func (s *Server) handleResultNote(w http.ResponseWriter, r *http.Request, id string) {
+	s.handleStoredNote(w, r, id, func(text *string, revision string) (resultNote, error) {
+		return s.resultNote(id, text, revision)
+	})
+}
+
+func (s *Server) handleStoredNote(w http.ResponseWriter, r *http.Request, id string, access func(*string, string) (resultNote, error)) {
 	if !validResultID(id) {
 		http.NotFound(w, r)
 		return
@@ -149,7 +185,7 @@ func (s *Server) handleResultNote(w http.ResponseWriter, r *http.Request, id str
 	if request.Revision != nil {
 		revision = *request.Revision
 	}
-	note, err := s.resultNote(id, request.Text, revision)
+	note, err := access(request.Text, revision)
 	if err != nil {
 		switch {
 		case errors.Is(err, errResultNotFound):
@@ -157,7 +193,7 @@ func (s *Server) handleResultNote(w http.ResponseWriter, r *http.Request, id str
 		case errors.Is(err, errResultNoteConflict):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			s.logger.Error("access result note", "run", id, "error", err)
+			s.logger.Error("access result note", "id", id, "error", err)
 			writeError(w, http.StatusInternalServerError, "cannot read or save the note; check result storage and retry")
 		}
 		return

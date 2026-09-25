@@ -183,3 +183,23 @@ test('result note previews and button attributes escape untrusted text', () => {
   assert.match(html, /Edit note/);
   assert.match(context.resultNoteMarkup({ id: 'run-b' }), /Add note/);
  });
+
+test('group editor uses the batch endpoint and restores run labels on the next open', async () => {
+  const calls = [];
+  const f = fixture(async (path, options) => {
+    calls.push({path, options});
+    if (options.method === 'GET') return {batchId: 'batch-a', text: '', revision: '0'};
+    return {batchId: 'batch-a', ...JSON.parse(options.body), revision: 'new'};
+  });
+  await f.editor.open({id: 'batch-a', name: 'Repeated experiment', isBatch: true});
+  assert.equal(f.el('#resultNoteHeading').textContent, 'Group note');
+  assert.match(f.el('#resultNoteHelp').textContent, /retries.*Individual run notes stay separate/);
+  f.type('Shared group observation');
+  await f.editor.save();
+  assert.deepEqual(calls.map(call => call.path), ['/api/v1/result-batches/batch-a/note', '/api/v1/result-batches/batch-a/note']);
+  assert.equal(f.saved[0].batchId, 'batch-a');
+  await f.editor.open(run);
+  assert.equal(calls.at(-1).path, '/api/v1/results/run-a/note');
+  assert.equal(f.el('#resultNoteHeading').textContent, 'Result note');
+  assert.match(f.el('#resultNoteHelp').textContent, /view this result/);
+});

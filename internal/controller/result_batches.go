@@ -9,6 +9,13 @@ import (
 )
 
 func (s *Server) handleResultBatchAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/result-batches/")
+	if id, found := strings.CutSuffix(path, "/note"); found {
+		s.handleStoredNote(w, r, id, func(text *string, revision string) (resultNote, error) {
+			return s.resultGroupNote(r.Context(), id, text, revision)
+		})
+		return
+	}
 	if r.Method != http.MethodDelete {
 		methodNotAllowed(w)
 		return
@@ -76,7 +83,15 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if len(members) == 0 && !hasAnalysis {
+	groupRoot, err := s.resultGroupDirectory(id, false)
+	hasGroup := err == nil
+	if groupRoot != nil {
+		_ = groupRoot.Close()
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if len(members) == 0 && !hasAnalysis && !hasGroup {
 		return nil, errResultNotFound
 	}
 	if job := s.batchAnalysisJobs[id]; job != nil && job.cancel != nil {
@@ -106,6 +121,22 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 			return deleted, err
 		}
 		deleted = append(deleted, member.ID)
+	}
+	// Keep the group note if any member deletion fails, allowing a safe retry.
+	if hasGroup {
+		data, err := os.OpenRoot(s.config.DataDir)
+		if err != nil {
+			return deleted, err
+		}
+		defer data.Close()
+		parent, err := openResultDirectory(data, resultGroupsDirectory)
+		if err != nil {
+			return deleted, err
+		}
+		defer parent.Close()
+		if err := removeResultDirectory(parent, id); err != nil {
+			return deleted, err
+		}
 	}
 	return deleted, nil
 }

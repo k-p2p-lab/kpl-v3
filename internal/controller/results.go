@@ -31,6 +31,7 @@ var (
 )
 
 type savedResult struct {
+	GroupNote              *resultNoteSummary   `json:"groupNote,omitempty"`
 	Storage                *runArchiveStatus    `json:"storage,omitempty"`
 	Note                   *resultNoteSummary   `json:"note,omitempty"`
 	PreviousRunIDs         []string             `json:"previousRunIds,omitempty"`
@@ -502,6 +503,22 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		if result.BatchID != "" {
 			batchMembers[result.BatchID] = append(batchMembers[result.BatchID], result)
 		}
+	}
+	// Attach one small preview per group, rather than repeating it for every run.
+	notedGroups := map[string]bool{}
+	for i := range results {
+		id := results[i].BatchID
+		results[i].GroupNote = nil
+		if id == "" || notedGroups[id] {
+			continue
+		}
+		notedGroups[id] = true
+		note, err := s.resultGroupNoteSummary(id)
+		if err != nil {
+			s.logger.Warn("read group note preview", "batch", id, "error", err)
+			continue
+		}
+		results[i].GroupNote = note
 	}
 	batchStatuses := map[string]*batchAnalysisStatus{}
 	for i := range results {

@@ -13,8 +13,31 @@ test('low storage reports a pause before the next run and supports a disabled gu
   assert.equal(low.warning,true);assert.match(low.text,/512 MiB free/);assert.match(low.text,/before starting the next run/);
   assert.equal(describe({...ready,availableBytes:0,minFreeBytes:0}).warning,false);
 });
-test('stalled archive worker is visible without claiming local recording stopped', () => {
-  const status=describe({...ready,checking:true,checkStartedAt:'2026-09-25T10:00:00Z'},Date.parse('2026-09-25T10:00:20Z'));
-  assert.equal(status.warning,true);assert.match(status.text,/local recording remains available/);
-  assert.doesNotMatch(status.text,/Archive connected/);
+test('only server-reported lack of progress warns, independently of client clock', () => {
+  const transferring = {...ready, checking: true, phase: 'copying', checkStartedAt: '2020-01-01T00:00:00Z', lastProgressAt: '2020-01-01T00:01:00Z', stalled: false};
+  const healthy = describe(transferring);
+  assert.equal(healthy.warning, false);
+  assert.match(healthy.text, /Copying results to archive/);
+  const stalled = describe({...transferring, stalled: true});
+  assert.equal(stalled.warning, true);
+  assert.match(stalled.text, /Archive progress is delayed/);
+  assert.match(stalled.text, /local recording remains available/);
+  assert.doesNotMatch(stalled.text, /Archive connected/);
+});
+
+test('copying, verification, discovery, deletion and deliberate pauses stay neutral', () => {
+  const labels = {copying: /Copying/, verifying: /Verifying/, discovering: /Discovering/, deleting: /Removing/, publishing: /Finalizing/, preparing: /Preparing/, paused: /paused while experiments/};
+  for (const [phase, label] of Object.entries(labels)) {
+    const status = describe({...ready, checking: true, phase, checkStartedAt: '2020-01-01T00:00:00Z', stalled: false});
+    assert.equal(status.warning, false, phase);
+    assert.match(status.text, label);
+  }
+  assert.match(describe({...ready, phase: 'paused', checking: false}).text, /paused while experiments/);
+  assert.equal(describe({...ready, checking: true, phase: 'paused', stalled: true}).warning, false);
+});
+
+test('old Controller status does not interpret total cycle time as a NAS timeout', () => {
+  const status = describe({...ready, checking: true, checkStartedAt: '2020-01-01T00:00:00Z'});
+  assert.equal(status.warning, false);
+  assert.match(status.text, /Archive work in progress/);
 });

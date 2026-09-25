@@ -25,10 +25,15 @@ func (s *Server) runArchiveLoop(ctx context.Context) {
 		s.archiveStatusMu.Lock()
 		s.archiveChecking = true
 		s.archiveCheckStartedAt = time.Now().UTC()
+		s.archivePhase = "preparing"
+		s.archiveLastProgressAt = time.Now()
 		s.archiveStatusMu.Unlock()
 		err := s.archiveMaintenance(ctx)
 		s.archiveStatusMu.Lock()
 		s.archiveChecking = false
+		if s.archivePhase != "paused" {
+			s.archivePhase = "idle"
+		}
 		s.archiveCheckedAt = time.Now().UTC()
 		s.archiveError = ""
 		if err != nil {
@@ -56,7 +61,23 @@ func (s *Server) archiveIdle() bool {
 	return true
 }
 func (s *Server) waitArchiveIdle(ctx context.Context) error {
+	previous := ""
+	defer func() {
+		if previous != "" {
+			// Starting an I/O operation after a long pause gets a fresh timeout.
+			s.setArchivePhase(previous)
+		}
+	}()
 	for !s.archiveIdle() {
+		if previous == "" {
+			s.archiveStatusMu.RLock()
+			previous = s.archivePhase
+			s.archiveStatusMu.RUnlock()
+			if previous == "" {
+				previous = "preparing"
+			}
+			s.setArchivePhase("paused")
+		}
 		if err := sleepContext(ctx, 200*time.Millisecond); err != nil {
 			return err
 		}
@@ -95,6 +116,7 @@ func (s *Server) archiveMaintenance(ctx context.Context) error {
 		return err
 	}
 	if !s.archiveIdle() {
+		s.setArchivePhase("paused")
 		return nil
 	}
 	s.state.archiveQueueMu.Lock()
@@ -148,6 +170,7 @@ func hashRunFile(file resultFile) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string, source resultFile) (storedRunFile, error) {
+	s.setArchivePhase("copying")
 	stored := storedRunFile{Object: name, Size: source.size, ModifiedAt: source.info.ModTime().UnixNano()}
 	temp := ".incoming-" + rand.Text()
 	output, err := root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -155,6 +178,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 		return stored, err
 	}
 	defer root.Remove(temp)
+	s.archiveProgress()
 	hash := sha256.New()
 	reader := source.reader()
 	buffer := make([]byte, 64<<10)
@@ -171,6 +195,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 				break
 			}
 			_, _ = hash.Write(buffer[:n])
+			s.archiveProgress()
 		}
 		if err == io.EOF {
 			err = nil
@@ -194,6 +219,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 	}
 	stored.SHA256 = hex.EncodeToString(hash.Sum(nil))
 	// Verify the destination before publishing and before freeing local bytes.
+	s.setArchivePhase("verifying")
 	verify, err := openResultFile(root, temp)
 	if err != nil {
 		return stored, err
@@ -209,13 +235,16 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 	if err := ctx.Err(); err != nil {
 		return stored, err
 	}
+	s.setArchivePhase("publishing")
 	if err = root.Rename(temp, name); err != nil {
 		return stored, err
 	}
+	s.archiveProgress()
 	return stored, nil
 }
 
 func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration) (resultErr error) {
+	s.setArchivePhase("preparing")
 	var files []resultFile
 	var manifest runArchiveManifestData
 	defer func() {
@@ -374,17 +403,20 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	if err := s.waitArchiveIdle(ctx); err != nil {
 		return err
 	}
+	s.setArchivePhase("copying")
 	parent, err := s.openArchiveStore()
 	if err != nil {
 		return err
 	}
 	defer parent.Close()
+	s.archiveProgress()
 	destination := id
 	_, err = parent.Lstat(id)
 	fresh := errors.Is(err, os.ErrNotExist)
 	if err != nil && !fresh {
 		return err
 	}
+	s.archiveProgress()
 	if fresh {
 		destination = ".incoming-" + id
 		if err := parent.Mkdir(destination, 0755); err != nil && !errors.Is(err, os.ErrExist) {
@@ -396,6 +428,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		return err
 	}
 	defer remote.Close()
+	s.archiveProgress()
 	published, err := readRunArchive(remote, id)
 	if err != nil {
 		return err
@@ -417,7 +450,11 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		}
 	}
 
+	s.archiveProgress()
 	for _, upload := range uploads {
+		// Rechecking a previously published local segment can take time too;
+		// local hashing is not a stalled archive request.
+		s.setArchivePhase("preparing")
 		if upload.segment {
 			already := false
 			for _, stored := range manifest.Logs[upload.logical] {
@@ -459,20 +496,25 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			}
 		}
 	}
+	s.setArchivePhase("publishing")
 	if err := writeRunArchive(remote, manifest); err != nil {
 		return err
 	}
+	s.archiveProgress()
 	if err := syncRunDirectory(remote); err != nil {
 		return err
 	}
+	s.archiveProgress()
 	if fresh {
 		if err := parent.Rename(destination, id); err != nil {
 			return err
 		}
+		s.archiveProgress()
 		if err := syncRunDirectory(parent); err != nil {
 			return err
 		}
 	}
+	s.setArchivePhase("preparing")
 	// Persist the authoritative object map locally BEFORE unlinking any copied
 	// bytes. If interrupted, local segments named by that map are deduplicated.
 	s.state.persistMu.Lock()
@@ -513,6 +555,7 @@ func syncRunDirectory(root *os.Root) error {
 }
 
 func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, error) {
+	s.setArchivePhase("verifying")
 	digest := sha256.New()
 	reader := file.reader()
 	buffer := make([]byte, 64<<10)
@@ -524,6 +567,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 		n, err := reader.Read(buffer)
 		if n > 0 {
 			_, _ = digest.Write(buffer[:n])
+			s.archiveProgress()
 		}
 		if err == io.EOF {
 			break

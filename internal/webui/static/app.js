@@ -1440,12 +1440,21 @@ function resultNoteMarkup(run, group = false) {
 }
 
 function resultIntegrityMarkup(run) {
- const parts=[];
- if(run.cleanupState && run.cleanupState!=="complete")parts.push(`Peer cleanup: ${run.cleanupState}`);
- if(run.dataState && run.dataState!=="complete")parts.push(`Data: ${run.dataState}`);
- if(run.cleanupError)parts.push(run.cleanupError);
- if(run.integrityError)parts.push(run.integrityError);
- return parts.length?`<span class="result-integrity">${parts.map(escapeHTML).join(" · ")}</span>`:"";
+  const active = run.active || run.state === "running" || run.state === "queued";
+  const warnings = [];
+  if (run.cleanupState === "failed") warnings.push("Peer cleanup failed.");
+  else if (!active && ["pending", "running"].includes(run.cleanupState)) warnings.push("Peer cleanup has not been confirmed.");
+  if (run.dataState === "incomplete") warnings.push("Experiment data may be incomplete.");
+  else if (run.dataState === "unverified" || (!active && run.dataState === "collecting" && run.cleanupState !== "retained")) warnings.push("Data completeness has not been verified.");
+  if (run.cleanupError) warnings.push(run.cleanupError);
+  if (run.integrityError) warnings.push(run.integrityError);
+  if (warnings.length) return `<span class="result-integrity">${warnings.map(escapeHTML).join(" ")}</span>`;
+
+  let activity = "";
+  if (run.cleanupState === "running") activity = "Cleaning up Peers and collecting final logs…";
+  else if (run.cleanupState === "retained") activity = run.dataState === "collecting" ? "Peers retained · Recording experiment data…" : "Peers retained.";
+  else if (run.state === "running" && run.dataState === "collecting") activity = "Recording experiment data…";
+  return activity ? `<span class="result-activity">${escapeHTML(activity)}</span>` : "";
 }
 
 function savedResultRow(run) {

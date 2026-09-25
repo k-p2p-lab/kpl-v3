@@ -756,5 +756,7 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 #appendBatchCount { width: 100%; min-width: 0; }
 #appendBatchForm footer { flex-wrap: wrap; }
 
-.result-integrity { display: block; color: var(--amber); font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; margin-top: .3rem; }
+.result-integrity, .result-activity { display: block; font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; margin-top: .3rem; }
+.result-integrity { color: var(--amber); }
+.result-activity { color: var(--muted); }
 .result-environments { font-size: .78rem; line-height: 1.6; overflow-wrap: anywhere; padding-left: 1.3rem; }

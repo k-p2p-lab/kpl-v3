@@ -67,16 +67,19 @@ func (s *Server) openArchiveStore() (*os.Root, error) {
 func bytesEqual(a, b []byte) bool { return string(a) == string(b) }
 
 func (s *Server) importArchivedRuns(ctx context.Context) error {
+	s.setArchivePhase("discovering")
 	archive, err := s.openArchiveStore()
 	if err != nil {
 		return err
 	}
 	defer archive.Close()
+	s.archiveProgress()
 	entries, err := localRunEntries(archive)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
+		s.archiveProgress()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -106,12 +109,14 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		s.archiveProgress()
 		manifest, err := readRunArchive(remote, id)
 		if err != nil {
 			remote.Close()
 			s.logger.Warn("read archive index", "run", id, "error", err)
 			continue
 		}
+		s.archiveProgress()
 		_, manifestErr := remote.Lstat(runArchiveManifest)
 		legacy := errors.Is(manifestErr, os.ErrNotExist)
 		small := map[string][]byte{}
@@ -129,12 +134,14 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 				err = fmt.Errorf("archive %s metadata is too large", name)
 				break
 			}
+			s.archiveProgress()
 			small[name], readErr = io.ReadAll(file.reader())
 			file.close()
 			if readErr != nil {
 				err = readErr
 				break
 			}
+			s.archiveProgress()
 		}
 		if err == nil && legacy {
 			for _, name := range append(append([]string{}, resultSourceFiles[:]...), analysisJobFile, analysisResultFile, analysisSummaryFile) {
@@ -148,6 +155,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 				}
 				stored := storedRunFile{Object: name, Size: file.size}
 				file.close()
+				s.archiveProgress()
 				if isRunLog(name) {
 					manifest.Logs[name] = []storedRunFile{stored}
 				} else {
@@ -256,6 +264,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 }
 
 func (s *Server) cleanDeletedArchives(ctx context.Context) error {
+	s.setArchivePhase("preparing")
 	data, err := os.OpenRoot(s.config.DataDir)
 	if err != nil {
 		return err
@@ -297,15 +306,18 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		s.setArchivePhase("deleting")
 		archive, err := s.openArchiveStore()
 		if err != nil {
 			return err
 		}
+		s.archiveProgress()
 		err = removeResultDirectory(archive, id)
 		if errors.Is(err, os.ErrNotExist) {
 			err = nil
 		}
 		if err == nil {
+			s.archiveProgress()
 			stageErr := removeResultDirectory(archive, ".incoming-"+id)
 			if stageErr != nil && !errors.Is(stageErr, os.ErrNotExist) {
 				err = stageErr
@@ -315,6 +327,8 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		s.archiveProgress()
+		s.setArchivePhase("preparing")
 		if err := done.WriteFile(id, []byte("removed\n"), 0600); err != nil {
 			return err
 		}

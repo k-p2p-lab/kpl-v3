@@ -6,11 +6,24 @@
     const unit = Math.min(4, Math.floor(Math.log(value) / Math.log(1024)));
     return `${(value / 1024 ** unit).toLocaleString("en-US", {maximumFractionDigits: 1})} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
   }
-  function describe(status, now = Date.now()) {
+  function describe(status) {
     const low = status.minFreeBytes > 0 && status.availableBytes < status.minFreeBytes;
-    const stalled = !!status.checking && Number.isFinite(Date.parse(status.checkStartedAt)) && now - Date.parse(status.checkStartedAt) > 15000;
+    // The server measures time since worker progress. A long transfer, a pause,
+    // or a different clock on a mobile device must not imply a stalled NAS.
+    const stalled = status.stalled === true && status.phase !== "paused";
+    const phases = {
+      preparing: "Preparing results for archiving…",
+      discovering: "Discovering saved archives…",
+      copying: "Copying results to archive…",
+      verifying: "Verifying archived results…",
+      publishing: "Finalizing archived results…",
+      deleting: "Removing deleted archives…",
+      paused: "Archiving paused while experiments are running.",
+    };
     const archive = status.error ? "Archive unavailable; results remain local."
-      : stalled ? "Archive is taking longer to respond; local recording remains available."
+      : stalled ? "Archive progress is delayed; local recording remains available."
+      : status.phase === "paused" ? phases.paused
+      : status.checking ? phases[status.phase] || "Archive work in progress…"
       : !status.lastCheckedAt || status.lastCheckedAt.startsWith("0001-") ? "Discovering saved archives…" : "Archive connected.";
     return {text: `Local result space: ${bytes(status.availableBytes)} free. ${low ? "Waiting for space before starting the next run. " : ""}${archive}`, warning: low || !!status.error || stalled};
   }

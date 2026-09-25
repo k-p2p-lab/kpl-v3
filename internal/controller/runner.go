@@ -43,6 +43,8 @@ type Server struct {
 	archiveLastScan        time.Time
 	archiveChecking        bool
 	archiveCheckStartedAt  time.Time
+	archivePhase           string
+	archiveLastProgressAt  time.Time
 	webLogs                *webLogs
 	auth                   *browserAuth
 	config                 ServerConfig

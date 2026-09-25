@@ -59,6 +59,9 @@ func (s *Server) waitRunStorage(ctx context.Context, id string) error {
 }
 
 type resultStorageOverview struct {
+	Phase            string    `json:"phase"`
+	LastProgressAt   time.Time `json:"lastProgressAt"`
+	Stalled          bool      `json:"stalled"`
 	Checking         bool      `json:"checking"`
 	CheckStartedAt   time.Time `json:"checkStartedAt"`
 	LocalDirectory   string    `json:"localDirectory"`
@@ -77,6 +80,9 @@ func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
 	free, err := s.runStorageFree()
 	s.archiveStatusMu.RLock()
 	result := resultStorageOverview{Checking: s.archiveChecking, CheckStartedAt: s.archiveCheckStartedAt, LocalDirectory: currentRunsDirectory, ArchiveDirectory: archivedRunsDirectory, AvailableBytes: free, MinFreeBytes: s.config.RunMinFreeBytes, LastCheckedAt: s.archiveCheckedAt, Error: s.archiveError}
+	result.Phase = s.archivePhase
+	result.LastProgressAt = s.archiveLastProgressAt
+	result.Stalled = result.Checking && archivePhaseCanStall(result.Phase) && !result.LastProgressAt.IsZero() && time.Since(result.LastProgressAt) > archiveStallAfter
 	s.archiveStatusMu.RUnlock()
 	if err != nil {
 		result.Error = "Cannot inspect local result storage: " + err.Error()

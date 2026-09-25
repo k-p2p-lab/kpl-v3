@@ -477,5 +477,45 @@ test('retired attempts stay excluded after their replacement is deleted and stal
  const f=fixture([old,current]),groups=f.api.savedResultBatches([old,current]);
  assert.equal(groups[0].runs.length,1);assert.equal(groups[0].previousRuns.length,1);
  const markup=f.element('#savedResultsRows').innerHTML;
- assert.match(markup,/Batch mean · Update/);assert.match(markup,/Peer cleanup: failed/);assert.match(markup,/Data: incomplete/);assert.match(markup,/Agent &lt;offline&gt;/);
+ assert.match(markup,/Batch mean · Update/);assert.match(markup,/Peer cleanup failed/);assert.match(markup,/Experiment data may be incomplete/);assert.match(markup,/Agent &lt;offline&gt;/);
+});
+
+
+test('normal recording and cleanup use neutral activity, with no pending warning', () => {
+  const cases = [
+    { state: 'running', cleanupState: 'pending', dataState: 'collecting', label: 'Recording experiment data' },
+    { state: 'running', cleanupState: 'running', dataState: 'collecting', label: 'Cleaning up Peers and collecting final logs' },
+    { state: 'completed', cleanupState: 'retained', dataState: 'collecting', label: 'Peers retained · Recording experiment data' },
+  ];
+  for (const [i, run] of cases.entries()) {
+    const f = fixture([{ id: `run-${i}`, name: 'Normal experiment', ...run }]);
+    const markup = f.element('#savedResultsRows').innerHTML;
+    assert.match(markup, /class="result-activity"/);
+    assert.ok(markup.includes(run.label));
+    assert.doesNotMatch(markup, /class="result-integrity"|Peer cleanup: pending|Data: collecting/);
+  }
+});
+
+test('queued and fully collected runs omit extra status while interrupted collection remains unverified', () => {
+  for (const run of [
+    { state: 'queued', cleanupState: 'pending', dataState: 'pending' },
+    { state: 'completed', cleanupState: 'complete', dataState: 'complete' },
+  ]) {
+    const f = fixture([{ id: 'quiet', name: 'Quiet experiment', ...run }]);
+    assert.doesNotMatch(f.element('#savedResultsRows').innerHTML, /class="result-(?:integrity|activity)"/);
+  }
+  const f = fixture([{ id: 'interrupted', state: 'interrupted', cleanupState: 'pending', dataState: 'collecting' }]);
+  const markup = f.element('#savedResultsRows').innerHTML;
+  assert.match(markup, /class="result-integrity"/);
+  assert.match(markup, /Peer cleanup has not been confirmed/);
+  assert.match(markup, /Data completeness has not been verified/);
+  assert.doesNotMatch(markup, /Recording experiment data/);
+});
+
+test('recording errors still warn during an active run and escape error text', () => {
+  const f = fixture([{ id: 'broken', state: 'running', cleanupState: 'pending', dataState: 'collecting', integrityError: 'Write failed <disk>' }]);
+  const markup = f.element('#savedResultsRows').innerHTML;
+  assert.match(markup, /class="result-integrity"/);
+  assert.match(markup, /Write failed &lt;disk&gt;/);
+  assert.doesNotMatch(markup, /class="result-activity"|<disk>/);
 });

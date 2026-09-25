@@ -197,7 +197,7 @@ test("PNG source SVG uses a white background and embeds escaped source and defin
 
 const job = (id = "run", state = "completed", extra = {}) => ({
   version: 1,
-  analysisVersion: 4,
+  analysisVersion: 5,
   id: id + "-job",
   runId: id,
   state,
@@ -374,7 +374,7 @@ test('batch and individual analyses use separate jobs even when batch ID equals 
   const first = sample('run'), second = sample('other');
   for (const data of [first, second]) data.result.batchId = 'run';
   const calls = [];
-  const job = { batchId: 'run', id: 'batch-job', analysisVersion: 4, state: 'completed' };
+  const job = { batchId: 'run', id: 'batch-job', analysisVersion: 5, state: 'completed' };
   const batchData = { version: 1, aggregation: 'equal-run-mean-v1', analysisId: job.id, batchId: 'run', expectedRuns: 2, missingRuns: 0, excluded: [], summary: { 'metrics.averageLatencyMs': { average: 15, deviation: 0, count: 2 } }, runs: [first, second] };
   const { ui, element } = fixture(async (path, options) => {
     calls.push({ path, method: options.method || 'GET' });
@@ -385,7 +385,7 @@ test('batch and individual analyses use separate jobs even when batch ID equals 
   });
   const individual = ui.open('run');
   await ui.openBatch('run');
-  releaseIndividual({ runId: 'run', id: 'individual-job', state: 'completed', analysisVersion: 4 });
+  releaseIndividual({ runId: 'run', id: 'individual-job', state: 'completed', analysisVersion: 5 });
   await individual;
   assert.match(element('resultImagesName').textContent, /Batch mean/);
   assert.equal(element('batchAnalysisSummary').hidden, false);

@@ -13,6 +13,13 @@ const dashboardEventLimit = 40
 // Dashboard frames never carry raw trace metadata (message-ID lists, cohorts,
 // bandwidth samples, etc.). Full records remain in REST snapshots and exports.
 func dashboardSnapshot(snapshot model.Snapshot) model.Snapshot {
+	experiments := make([]model.Experiment, len(snapshot.Experiments))
+	copy(experiments, snapshot.Experiments)
+	for i := range experiments {
+		experiments[i].Agents = nil
+		experiments[i].ControllerVersion = ""
+	}
+	snapshot.Experiments = experiments
 	nodes := make([]model.Node, 0, len(snapshot.Nodes))
 	for _, node := range snapshot.Nodes {
 		if node.State != model.NodeStopping && node.State != model.NodeStopped && node.State != model.NodeFailed {

@@ -63,24 +63,28 @@ type process struct {
 }
 
 type Server struct {
-	config           Config
-	logger           *slog.Logger
-	client           *http.Client
-	docker           *dockerRuntime
-	startedAt        time.Time
-	mu               sync.RWMutex
-	heartbeatMu      sync.Mutex
-	capacityLimit    int // protected by mu; zero uses the CLI default
-	capacityRevision string
-	processes        map[string]*process
-	runFences        map[string]uint64
-	shuttingDown     bool
-	eventsMu         sync.Mutex
-	events           []model.TraceEvent
-	eventsInFlight   int
-	terminations     map[string]model.TraceEvent
-	telemetryClosed  bool
-	flushNow         chan struct{}
+	startupReconciled bool
+	spool             *telemetrySpool
+	spoolError        error
+	config            Config
+	logger            *slog.Logger
+	client            *http.Client
+	docker            *dockerRuntime
+	startedAt         time.Time
+	mu                sync.RWMutex
+	heartbeatMu       sync.Mutex
+	capacityLimit     int // protected by mu; zero uses the CLI default
+	capacityRevision  string
+	processes         map[string]*process
+	runFences         map[string]uint64
+	shuttingDown      bool
+	eventsMu          sync.Mutex
+	events            []model.TraceEvent
+	eventsInFlight    int
+	inFlightRuns      map[string]int
+	terminations      map[string]model.TraceEvent
+	telemetryClosed   bool
+	flushNow          chan struct{}
 }
 
 func New(config Config, logger *slog.Logger) (*Server, error) {
@@ -140,6 +144,11 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 		runFences: make(map[string]uint64),
 		flushNow:  make(chan struct{}, 1),
 	}
+	var spoolErr error
+	s.spool, s.events, spoolErr = openTelemetrySpool(config.DataDir)
+	if spoolErr != nil {
+		return nil, spoolErr
+	}
 	return s, nil
 }
 
@@ -170,12 +179,22 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	if err != nil {
 		return fmt.Errorf("Docker runtime: %w", err)
 	}
+	imageCtx, imageCancel := context.WithTimeout(ctx, 30*time.Second)
+	imageID, imageErr := s.docker.run(imageCtx, nil, "image", "inspect", "--format", "{{.Id}}", s.config.DockerImage)
+	imageCancel()
+	if imageErr != nil {
+		return fmt.Errorf("resolve immutable Peer image: %w", imageErr)
+	}
+	if value := strings.TrimSpace(string(imageID)); strings.HasPrefix(value, "sha256:") {
+		s.docker.image = value
+	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, containerStopTimeout)
 	err = s.docker.removeAgentContainers(cleanupCtx, s.config.ID)
 	cleanupCancel()
 	if err != nil {
 		return fmt.Errorf("clean up previous peer containers: %w", err)
 	}
+	s.startupReconciled = true
 	server := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -331,13 +350,18 @@ func (s *Server) snapshotAgent() model.Agent {
 // Caller holds mu. Registration needs only the lease/capacity, not copies of
 // every departed peer's status. Inventory acknowledgments remain independent.
 func (s *Server) agentStatusLocked(hostname string) model.Agent {
+	image := s.config.DockerImage
+	if s.docker != nil {
+		image = s.docker.image
+	}
 	return model.Agent{
-		ID:               s.config.ID,
-		Name:             s.config.Name,
-		URL:              strings.TrimRight(s.config.AdvertiseURL, "/"),
-		MetricsURL:       s.config.MetricsURL,
-		Hostname:         hostname,
-		Version:          "v3-dev",
+		ID:         s.config.ID,
+		Name:       s.config.Name,
+		URL:        strings.TrimRight(s.config.AdvertiseURL, "/"),
+		MetricsURL: s.config.MetricsURL,
+		Hostname:   hostname,
+		Version:    model.BuildVersion(),
+		PeerImage:  image, RunDrain: true, StartupReconciled: s.startupReconciled,
 		Capacity:         s.capacityLocked(),
 		DefaultCapacity:  s.config.Capacity,
 		CapacityRevision: s.capacityRevision,
@@ -803,6 +827,12 @@ func (s *Server) enqueueEvents(batch model.EventBatch) bool {
 	for i := range batch.Events {
 		batch.Events[i].AgentID = s.config.ID
 	}
+	if err := s.spool.append(batch.Events); err != nil {
+		s.spoolError = err
+		s.eventsMu.Unlock()
+		s.logger.Error("persist telemetry spool", "error", err)
+		return false
+	}
 	s.events = append(s.events, batch.Events...)
 	length := len(s.events)
 	s.eventsMu.Unlock()
@@ -842,6 +872,10 @@ func (s *Server) flushEvents(ctx context.Context) {
 	}
 	batchEvents := append([]model.TraceEvent(nil), s.events[:count]...)
 	s.eventsInFlight += count
+	s.inFlightRuns = map[string]int{}
+	for _, event := range batchEvents {
+		s.inFlightRuns[event.RunID]++
+	}
 	s.events = append([]model.TraceEvent(nil), s.events[count:]...)
 	s.eventsMu.Unlock()
 	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -849,6 +883,13 @@ func (s *Server) flushEvents(ctx context.Context) {
 	err = s.postData(flushCtx, "/api/v1/events/batch", data, nil)
 	s.eventsMu.Lock()
 	s.eventsInFlight -= count
+	s.inFlightRuns = nil
+	if err == nil {
+		err = s.spool.acknowledge(batchEvents)
+	}
+	if err == nil && len(s.events) == 0 && len(s.terminations) == 0 {
+		s.spoolError = nil
+	}
 	if err != nil {
 		s.events = append(batchEvents, s.events...)
 		s.logger.Warn("telemetry flush failed", "events", len(batchEvents), "error", err)
@@ -889,6 +930,10 @@ func (s *Server) queueTermination(event model.TraceEvent) {
 		s.terminations = make(map[string]model.TraceEvent)
 	}
 	if existing, ok := s.terminations[event.NodeID]; !ok || event.Timestamp.Before(existing.Timestamp) {
+		if err := s.spool.append([]model.TraceEvent{event}); err != nil {
+			s.spoolError = err
+			s.logger.Error("persist termination evidence", "error", err)
+		}
 		s.terminations[event.NodeID] = event
 	}
 }

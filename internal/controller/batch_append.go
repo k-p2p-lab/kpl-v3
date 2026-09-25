@@ -26,10 +26,15 @@ var errBatchNotAppendable = errors.New("only a complete, idle group can accept a
 // original metadata; readers project the current total from this record. Pending
 // IDs remain invisible until every new result is reserved and the record commits.
 type batchExtension struct {
-	Version     int      `json:"version"`
-	BatchID     string   `json:"batchId"`
-	Repetitions int      `json:"repetitions"`
-	Pending     []string `json:"pending,omitempty"`
+	Deleted      map[string]attemptRecord `json:"deleted,omitempty"`
+	Version      int                      `json:"version"`
+	BatchID      string                   `json:"batchId"`
+	Repetitions  int                      `json:"repetitions"`
+	Pending      []string                 `json:"pending,omitempty"`
+	PendingTotal int                      `json:"pendingTotal,omitempty"`
+	Before       []model.Experiment       `json:"before,omitempty"`
+	Retired      map[string]bool          `json:"retired,omitempty"`
+	Current      map[int]string           `json:"current,omitempty"`
 }
 
 func (s *Server) readBatchExtension(id string) (*batchExtension, error) {
@@ -63,7 +68,7 @@ func (s *Server) readBatchExtension(id string) (*batchExtension, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("invalid batch extension record")
 	}
-	if record.Version != 1 || record.BatchID != id || record.Repetitions < 1 || record.Repetitions > maxScenarioRepetitions || record.Repetitions+len(record.Pending) > maxScenarioRepetitions {
+	if record.Version != 1 || record.BatchID != id || record.Repetitions < 1 || record.Repetitions > maxScenarioRepetitions || len(record.Pending) > maxScenarioRepetitions || record.PendingTotal < 0 || record.PendingTotal > maxScenarioRepetitions {
 		return nil, errors.New("invalid batch extension identity or count")
 	}
 	seen := map[string]bool{}
@@ -72,6 +77,21 @@ func (s *Server) readBatchExtension(id string) (*batchExtension, error) {
 			return nil, errors.New("invalid pending extension run")
 		}
 		seen[runID] = true
+	}
+	currentIDs := map[string]bool{}
+	for iteration, runID := range record.Current {
+		if iteration < 1 || iteration > record.Repetitions || !validResultID(runID) || currentIDs[runID] {
+			return nil, errors.New("invalid current batch member")
+		}
+		currentIDs[runID] = true
+	}
+	if len(record.Before) > 0 && len(record.Before) != len(record.Pending) {
+		return nil, errors.New("invalid admission rollback")
+	}
+	for i, run := range record.Before {
+		if run.ID != record.Pending[i] || run.BatchID != id || !run.StartedAt.IsZero() {
+			return nil, errors.New("invalid original admission member")
+		}
 	}
 	return &record, nil
 }
@@ -88,6 +108,9 @@ func (s *Server) applyBatchExtension(result *savedResult) error {
 		return errors.New("run count exceeds committed batch extension")
 	}
 	result.Repetitions = record.Repetitions
+	if record.Retired[result.ID] {
+		result.Superseded = true
+	}
 	return nil
 }
 
@@ -104,7 +127,7 @@ func (s *Server) rollbackBatchExtensionLocked(id string) error {
 	}
 	if runs != nil {
 		defer runs.Close()
-		for _, runID := range record.Pending {
+		for i, runID := range record.Pending {
 			root, err := openResultDirectory(runs, runID)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -112,11 +135,26 @@ func (s *Server) rollbackBatchExtensionLocked(id string) error {
 			if err != nil {
 				return err
 			}
+			if len(record.Before) > 0 {
+				err = writeAnalysisJSON(root, "experiment.json", record.Before[i])
+				if err == nil {
+					err = syncRunDirectory(root)
+				}
+				root.Close()
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			total := record.PendingTotal
+			if total == 0 {
+				total = record.Repetitions + len(record.Pending)
+			}
 			file, openErr := openResultFile(root, "experiment.json")
 			if openErr == nil {
 				result, readErr := readResultMetadata(file, runID, false)
 				file.close()
-				if readErr != nil || result.BatchID != id || result.Repetitions != record.Repetitions+len(record.Pending) || result.storedState != "queued" || !result.StartedAt.IsZero() {
+				if readErr != nil || result.BatchID != id || result.Repetitions != total || result.storedState != "queued" || !result.StartedAt.IsZero() {
 					root.Close()
 					return fmt.Errorf("refuse to remove unexpected pending run %s", runID)
 				}
@@ -138,8 +176,8 @@ func (s *Server) rollbackBatchExtensionLocked(id string) error {
 		return err
 	}
 	defer root.Close()
-	record.Pending = nil
-	if err := writeAnalysisJSON(root, batchExtensionFile, record); err != nil {
+	record.Pending, record.Before, record.PendingTotal = nil, nil, 0
+	if err := writeBatchRecord(root, record); err != nil {
 		return err
 	}
 	return syncRunDirectory(root)
@@ -178,7 +216,7 @@ func (s *Server) recoverBatchExtensions(ctx context.Context) error {
 			continue
 		}
 		if err := s.rollbackBatchExtensionLocked(entry.Name()); err != nil {
-			return err
+			s.logger.Error("batch recovery blocked; group quarantined", "batch", entry.Name(), "error", err)
 		}
 	}
 	return nil
@@ -297,97 +335,23 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 		return model.Experiment{}, fmt.Errorf("%w: saved scenario: %v", errBatchNotAppendable, err)
 	}
 	pending := make([]model.Experiment, additional)
-	record := batchExtension{Version: 1, BatchID: id, Repetitions: expected}
+	executionID := rand.Text()
 	for i := range pending {
 		now := time.Now().UTC()
 		pending[i] = model.Experiment{ID: fmt.Sprintf("run-%s-%s", now.Format("20060102T150405Z"), rand.Text()), BatchID: id, Iteration: expected + i + 1, Repetitions: expected + additional, Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases), ScenarioYAML: string(raw)}
 		if spec.Seed == 0 {
 			pending[i].Seed = now.UnixNano() + int64(i)
 		}
-		record.Pending = append(record.Pending, pending[i].ID)
+		pending[i].ExecutionID = executionID
 	}
-	root, err := s.resultGroupDirectory(id, true)
-	if err != nil {
-		return model.Experiment{}, err
-	}
-	defer root.Close()
-	if err := writeAnalysisJSON(root, batchExtensionFile, record); err != nil {
-		return model.Experiment{}, err
-	}
-	if err := syncRunDirectory(root); err != nil {
-		return model.Experiment{}, err
-	}
-	// Make the journal's parent directories durable before creating any runs.
-	data, err := os.OpenRoot(s.config.DataDir)
-	if err != nil {
-		return model.Experiment{}, err
-	}
-	groups, err := openResultDirectory(data, resultGroupsDirectory)
-	if err == nil {
-		err = syncRunDirectory(groups)
-		groups.Close()
-	}
-	if err == nil {
-		err = syncRunDirectory(data)
-	}
-	data.Close()
-	if err != nil {
-		return model.Experiment{}, err
-	}
-	if err := s.reserveRepeatedFilesLocked(pending, raw); err != nil {
-		return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-	}
-	if err := parent.Err(); err != nil {
-		return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-	}
-	// File contents and directory entries must reach local storage before commit.
-	for _, run := range pending {
-		dir, err := s.analysisDirectory(run.ID)
-		if err == nil {
-			for _, name := range []string{"experiment.json", "scenario.yaml"} {
-				f, openErr := dir.Open(name)
-				if openErr != nil {
-					err = openErr
-					break
-				}
-				err = errors.Join(f.Sync(), f.Close())
-				if err != nil {
-					break
-				}
-			}
-			if err == nil {
-				err = syncRunDirectory(dir)
-			}
-			dir.Close()
-		}
-		if err != nil {
-			return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-		}
-	}
-	runs, err := s.openResultRuns()
-	if err != nil {
-		return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-	}
-	err = syncRunDirectory(runs)
-	runs.Close()
-	if err != nil {
-		return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-	}
-	record.Repetitions += additional
-	record.Pending = nil
-	if err := writeAnalysisJSON(root, batchExtensionFile, record); err != nil {
-		return model.Experiment{}, errors.Join(err, s.rollbackBatchExtensionLocked(id))
-	}
-	// From this point the admission is committed; preserve runs even if a final
-	// directory sync fails. A refresh/restart exposes them for the retry workflow.
-	if err := syncRunDirectory(root); err != nil {
+	if err := s.commitBatchAdmissionLocked(parent, id, pending, raw, expected+additional, members, nil); err != nil {
 		return model.Experiment{}, err
 	}
 	plan := newTimingPlan(spec)
 	s.state.mu.Lock()
 	for runID, run := range s.state.experiments {
 		if run.BatchID == id {
-			run.Repetitions = record.Repetitions
+			run.Repetitions = expected + additional
 			s.state.experiments[runID] = run
 		}
 	}
@@ -399,7 +363,7 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 	s.state.estimateRunFinishesLocked(pending, time.Now().UTC())
 	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
-	batch.cancel = cancel
+	batch.cancel, batch.executionID = cancel, executionID
 	if s.repeatBatches == nil {
 		s.repeatBatches = make(map[string]*repeatBatch)
 	}

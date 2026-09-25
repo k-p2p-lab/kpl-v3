@@ -620,6 +620,8 @@ function runTimingMarkup(run, stopping) {
   </div>`;
 }
 
+function runStopKey(run) { const id=run.batchId || run.id; return run.executionId ? `${id}:${run.executionId}` : id; }
+
 function renderBatchEstimates(runs) {
   const groups = new Map();
   for (const run of runs) {
@@ -633,7 +635,7 @@ function renderBatchEstimates(runs) {
     if (!pending.length) continue;
     const run = pending.find(member => member.state === "running") || pending[0];
     const timing = pending.find(member => member.timing?.batchEstimatedFinishAt)?.timing;
-    const stopping = state.pendingStops.has(id);
+    const stopping = Boolean(run.stopRequested || state.pendingStops.has(runStopKey(run)));
     // After a Controller restart, completed iterations exist only in Saved
     // results. Merge by ID so live updates win without double-counting them.
     const known = new Map((state.savedResults || []).filter(member => member.batchId === id && !state.deletedResultIDs?.has(member.id)).map(member => [member.id, member]));
@@ -655,7 +657,7 @@ function renderRuns(runs) {
   const priority = run => run.state === "running" ? 0 : run.state === "queued" ? 1 : 2;
   // Preserve the server's order within each status group, including queued iterations.
   runs.sort((a, b) => priority(a) - priority(b));
-  const activeGroups = new Set(runs.filter(isPendingRun).map(run => run.batchId || run.id));
+  const activeGroups = new Set(runs.filter(isPendingRun).map(runStopKey));
   for (const key of state.pendingStops) {
     if (!activeGroups.has(key)) state.pendingStops.delete(key);
   }
@@ -673,7 +675,7 @@ function renderRuns(runs) {
   }
   setHTML($("#runList"), runs.map((run) => {
     const progress = run.totalPhases ? Math.round((run.phase / run.totalPhases) * 100) : 0;
-    const stopping = state.pendingStops.has(run.batchId || run.id);
+    const stopping = Boolean(run.stopRequested || state.pendingStops.has(runStopKey(run)));
     const stop = isPendingRun(run) ? `<button class="stop-button" data-stop-run="${escapeHTML(run.id)}" type="button" title="Stop this run and cancel the remaining queued runs in its batch." ${stopping ? "disabled" : ""}>${stopping ? "Stopping…" : run.repetitions > 1 ? "Stop batch" : "Stop"}</button>` : "";
     const sourceSize = runSourceSize(run);
     return `<article class="run-item">
@@ -683,6 +685,7 @@ function renderRuns(runs) {
       <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
       ${runTimingMarkup(run, stopping)}
       <div class="progress-track" aria-label="${progress}% complete"><i style="width:${Math.min(100, progress)}%"></i></div>
+      ${resultIntegrityMarkup(run)}
       ${run.error ? `<div class="run-meta"><span>${escapeHTML(run.error)}</span></div>` : ""}
       <div class="run-actions">${resultDownloadLink(run)}${sourceSize}</div>
     </article>`;
@@ -697,12 +700,12 @@ async function requestRunStop(id) {
   const runs = state.snapshot?.experiments || [];
   const run = runs.find(item => item.id === id);
   if (!run) return;
-  const key = run.batchId || run.id;
-  if (state.pendingStops.has(key) || !runs.some(item => (item.batchId || item.id) === key && isPendingRun(item))) return;
+  const key = runStopKey(run);
+  if (state.pendingStops.has(key) || !runs.some(item => runStopKey(item) === key && isPendingRun(item))) return;
   state.pendingStops.add(key);
   renderRuns(runs);
   try {
-    await api(`/api/v1/experiments/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    await api(`/api/v1/experiments/${encodeURIComponent(id)}/stop`, { method: "POST", headers: {"X-KPL-Execution": run.executionId || ""} });
     // Acceptance precedes job/container cleanup. Keep all batch controls
     // disabled until an authoritative snapshot has no active members left.
     showToast(run.repetitions > 1 ? "Batch stop requested. Remaining queued runs will be canceled." : "Stop requested. Cleaning up Peers…");
@@ -722,7 +725,7 @@ function resultLocked(run) {
 
 function resultImagesButton(run) {
   const job = run.analysis;
-  const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
+  const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.stale ? "Images · Update" : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
   return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" aria-label="${escapeHTML(`View graph images: ${run.name || run.id}`)}" ${run.state === "unreadable" || run.state === "queued" ? "disabled" : ""}>${label}</button>`;
 }
 
@@ -1144,7 +1147,7 @@ async function refreshSavedResults() {
 
 function currentBatchRuns(runs) {
   const previous = new Set(runs.flatMap(run => run.previousRunIds || []));
-  return runs.filter(run => !previous.has(run.id));
+  return runs.filter(run => !run.superseded && !previous.has(run.id));
 }
 
 function batchIterationOrder(a, b) {
@@ -1234,7 +1237,17 @@ async function resumeSavedBatch(id, retry = false) {
     } else {
       const ids = new Set(remaining.map(run => run.id));
       for (const run of [...(state.savedResults || []), ...(state.snapshot?.experiments || [])]) {
-        if (ids.has(run.id)) { run.state = "queued"; run.error = ""; run.finishedAt = ""; }
+        if (ids.has(run.id)) {
+          run.state = "queued";
+          run.error = "";
+          run.finishedAt = "";
+          run.executionId = first.executionId;
+          run.stopRequested = false;
+          run.cleanupState = first.cleanupState;
+          run.dataState = first.dataState;
+          run.integrityError = "";
+          run.cleanupError = "";
+        }
       }
     }
     renderResultViews();
@@ -1259,7 +1272,7 @@ function savedResultTable(runs, key, label = "Saved experiment results") {
 function savedResultBatch(batch) {
   const job = batch.job;
   const label = ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : `${Math.floor(job.progress || 0)}%`}`
-    : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
+    : job?.stale ? "Batch mean · Update" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
   const excluded = batch.runs.length - batch.completed;
   const missing = Math.max(0, batch.expected - batch.runs.length);
   const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
@@ -1426,6 +1439,15 @@ function resultNoteMarkup(run, group = false) {
   return `<${tag} class="result-note"><button class="result-note-button secondary-button" type="button" ${group ? "data-group-note" : "data-result-note"}="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}">${label}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</${tag}>`;
 }
 
+function resultIntegrityMarkup(run) {
+ const parts=[];
+ if(run.cleanupState && run.cleanupState!=="complete")parts.push(`Peer cleanup: ${run.cleanupState}`);
+ if(run.dataState && run.dataState!=="complete")parts.push(`Data: ${run.dataState}`);
+ if(run.cleanupError)parts.push(run.cleanupError);
+ if(run.integrityError)parts.push(run.integrityError);
+ return parts.length?`<span class="result-integrity">${parts.map(escapeHTML).join(" · ")}</span>`:"";
+}
+
 function savedResultRow(run) {
   const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
   const retry = singleBatch && !singleBatch.previousRuns.length ? appendBatchButton(singleBatch, resultLocked(run)) + retryBatchButton(singleBatch, resultLocked(run)) : "";
@@ -1433,7 +1455,7 @@ function savedResultRow(run) {
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
     <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
-    <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
+    <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
     <td data-label="Actions"><div class="result-actions">${retry}${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
@@ -2011,6 +2033,14 @@ function setupTopologyControls() {
   }, { passive: false });
 }
 
+function scenarioSubmissionKey(payload) {
+ let previous; try {previous=JSON.parse(sessionStorage.getItem("kpl.pending-submission"))} catch {}
+ if(previous?.payload===payload&&previous.key)return previous.key;
+ const key=globalThis.crypto?.randomUUID?.() || `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+ try {sessionStorage.setItem("kpl.pending-submission",JSON.stringify({payload,key}))} catch {}
+ return key;
+}
+
 async function submitScenarioRun() {
   if (scenarioOperationBusy()) return;
   const error = $("#scenarioError");
@@ -2027,11 +2057,14 @@ async function submitScenarioRun() {
   error.textContent = "";
   renderSavedScenarios();
   try {
+    const payload=JSON.stringify({scenario: $("#scenarioText").value,repetitions});
+    const submissionKey=scenarioSubmissionKey(payload);
     const run = await scenarioRequest("/api/v1/experiments", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenario: $("#scenarioText").value, repetitions }),
+      headers: { "Content-Type": "application/json", "Idempotency-Key": submissionKey },
+      body: payload,
     }, "run");
+    try {sessionStorage.removeItem("kpl.pending-submission")} catch {}
     if (state.scenarioEditorVersion === editorVersion && $("#scenarioDialog").open) {
       $("#scenarioDialog").close();
       globalThis.KPLDashboardTabs?.show("experiments");

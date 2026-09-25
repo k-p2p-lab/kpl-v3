@@ -63,6 +63,12 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 	}
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
+	s.state.persistMu.Lock()
+	recoveryErr := s.rollbackBatchExtensionLocked(id)
+	s.state.persistMu.Unlock()
+	if recoveryErr != nil {
+		return model.Experiment{}, recoveryErr
+	}
 	allMembers, err := s.allBatchMembers(parent, id)
 	if err != nil {
 		return model.Experiment{}, err
@@ -118,6 +124,7 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 		return model.Experiment{}, err
 	}
 	defer runs.Close()
+	executionID := cryptorand.Text()
 	var originals, pending []model.Experiment
 	var roots []*os.Root
 	defer func() {
@@ -187,6 +194,11 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 			return model.Experiment{}, fmt.Errorf("%w: remaining scenarios differ", errBatchNotResumable)
 		}
 		next := original
+		next.ExecutionID = executionID
+		next.StopRequested = false
+		next.ControllerVersion = ""
+		next.CleanupState, next.DataState, next.IntegrityError, next.CleanupError = "pending", "pending", "", ""
+		next.Agents = nil
 		next.State, next.Error, next.PhaseName = "queued", "", ""
 		next.Phase, next.ActiveJobs, next.CompletedJobs, next.FailedJobs, next.CanceledJobs = 0, 0, 0, 0, 0
 		next.StartedAt, next.FinishedAt, next.Timing = time.Time{}, time.Time{}, nil
@@ -211,24 +223,16 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 	if err := parent.Err(); err != nil {
 		return model.Experiment{}, err
 	}
+	before := originals
 	if retry {
-		if err := s.reserveRepeatedResultsLocked(pending, raw); err != nil {
-			return model.Experiment{}, err
-		}
-		for _, experiment := range pending {
-			batch.members = append(batch.members, experiment.ID)
-		}
-	} else {
-		// Publish every queued manifest before admitting work. Roll back a partial
-		// write failure; no worker or in-memory state is exposed before this succeeds.
-		for i, experiment := range pending {
-			s.state.markRunArchiveDirty(experiment.ID)
-			if err := writeAnalysisJSON(roots[i], "experiment.json", experiment); err != nil {
-				for j := 0; j < i; j++ {
-					err = errors.Join(err, writeAnalysisJSON(roots[j], "experiment.json", originals[j]))
-				}
-				return model.Experiment{}, err
-			}
+		before = nil
+	}
+	if err := s.commitBatchAdmissionLocked(parent, id, pending, raw, expected, members, before); err != nil {
+		return model.Experiment{}, err
+	}
+	if retry {
+		for _, run := range pending {
+			batch.members = append(batch.members, run.ID)
 		}
 	}
 	plan := newTimingPlan(spec)
@@ -239,7 +243,7 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 	}
 	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
-	batch.cancel, batch.repetitions = cancel, expected
+	batch.cancel, batch.repetitions, batch.executionID = cancel, expected, executionID
 	if s.repeatBatches == nil {
 		s.repeatBatches = make(map[string]*repeatBatch)
 	}
@@ -286,6 +290,9 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		// Attempted run IDs will never run again. Fence every possible generation,
 		// including generations whose state was lost in a Controller restart.
 		err := s.stopRunGeneration(cleanupCtx, runID, ^uint64(0))
+		if err == nil {
+			err = s.drainRunTelemetry(cleanupCtx, runID)
+		}
 		cancel()
 		if err != nil {
 			return fmt.Errorf("cleanup previous run %s: %w", runID, err)

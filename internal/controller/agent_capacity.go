@@ -168,6 +168,10 @@ var errAgentCapacityReached = errors.New("Agent capacity reached")
 
 func (s *Server) createReservedNode(ctx context.Context, request model.CreateNodeRequest, agent model.Agent, targetAgentID string, rng *mathrand.Rand) error {
 	for {
+		if err := s.rememberRunAgent(request.RunID, agent); err != nil {
+			s.releaseReservation(request.ID)
+			return err
+		}
 		var node model.Node
 		err := s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node)
 		if errors.Is(err, errAgentCapacityReached) {

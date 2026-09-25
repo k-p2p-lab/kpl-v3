@@ -21,6 +21,7 @@ const (
 )
 
 type state struct {
+	failedRunWrites         map[string]bool
 	archiveQueueMu          sync.Mutex
 	archiveVersions         map[string]uint64
 	archivePending          map[string]bool
@@ -224,6 +225,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	h.Agent.Name = firstNonEmpty(h.Agent.Name, previous.Name)
 	h.Agent.Hostname = firstNonEmpty(h.Agent.Hostname, previous.Hostname)
 	h.Agent.Version = firstNonEmpty(h.Agent.Version, previous.Version)
+	h.Agent.PeerImage = firstNonEmpty(h.Agent.PeerImage, previous.PeerImage)
+	h.Agent.RunDrain = h.Agent.RunDrain || previous.RunDrain
+	h.Agent.StartupReconciled = h.Agent.StartupReconciled || previous.StartupReconciled
 	if h.Agent.Capacity == 0 {
 		h.Agent.Capacity = s.agentReportedCapacities[h.Agent.ID]
 	}
@@ -371,7 +375,12 @@ func (s *state) appendEvents(batch model.EventBatch) error {
 	return nil
 }
 
-func (s *state) appendRunEvents(runID string, events []model.TraceEvent) error {
+func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			s.recordRunWriteError(runID, resultErr)
+		}
+	}()
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	if runID != "" {
@@ -464,8 +473,25 @@ func (s *state) persistEventsLocked(runID string, events []model.TraceEvent) err
 		}
 		return fmt.Errorf("write event: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
+	}
+	// A new log (also after archive rotation) needs its directory entry durable
+	// before the Agent may retire the acknowledged telemetry from its spool.
+	if info.Size() == 0 {
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return err
+		}
+		err = syncRunDirectory(root)
+		root.Close()
+		if err != nil {
+			return err
+		}
 	}
 	s.markRunArchiveDirty(runID)
 	return nil

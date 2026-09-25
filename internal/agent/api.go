@@ -37,6 +37,20 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "drain" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := s.drainRunEvents(ctx, parts[0]); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if len(parts) != 2 || parts[0] == "" || parts[1] != "nodes" {
 		http.NotFound(w, r)
 		return

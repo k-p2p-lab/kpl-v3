@@ -85,6 +85,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 				return
 			case <-ticker.C:
 				s.state.markStaleAgents(agentStaleAfter)
+				s.retryFailedRunWrites()
 			}
 		}
 	}()
@@ -589,9 +590,15 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 				}
 				raw = []byte(submission.Scenario)
 			}
-			experiment, err := s.StartScenarioRepeated(ctx, raw, repetitions)
+			experiment, err := s.submitScenario(ctx, raw, repetitions, r.Header.Get("Idempotency-Key"))
 			if err != nil {
 				status := http.StatusBadRequest
+				if errors.Is(err, errSubmissionConflict) {
+					status = http.StatusConflict
+				}
+				if errors.Is(err, errSubmissionDeleted) {
+					status = http.StatusGone
+				}
 				if errors.Is(err, errRunStorageFull) {
 					status = http.StatusInsufficientStorage
 				}
@@ -628,8 +635,12 @@ func (s *Server) handleExperimentAction(w http.ResponseWriter, r *http.Request) 
 		methodNotAllowed(w)
 		return
 	}
-	if err := s.StopScenario(parts[0]); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if err := s.stopScenarioRequest(parts[0], r.Header.Get("X-KPL-Execution")); err != nil {
+		status := http.StatusNotFound
+		if errors.Is(err, errExecutionChanged) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"runId": parts[0], "status": "stopping"})

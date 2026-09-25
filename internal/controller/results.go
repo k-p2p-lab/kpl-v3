@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"io"
 	"math"
 	"net/http"
@@ -31,6 +32,17 @@ var (
 )
 
 type savedResult struct {
+	StopRequested     bool          `json:"stopRequested,omitempty"`
+	ControllerVersion string        `json:"controllerVersion,omitempty"`
+	CleanupState      string        `json:"cleanupState,omitempty"`
+	DataState         string        `json:"dataState,omitempty"`
+	IntegrityError    string        `json:"integrityError,omitempty"`
+	CleanupError      string        `json:"cleanupError,omitempty"`
+	Agents            []model.Agent `json:"agents,omitempty"`
+
+	SourceRevision         string               `json:"sourceRevision,omitempty"`
+	ExecutionID            string               `json:"executionId,omitempty"`
+	Superseded             bool                 `json:"superseded,omitempty"`
 	GroupNote              *resultNoteSummary   `json:"groupNote,omitempty"`
 	Storage                *runArchiveStatus    `json:"storage,omitempty"`
 	Note                   *resultNoteSummary   `json:"note,omitempty"`
@@ -375,6 +387,9 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 		return err
 	}
 	_ = directory.Close()
+	if err := s.retainBatchCurrentLocked(runs, id); err != nil {
+		return err
+	}
 	if err := s.markResultDeletedLocked(id); err != nil {
 		return fmt.Errorf("persist deletion marker: %w", err)
 	}
@@ -531,7 +546,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 			job, err := s.batchAnalysisStatus(id)
 			if err == nil && job.State != "idle" {
 				if job.State == "completed" && job.Membership != batchMembership(batchMembers[id]) {
-					job.State = "idle"
+					job.State, job.Stale = "idle", true
 				}
 				status = &job
 			}
@@ -625,12 +640,14 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	root, err := openResultDirectory(runs, id)
 	var file resultFile
 	var sourceBytes *int64
+	var sourceRevision string
 	var noteFile resultFile
 	var noteErr error
 	var storage runArchiveStatus
 	if err == nil {
 		var sizeErr error
 		sourceBytes, sizeErr = resultSourceBytes(root)
+		sourceRevision, _ = sourceRevisionAt(root, id)
 		storage = resultStorageStatus(root, id)
 		if sizeErr != nil {
 			s.logger.Warn("stat saved result sources", "run", id, "error", sizeErr)
@@ -658,6 +675,7 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	}
 	// Never trust a size supplied by experiment.json; stat the current inputs.
 	result.SourceBytes = sourceBytes
+	result.SourceRevision = sourceRevision
 	result.Note = note.summary()
 	result.Storage = &storage
 	return result, err
@@ -742,6 +760,7 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		snapshot.close()
 		return nil, err
 	}
+	revision := sourceRevisionOf(snapshot.files)
 	releaseRemote, err := s.resolveArchivedFiles(ctx, id, snapshot.files)
 	if err != nil {
 		snapshot.close()
@@ -780,6 +799,7 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		snapshot.close()
 		return nil, err
 	}
+	result.SourceRevision = revision
 	snapshot.result = result
 	snapshot.storedState = result.storedState
 	return snapshot, nil

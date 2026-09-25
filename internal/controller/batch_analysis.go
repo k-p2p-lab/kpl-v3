@@ -34,6 +34,7 @@ type batchAnalysisJob struct {
 	cancel context.CancelFunc
 }
 type batchAnalysisResult struct {
+	Reliability     batchReliability             `json:"reliability"`
 	Version         int                          `json:"version"`
 	AnalysisVersion int                          `json:"analysisVersion"`
 	AnalysisID      string                       `json:"analysisId"`
@@ -140,7 +141,7 @@ func currentBatchMembers(members []savedResult) []savedResult {
 	}
 	current := make([]savedResult, 0, len(members))
 	for _, member := range members {
-		if !previous[member.ID] {
+		if !member.Superseded && !previous[member.ID] {
 			current = append(current, member)
 		}
 	}
@@ -202,7 +203,7 @@ func batchMembership(members []savedResult) string {
 	// Ignore display-only download sizes and job statuses, and normalize order.
 	canonical := make([]savedResult, 0, len(members))
 	for _, m := range members {
-		canonical = append(canonical, savedResult{ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
+		canonical = append(canonical, savedResult{SourceRevision: m.SourceRevision, ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
 	}
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].ID < canonical[j].ID })
 	data, _ := json.Marshal(canonical)
@@ -373,6 +374,10 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 		if err := validateBatchDefinitions(result.Runs); err != nil {
 			return err
 		}
+		result.Reliability, err = s.batchReliability(ctx, result.BatchID, result.Runs)
+		if err != nil {
+			return err
+		}
 		result.Summary = batchSummary(result.Runs)
 		result.AsOf = time.Now().UTC()
 		s.analysisJobMu.Lock()
@@ -477,7 +482,7 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 			if err == nil {
 				status, err = s.batchAnalysisStatus(id)
 				if err == nil && status.State == "completed" && status.Membership != batchMembership(members) {
-					status.State = "idle"
+					status.State, status.Stale = "idle", true
 				}
 			}
 		case http.MethodPost:

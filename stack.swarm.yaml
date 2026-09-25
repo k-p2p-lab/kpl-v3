@@ -48,6 +48,7 @@ services:
       KPL_CONTROLLER_URL: http://${KPL_STACK_NAME:-kpl}_controller:8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - agent-data:/var/lib/kpl/agent
     networks: [peers, monitoring]
     ports:
       - target: 9091
@@ -140,6 +141,7 @@ networks:
     driver: overlay
 
 volumes:
+  agent-data:
   controller-data:
   prometheus-data:
   grafana-data:

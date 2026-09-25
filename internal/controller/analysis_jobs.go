@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const currentAnalysisVersion = 4
+const currentAnalysisVersion = 5
 const analysisJobLimit = 32
 const analysisJobFile = "analysis-job.json"
 const analysisResultFile = "analysis-result.json"
@@ -23,6 +23,8 @@ const analysisSummaryFile = "analysis-summary.json"
 var errAnalysisQueueFull = errors.New("analysis queue is full; try again after a job finishes")
 
 type analysisJobStatus struct {
+	SourceRevision  string    `json:"sourceRevision,omitempty"`
+	Stale           bool      `json:"stale,omitempty"`
 	Version         int       `json:"version"`
 	AnalysisVersion int       `json:"analysisVersion"`
 	ID              string    `json:"id,omitempty"`
@@ -188,7 +190,17 @@ func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	return job.status, nil
+	status := job.status
+	if status.State == "completed" {
+		current, e := s.runSourceRevision(id)
+		if e != nil {
+			return analysisJobStatus{}, e
+		}
+		if current != status.SourceRevision {
+			status.Stale = true
+		}
+	}
+	return status, nil
 }
 
 func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) (analysisJobStatus, error) {
@@ -204,7 +216,11 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion {
+	revision, err := s.runSourceRevision(id)
+	if err != nil {
+		return analysisJobStatus{}, err
+	}
+	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceRevision == revision {
 		return existing.status, nil
 	}
 	count := 0
@@ -276,6 +292,7 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 		job.status.State, job.status.Phase = "running", "starting"
 		job.status.StartedAt, job.status.UpdatedAt = time.Now().UTC(), time.Now().UTC()
 		job.status.SnapshotAt, job.status.TotalBytes = snapshot.exportedAt, total
+		job.status.SourceRevision = snapshot.result.SourceRevision
 		err = s.persistAnalysisJob(job.status)
 		s.analysisJobMu.Unlock()
 		if err != nil {

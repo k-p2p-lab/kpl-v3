@@ -45,6 +45,9 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 	defer s.cancelMu.Unlock()
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
+	if _, err := s.readBatchExtension(id); err != nil {
+		return nil, err
+	}
 	// Membership cannot change through admission or another deletion while
 	// these locks are held. Read members before persistMu: batchMembers takes it.
 	members, err := s.allBatchMembers(ctx, id)
@@ -123,7 +126,7 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 		deleted = append(deleted, member.ID)
 	}
 	// Keep the group note if any member deletion fails, allowing a safe retry.
-	if hasGroup {
+	if hasGroup || len(members) > 0 {
 		data, err := os.OpenRoot(s.config.DataDir)
 		if err != nil {
 			return deleted, err

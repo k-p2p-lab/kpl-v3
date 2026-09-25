@@ -38,6 +38,7 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	submissionMu           sync.Mutex
 	archiveQueueLoaded     bool
 	archiveLastScan        time.Time
 	archiveChecking        bool
@@ -82,6 +83,8 @@ type Server struct {
 }
 
 func New(config ServerConfig, logger *slog.Logger) *Server {
+	// Hash the executable once before experiment persistence locks are used.
+	model.BuildVersion()
 	if config.User != "" && config.Password != "" {
 		config.Token = auth.InternalToken(config.User, config.Password)
 	}
@@ -132,13 +135,38 @@ func (s *Server) StartScenario(parent context.Context, raw []byte) (model.Experi
 func (s *Server) StopScenario(runID string) error {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
+	return s.stopScenarioLocked(runID)
+}
+
+func (s *Server) stopScenarioRequest(runID, executionID string) error {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.state.mu.RLock()
+	run := s.state.experiments[runID]
+	s.state.mu.RUnlock()
+	if run.ExecutionID != executionID {
+		return errExecutionChanged
+	}
+	if run.StopRequested {
+		return nil
+	}
+	return s.stopScenarioLocked(runID)
+}
+
+var errExecutionChanged = errors.New("execution changed or executionId missing; refresh before stopping")
+
+func (s *Server) stopScenarioLocked(runID string) error {
 	if s.cancelRepeatLocked(runID) {
 		return nil
+	}
+	if s.repeatBatches[runID] != nil {
+		return errExecutionChanged
 	}
 	cancel, ok := s.cancels[runID]
 	if !ok {
 		return fmt.Errorf("running experiment %q not found", runID)
 	}
+	s.markStopRequestedLocked(runID, "")
 	cancel()
 	return nil
 }
@@ -146,6 +174,14 @@ func (s *Server) StopScenario(runID string) error {
 func (s *Server) runScenario(parentCtx context.Context, experiment model.Experiment, spec scenario.Scenario) {
 	ctx, cancelScenario := context.WithCancel(parentCtx)
 	defer cancelScenario()
+	s.updateExperiment(experiment.ID, func(run *model.Experiment) {
+		run.ControllerVersion = model.BuildVersion()
+		run.CleanupState = "pending"
+		run.DataState = "collecting"
+	})
+	monitorDone := make(chan struct{})
+	defer close(monitorDone)
+	go s.watchRunStorage(ctx, monitorDone, experiment.ID, cancelScenario)
 
 	rng := rand.New(rand.NewSource(experiment.Seed))
 	jobs := newPhaseJobs()
@@ -236,7 +272,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		runErr = jobs.wait(ctx, nil, 0)
 	}
 
-	var cleanupErr error
+	var cleanupErr, dataErr error
 	if runErr != nil || spec.OnExit == "cancel" {
 		cancelScenario()
 		jobs.cancelAll()
@@ -268,12 +304,17 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		runErr = backgroundErr
 	}
 
+	closedSingleRun := experiment.Repetitions <= 1 && generation > 1 && len(s.matchingNodes(experiment.ID, "", "", "")) == 0
 	// For a single run, natural onExit only governs background jobs. Repeated,
 	// canceled, or failed runs also fence and remove Peers after producers stop,
 	// so no in-flight creation can escape cleanup or overlap the next iteration.
 	if runErr != nil || cleanupErr != nil || experiment.Repetitions > 1 {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		s.updateExperiment(experiment.ID, func(run *model.Experiment) { run.CleanupState = "running" })
 		stopErr := s.stopRunGeneration(cleanupCtx, experiment.ID, generation)
+		if stopErr == nil {
+			dataErr = s.drainRunTelemetry(cleanupCtx, experiment.ID)
+		}
 		refreshErr := s.refreshAgentState(cleanupCtx)
 		cleanupCancel()
 		if err := errors.Join(stopErr, refreshErr); err != nil {
@@ -282,20 +323,59 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 			s.logger.Error("scenario peer cleanup failed", "run", experiment.ID, "generation", generation, "error", err)
 		}
 	}
-	resultErr := errors.Join(runErr, cleanupErr)
+	if runErr == nil && cleanupErr == nil && closedSingleRun {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		dataErr = s.drainRunTelemetry(drainCtx, experiment.ID)
+		drainCancel()
+	}
+	resultErr := errors.Join(runErr, cleanupErr, dataErr)
 
 	if err := s.state.recordAnalysisObservation(experiment.ID, time.Now().UTC()); err != nil {
 		s.logger.Warn("record final analysis observation", "run", experiment.ID, "error", err)
+		dataErr = errors.Join(dataErr, err)
+		resultErr = errors.Join(resultErr, err)
+		s.state.recordRunWriteError(experiment.ID, err)
 	}
 
+	if err := s.flushRunSources(experiment.ID); err != nil {
+		s.state.recordRunWriteError(experiment.ID, err)
+		resultErr = errors.Join(resultErr, err)
+	}
+	s.state.mu.RLock()
+	integrity := s.state.experiments[experiment.ID].IntegrityError
+	s.state.mu.RUnlock()
+	if integrity != "" {
+		resultErr = errors.Join(resultErr, errors.New(integrity))
+	}
 	finished := time.Now().UTC()
 	s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 		current.FinishedAt = finished
 		current.PhaseName = ""
+		current.CleanupState = "complete"
+		if cleanupErr != nil {
+			current.CleanupState = "failed"
+			current.CleanupError = cleanupErr.Error()
+		}
+		current.DataState = "complete"
+		for _, agent := range current.Agents {
+			if !agent.RunDrain {
+				current.DataState = "unverified"
+			}
+		}
+		if dataErr != nil || current.IntegrityError != "" || cleanupErr != nil {
+			current.DataState = "incomplete"
+			if dataErr != nil {
+				current.IntegrityError = dataErr.Error()
+			}
+		}
+		if resultErr == nil && experiment.Repetitions <= 1 && !closedSingleRun && len(current.Agents) > 0 {
+			current.CleanupState = "retained"
+			current.DataState = "collecting"
+		}
 		switch {
 		case resultErr == nil:
 			current.State = "completed"
-		case errors.Is(runErr, context.Canceled):
+		case errors.Is(runErr, context.Canceled) && integrity == "":
 			current.State = "canceled"
 			if cleanupErr != nil {
 				current.Error = resultErr.Error()
@@ -567,13 +647,10 @@ func (s *Server) phaseOperationError(ctx context.Context, runID string, phase sc
 // so a create that was already in flight cannot commit after cleanup. A later
 // scenario generation is still allowed to create peers with the same run ID.
 func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation uint64) error {
-	s.state.mu.RLock()
-	agents := make([]model.Agent, 0, len(s.state.agents))
-	for _, agent := range s.state.agents {
-		agents = append(agents, agent)
+	agents, err := s.cleanupParticipants(runID)
+	if err != nil {
+		return err
 	}
-	s.state.mu.RUnlock()
-	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 
 	type result struct {
 		agentID string
@@ -1254,7 +1331,7 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	client := s.client
-	if method == http.MethodDelete && (strings.HasPrefix(path, "/api/v1/runs/") || path == "/api/v1/nodes") {
+	if (method == http.MethodDelete && (strings.HasPrefix(path, "/api/v1/runs/") || path == "/api/v1/nodes")) || strings.HasSuffix(path, "/drain") {
 		// Removing Docker namespaces/filesystems can exceed the ordinary 10s
 		// control request timeout. The scenario context still bounds cleanup.
 		cleanupClient := *s.client
@@ -1300,6 +1377,7 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 	s.state.notify()
 	if err := s.persistExperiment(experiment); err != nil {
 		s.logger.Warn("persist experiment state", "run", runID, "error", err)
+		s.state.recordRunWriteError(runID, err)
 	}
 }
 

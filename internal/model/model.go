@@ -14,22 +14,25 @@ const (
 )
 
 type Agent struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	URL              string            `json:"url"`
-	MetricsURL       string            `json:"metricsUrl,omitempty"`
-	Hostname         string            `json:"hostname"`
-	Version          string            `json:"version"`
-	Capacity         int               `json:"capacity"`
-	DefaultCapacity  int               `json:"defaultCapacity,omitempty"`
-	CapacityOverride int               `json:"capacityOverride,omitempty"`
-	CapacityPending  bool              `json:"capacityPending,omitempty"`
-	CapacityRevision string            `json:"capacityRevision,omitempty"`
-	ActiveNodes      int               `json:"activeNodes"`
-	State            string            `json:"state"`
-	Labels           map[string]string `json:"labels,omitempty"`
-	StartedAt        time.Time         `json:"startedAt"`
-	LastSeen         time.Time         `json:"lastSeen"`
+	StartupReconciled bool              `json:"startupReconciled,omitempty"`
+	PeerImage         string            `json:"peerImage,omitempty"`
+	RunDrain          bool              `json:"runDrain,omitempty"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	URL               string            `json:"url"`
+	MetricsURL        string            `json:"metricsUrl,omitempty"`
+	Hostname          string            `json:"hostname"`
+	Version           string            `json:"version"`
+	Capacity          int               `json:"capacity"`
+	DefaultCapacity   int               `json:"defaultCapacity,omitempty"`
+	CapacityOverride  int               `json:"capacityOverride,omitempty"`
+	CapacityPending   bool              `json:"capacityPending,omitempty"`
+	CapacityRevision  string            `json:"capacityRevision,omitempty"`
+	ActiveNodes       int               `json:"activeNodes"`
+	State             string            `json:"state"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	StartedAt         time.Time         `json:"startedAt"`
+	LastSeen          time.Time         `json:"lastSeen"`
 }
 
 type Node struct {
@@ -121,6 +124,16 @@ type PublishRequest struct {
 }
 
 type Experiment struct {
+	StopRequested     bool    `json:"stopRequested,omitempty"`
+	ControllerVersion string  `json:"controllerVersion,omitempty"`
+	CleanupState      string  `json:"cleanupState,omitempty"`
+	DataState         string  `json:"dataState,omitempty"`
+	IntegrityError    string  `json:"integrityError,omitempty"`
+	CleanupError      string  `json:"cleanupError,omitempty"`
+	Agents            []Agent `json:"agents,omitempty"`
+
+	ExecutionID    string            `json:"executionId,omitempty"`
+	Superseded     bool              `json:"superseded,omitempty"`
 	PreviousRunIDs []string          `json:"previousRunIds,omitempty"`
 	ID             string            `json:"id"`
 	BatchID        string            `json:"batchId,omitempty"`

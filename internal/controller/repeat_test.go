@@ -305,6 +305,7 @@ func TestStopAPIRespondsWithJSONAndCancelsSingleRunOrBatch(t *testing.T) {
 			}
 		}
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/experiments/"+id+"/stop", nil)
+		request.Header.Set("X-KPL-Execution", first.ExecutionID)
 		authenticateRequest(t, server, request)
 		response := httptest.NewRecorder()
 		server.apiTestHandler(context.Background()).ServeHTTP(response, request)

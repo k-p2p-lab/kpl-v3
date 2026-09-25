@@ -18,6 +18,7 @@ const maxScenarioRepetitions = 100
 // stopping a queued member or a just-completed iteration cancels the remainder.
 // Server.cancelMu protects the map containing these batches.
 type repeatBatch struct {
+	executionID string
 	cancel      context.CancelFunc
 	repetitions int
 	members     []string
@@ -26,6 +27,14 @@ type repeatBatch struct {
 
 func (s *Server) cancelRepeatLocked(runID string) bool {
 	batch, exists := s.repeatBatches[runID]
+	if exists && batch.executionID != "" {
+		s.state.mu.RLock()
+		run := s.state.experiments[runID]
+		s.state.mu.RUnlock()
+		if run.ExecutionID != batch.executionID {
+			return false
+		}
+	}
 	if exists && batch.repetitions <= 1 {
 		// A single run retires its cancellation handle before finalization.
 		// Its batch bookkeeping must not reopen that already-closed stop gate.
@@ -34,12 +43,17 @@ func (s *Server) cancelRepeatLocked(runID string) bool {
 		}
 	}
 	if exists {
+		s.markStopRequestedLocked(runID, batch.executionID)
 		batch.cancel()
 	}
 	return exists
 }
 
 func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repetitions int) (model.Experiment, error) {
+	return s.startScenarioRepeated(parent, raw, repetitions, "")
+}
+
+func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repetitions int, submissionID string) (model.Experiment, error) {
 	if repetitions < 1 || repetitions > maxScenarioRepetitions {
 		return model.Experiment{}, fmt.Errorf("repetitions must be an integer between 1 and %d", maxScenarioRepetitions)
 	}
@@ -58,6 +72,7 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 	if err := parent.Err(); err != nil {
 		return model.Experiment{}, err
 	}
+	executionID := cryptorand.Text()
 	experiments := make([]model.Experiment, repetitions)
 	for index := range experiments {
 		var nonce [16]byte
@@ -66,24 +81,37 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 		}
 		now := time.Now().UTC()
 		experiments[index] = model.Experiment{
-			ID:   fmt.Sprintf("run-%s-%x", now.Format("20060102T150405Z"), nonce),
-			Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases),
+			ID:          fmt.Sprintf("run-%s-%x", now.Format("20060102T150405Z"), nonce),
+			ExecutionID: executionID, Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases),
 			ScenarioYAML: string(raw), Iteration: index + 1, Repetitions: repetitions,
 		}
 		if spec.Seed == 0 {
 			experiments[index].Seed = now.UnixNano() + int64(index)
 		}
 	}
+	if submissionID != "" {
+		experiments[0].ID = submissionID
+	}
 	for index := range experiments {
 		experiments[index].BatchID = experiments[0].ID
 	}
-	experiments[0].State = "running"
-	experiments[0].StartedAt = time.Now().UTC()
+
 	// Reserve every manifest before running any phase. A partial disk failure
 	// rolls back only the new, exclusively created directories owned by this call.
-	if err := s.reserveRepeatedResults(experiments, raw); err != nil {
+	s.state.persistMu.Lock()
+	err = s.commitBatchAdmissionLocked(parent, experiments[0].BatchID, experiments, raw, repetitions, nil, nil)
+	s.state.persistMu.Unlock()
+	if err != nil {
 		return model.Experiment{}, err
 	}
+	experiments[0].State = "running"
+	experiments[0].StartedAt = time.Now().UTC()
+	s.state.mu.Lock()
+	for _, run := range experiments {
+		s.state.experiments[run.ID] = run
+	}
+	s.state.mu.Unlock()
+	s.updateExperiment(experiments[0].ID, func(run *model.Experiment) {})
 	plan := newTimingPlan(spec)
 	s.state.mu.Lock()
 	for _, experiment := range experiments {
@@ -92,7 +120,7 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 	s.state.estimateRunFinishesLocked(experiments, time.Now().UTC())
 	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
-	batch := &repeatBatch{cancel: cancel, repetitions: repetitions}
+	batch := &repeatBatch{cancel: cancel, repetitions: repetitions, executionID: executionID}
 	if s.repeatBatches == nil {
 		s.repeatBatches = make(map[string]*repeatBatch)
 	}
@@ -194,6 +222,13 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 	}()
 	if len(batch.cleanupRuns) > 0 {
 		if err := s.cleanupBeforeResume(ctx, batch.cleanupRuns, spec); err != nil {
+			for _, run := range experiments {
+				s.updateExperiment(run.ID, func(current *model.Experiment) {
+					current.CleanupState = "failed"
+					current.CleanupError = err.Error()
+					current.DataState = "unverified"
+				})
+			}
 			s.cancelQueuedIterations(experiments, "Cannot continue batch: "+err.Error())
 			return
 		}
@@ -233,6 +268,7 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 				s.state.mu.Lock()
 				s.state.experiments[finished.ID] = finished
 				s.state.mu.Unlock()
+				s.state.recordRunWriteError(finished.ID, err)
 				s.logger.Error("persist repeated experiment", "run", finished.ID, "error", err)
 			}
 		}

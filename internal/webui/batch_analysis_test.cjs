@@ -184,3 +184,21 @@ test('grouped bars remain distinct without changing numeric sample positions', (
   assert.equal(JSON.stringify(chart),before);
   assert.ok(series.every(s=>s.points[0].x===1));
 });
+
+
+test('attempt reporting accepts missing legacy Agents and escapes environment details', () => {
+  const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const markup = batch.reliabilityMarkup({ reliability: {
+    attempts: 3, failed: 1, canceled: 0, interrupted: 0, retries: 1, failedAttemptRate: 1 / 3,
+    warnings: ['<incomplete>'], environments: [
+      { runIds: ['old'], agents: null },
+      { runIds: ['new'], controllerVersion: '<build>', agents: [{ id: '<agent>', peerImage: 'sha256:abc', capacity: 100 }] },
+    ],
+  } }, escape);
+  assert.match(markup, /3 started attempts · 1 failed \(33.3%\)/);
+  assert.match(markup, /No recorded Agents/);
+  assert.match(markup, /&lt;agent&gt;: sha256:abc, capacity 100/);
+  assert.match(markup, /&lt;build&gt;/);
+  assert.match(markup, /&lt;incomplete&gt;/);
+  assert.doesNotMatch(markup, /<agent>|<build>|<incomplete>/);
+});

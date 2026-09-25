@@ -299,3 +299,14 @@ func TestDashboardStreamKeepsNotificationsAcrossSharedCacheAndReconnects(t *test
 		}
 	})
 }
+
+func TestDashboardOmitsExecutionEnvironmentButPreservesStopFence(t *testing.T) {
+	source := model.Snapshot{Experiments: []model.Experiment{{ID: "run", ExecutionID: "execution", StopRequested: true, ControllerVersion: "binary-version", Agents: []model.Agent{{ID: "agent"}}}}}
+	view := dashboardSnapshot(source)
+	if len(view.Experiments[0].Agents) != 0 || view.Experiments[0].ControllerVersion != "" || view.Experiments[0].ExecutionID != "execution" || !view.Experiments[0].StopRequested {
+		t.Fatalf("dashboard lifecycle fields: %+v", view.Experiments[0])
+	}
+	if len(source.Experiments[0].Agents) != 1 {
+		t.Fatal("projection mutated stored environment")
+	}
+}

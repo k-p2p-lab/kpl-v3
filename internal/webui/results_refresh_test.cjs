@@ -470,3 +470,12 @@ test('only complete current groups offer append and analysis or pending admissio
   state.pendingAppends.clear();runs[0].analysis={state:'running'};api.renderSavedResults();
   assert.match(element('#savedResultsRows').innerHTML,/data-append-batch="group"[^>]*disabled/);
 });
+
+test('retired attempts stay excluded after their replacement is deleted and stale analyses request an update',()=>{
+ const old={id:'old',batchId:'group',iteration:1,repetitions:2,state:'failed',superseded:true};
+ const current={id:'second',batchId:'group',iteration:2,repetitions:2,state:'completed',dataState:'incomplete',cleanupState:'failed',cleanupError:'Agent <offline>',batchAnalysis:{state:'idle',stale:true}};
+ const f=fixture([old,current]),groups=f.api.savedResultBatches([old,current]);
+ assert.equal(groups[0].runs.length,1);assert.equal(groups[0].previousRuns.length,1);
+ const markup=f.element('#savedResultsRows').innerHTML;
+ assert.match(markup,/Batch mean · Update/);assert.match(markup,/Peer cleanup: failed/);assert.match(markup,/Data: incomplete/);assert.match(markup,/Agent &lt;offline&gt;/);
+});

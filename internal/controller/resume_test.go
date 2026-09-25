@@ -184,7 +184,7 @@ func TestResumeRetriesCleanupBeforeAnyNewPeerAndPreservesPendingOnFailure(t *tes
 	}
 	for _, original := range runs[1:] {
 		run := persistedExperiment(t, f.server, original.ID)
-		if run.State != "canceled" || !run.StartedAt.IsZero() || !strings.Contains(run.Error, "cleanup previous run") {
+		if run.State != "canceled" || !run.StartedAt.IsZero() || !strings.Contains(run.Error, "cleanup previous run") || run.CleanupState != "failed" || run.CleanupError == "" || run.DataState != "unverified" {
 			t.Fatalf("lost retryable remainder: %+v", run)
 		}
 	}
@@ -271,7 +271,11 @@ func TestResumeAPIRejectsDuplicatesAndCanStopDuringCleanup(t *testing.T) {
 	if err := f.server.deleteSavedResult(runs[0].ID); !errors.Is(err, errResultBusy) {
 		t.Fatalf("cleanup source not protected: %v", err)
 	}
-	if err := f.server.StopScenario(runs[0].ID); err != nil {
+	var accepted model.Experiment
+	if err := json.Unmarshal(first.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.server.StopScenario(accepted.ID); err != nil {
 		t.Fatal(err)
 	}
 	waitRepetitions(t, f.server)

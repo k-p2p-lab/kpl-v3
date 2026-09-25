@@ -1016,9 +1016,9 @@
       try {
         let job = await request(path, {}, view.signal);
         if (
-          refresh ||
+          refresh || job.stale ||
           job.state === "idle" ||
-          (job.state === "completed" && (job.analysisVersion || 0) < 4) ||
+          (job.state === "completed" && (job.analysisVersion || 0) < 5) ||
           (retry && ["failed", "interrupted", "canceled"].includes(job.state))
         ) {
           job = await request(
@@ -1079,12 +1079,12 @@
           const summary = $("batchAnalysisSummary");
           if (summary) {
             summary.hidden = false;
-            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary><p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead>${batch.summaryGroups(data.summary).map(group => `<tbody><tr class="metric-category-row"><th colspan="4" scope="rowgroup">${escape(research.categoryLabels[group.category])}</th></tr>${group.rows.map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody>`).join("")}</table></div>`;
+            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary>${batch.reliabilityMarkup(data, escape)}<p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead>${batch.summaryGroups(data.summary).map(group => `<tbody><tr class="metric-category-row"><th colspan="4" scope="rowgroup">${escape(research.categoryLabels[group.category])}</th></tr>${group.rows.map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody>`).join("")}</table></div>`;
           }
-          await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns });
+          await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
         } else {
           $("resultImagesName").textContent = data.result.name || id;
-          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}`;
+          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}${job.stale ? " · Newer source data available; refresh analysis." : ""}`;
           currentData = data;
           researchTools?.setData(data);
           await prepareImages(buildCharts(data), id, view, requestRevision);

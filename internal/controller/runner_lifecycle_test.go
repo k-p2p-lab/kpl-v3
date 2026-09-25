@@ -432,6 +432,7 @@ phases:
 	waitForLifecycleNodeCount(t, controller, experiment.ID, 1)
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/experiments/"+experiment.ID+"/stop", nil)
+	request.Header.Set("X-KPL-Execution", experiment.ExecutionID)
 	authenticateRequest(t, controller, request)
 	response := httptest.NewRecorder()
 	controller.apiTestHandler(context.Background()).ServeHTTP(response, request)
@@ -484,6 +485,9 @@ phases:
 	if finished.State != "completed" {
 		t.Fatalf("experiment state=%q error=%q", finished.State, finished.Error)
 	}
+	if finished.CleanupState != "retained" || finished.DataState != "collecting" {
+		t.Fatalf("new generation should remain live: %+v", finished)
+	}
 	creates, fences := agent.generations()
 	if !reflect.DeepEqual(creates, []uint64{1, 2}) {
 		t.Fatalf("create generations = %v, want [1 2]", creates)
@@ -518,6 +522,9 @@ phases:
 	finished := waitForLifecycleExperiment(t, controller, experiment.ID)
 	if finished.State != "failed" || !strings.Contains(finished.Error, "no publish-capable ready nodes") {
 		t.Fatalf("experiment state=%q error=%q, want publish failure", finished.State, finished.Error)
+	}
+	if finished.CleanupState != "complete" {
+		t.Fatalf("failed run cleanup was not confirmed: %+v", finished)
 	}
 	creates, fences := agent.generations()
 	if !reflect.DeepEqual(creates, []uint64{1, 2}) {

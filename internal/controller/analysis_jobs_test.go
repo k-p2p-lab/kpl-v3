@@ -83,7 +83,7 @@ func TestAnalysisJobSurvivesRequestCancellationAndTwoMinuteWait(t *testing.T) {
 	})
 }
 
-func TestAnalysisJobArtifactPersistsAndIsReusedUntilExplicitRefresh(t *testing.T) {
+func TestAnalysisJobArtifactPersistsAndInvalidatesWhenSourcesChange(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	resultFixture(t, s, "run", "completed", time.Unix(1, 0))
 	handler := s.apiTestHandler(context.Background())
@@ -115,18 +115,17 @@ func TestAnalysisJobArtifactPersistsAndIsReusedUntilExplicitRefresh(t *testing.T
 	restarted := New(s.config, nil)
 	handler = restarted.apiTestHandler(context.Background())
 	_, loaded := jobRequest(t, handler, http.MethodGet, "/api/v1/analysis-jobs/run")
-	_, reused := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
-	if loaded.State != "completed" || loaded.ID != first.ID || reused.ID != first.ID {
-		t.Fatal("restart or reopen discarded cached analysis")
+	if loaded.State != "completed" || !loaded.Stale || loaded.ID != first.ID {
+		t.Fatal("modified sources were not marked stale")
 	}
 	downloaded := httptest.NewRecorder()
 	handler.ServeHTTP(downloaded, httptest.NewRequest(http.MethodGet, complete.ResultURL, nil))
 	if downloaded.Code != 200 || downloaded.Body.String() != artifact.Body.String() {
 		t.Fatal("persisted download changed")
 	}
-	_, refreshed := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run?refresh=1")
+	_, refreshed := jobRequest(t, handler, http.MethodPost, "/api/v1/analysis-jobs/run")
 	if refreshed.ID == first.ID {
-		t.Fatal("explicit refresh reused the old snapshot")
+		t.Fatal("changed sources reused the old snapshot")
 	}
 	failed := awaitAnalysisJob(t, restarted, "run")
 	if failed.State != "failed" || !strings.Contains(failed.Error, "events.jsonl line 1") {

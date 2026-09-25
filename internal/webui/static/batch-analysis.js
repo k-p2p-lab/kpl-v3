@@ -139,6 +139,16 @@
     const excluded = data.excluded.map(r => `Run ${r.iteration || r.id}: ${r.state}`).join("; ");
     return `${data.runs.length}/${data.expectedRuns} runs included · equal run weight · ${data.missingRuns} missing/unreadable${excluded ? ` · Excluded: ${excluded}` : ""}`;
   }
-  const exported = { validate, average, valueAt, commonHistograms, build, label, summaryGroups, summaryCSV, description };
+  function reliabilityMarkup(data, escape) {
+    const r = data.reliability;
+    if (!r) return "";
+    const metrics = `${r.attempts} started attempts · ${r.failed} failed (${(100 * r.failedAttemptRate).toFixed(1)}%) · ${r.canceled} canceled · ${r.interrupted} interrupted · ${r.retries} retries`;
+    const environments = (r.environments || []).map((group, i) => {
+      const agents = (group.agents || []).map(a => escape(`${a.id}: ${a.peerImage || "image unknown"}, capacity ${a.capacity}`)).join("; ");
+      return `<li>Environment ${i + 1}: ${group.runIds.length} runs · ${escape(group.controllerVersion || "Controller version unknown")} · ${agents || "No recorded Agents"}</li>`;
+    }).join("");
+    return `<p class="dialog-help">${escape(metrics)}. Failure rate uses all recorded started attempts, including retries. Never-started queued runs are excluded.</p>${(r.warnings || []).map(w => `<p class="result-integrity">${escape(w)}</p>`).join("")}<details><summary>Execution environments · ${(r.environments || []).length}</summary><ul class="result-environments">${environments}</ul><p class="dialog-help">Recorded versions, Agent instances, images and capacities do not capture every change in host load or network conditions.</p></details>`;
+  }
+  const exported = { reliabilityMarkup, validate, average, valueAt, commonHistograms, build, label, summaryGroups, summaryCSV, description };
   if (typeof module !== "undefined" && module.exports) module.exports = exported; else root.KPLBatchAnalysis = exported;
 })(globalThis);

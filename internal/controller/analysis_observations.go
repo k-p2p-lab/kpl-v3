@@ -81,7 +81,12 @@ func (s *Server) recordAnalysisLoop(ctx context.Context) {
 	}
 }
 
-func (s *state) recordAnalysisObservation(runID string, now time.Time) error {
+func (s *state) recordAnalysisObservation(runID string, now time.Time) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			s.recordRunWriteError(runID, resultErr)
+		}
+	}()
 	s.mu.RLock()
 	nodes := make([]model.Node, 0)
 	agents := make(map[string]model.Agent, len(s.agents))

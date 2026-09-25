@@ -112,3 +112,16 @@ test('failed, interrupted and removed runs clear stopping controls',async()=>{
     assert.equal(f.state.pendingStops.size,0,terminal);
   }
 });
+
+test('stopping state and request token belong to the execution, including a reused run ID',async()=>{
+ const old=batch().map(run=>({...run,executionId:'execution-old'})),f=fixture(old);
+ const pending=f.api.requestRunStop('two');
+ assert.equal(f.requests[0].options.headers.get('X-KPL-Execution'),'execution-old');
+ f.respond(0);await pending;
+ const next=old.map(run=>({...run,executionId:'execution-new'}));f.render(next);
+ assert.equal(f.state.pendingStops.size,0,'old stopping state leaked into new execution');
+ assert.doesNotMatch(f.element('#runList').innerHTML,/disabled>Stopping/);
+ const stop=f.api.requestRunStop('two');assert.equal(f.requests[1].options.headers.get('X-KPL-Execution'),'execution-new');f.respond(1);await stop;
+ f.state.pendingStops.clear();f.render(next.map(run=>({...run,stopRequested:true})));
+ assert.match(f.element('#runList').innerHTML,/disabled>Stopping/,'refresh forgot the server cancellation');
+});

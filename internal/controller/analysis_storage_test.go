@@ -79,6 +79,7 @@ func newAnalysisStorageFixture(t *testing.T, batch bool) analysisStorageFixture 
 	} else {
 		resultFixture(t, s, "run", "completed", time.Unix(1, 0))
 		status.RunID = "run"
+		status.SourceRevision, _ = s.runSourceRevision("run")
 		f.job = &analysisJob{status: status, cancel: cancel}
 		s.analysisJobs["run"] = f.job
 		if err := s.persistAnalysisJob(status); err != nil {

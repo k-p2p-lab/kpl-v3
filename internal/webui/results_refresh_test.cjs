@@ -399,7 +399,7 @@ test('result status filters use current attempts and require a complete batch fo
   assert.deepEqual(filter('failed-run','completed'),[]);
 });
 
-test('result filters survive refresh and can be cleared without changing saved membership', async () => {
+test('result filters survive refresh; clearing search preserves status and All preserves search', async () => {
   const runs = [{id:'one',name:'First',state:'completed'},{id:'two',name:'Second',state:'failed'}];
   const {api,state,element,resolve} = fixture(runs);
   state.resultQuery='missing';
@@ -407,7 +407,7 @@ test('result filters survive refresh and can be cleared without changing saved m
   api.renderSavedResults();
   assert.match(element('#savedResultsStatus').textContent,/No matching results/);
   assert.equal(element('#savedResultsTable').hidden,true);
-  assert.equal(element('#clearResultFilters').hidden,false);
+  assert.equal(element('#clearResultSearch').hidden,false);
   assert.equal(element('#resultFilterSummary').textContent,'0 of 2 saved runs');
   state.resultQuery='second';
   const refreshing=api.refreshSavedResults();
@@ -419,13 +419,22 @@ test('result filters survive refresh and can be cleared without changing saved m
   assert.match(element('#savedResultsRows').innerHTML,/data-result-images="two"/);
   let focused=0;
   element('#resultSearch').focus=()=>focused++;
-  api.clearResultFilters();
+  api.clearResultSearch();
   assert.equal(element('#resultSearch').value,'');
-  assert.equal(element('#resultStateFilter').value,'all');
-  assert.equal(element('#clearResultFilters').hidden,true);
+  assert.equal(state.resultStatus,'attention');
+  assert.equal(element('#resultStatus-attention').checked,true);
+  assert.equal(element('#clearResultSearch').hidden,true);
+  assert.equal(element('#resultFilterSummary').textContent,'1 of 2 saved runs');
+  state.resultQuery='second';
+  api.setResultStatus('all');
+  assert.equal(state.resultQuery,'second');
+  assert.equal(element('#resultStatus-all').checked,true);
+  assert.equal(element('#resultStatus-attention').checked,false);
+  assert.equal(element('#resultFilterSummary').textContent,'1 of 2 saved runs');
+  api.clearResultSearch();
   assert.equal(element('#resultFilterSummary').textContent,'2 saved runs');
   assert.equal(state.savedResults.length,2);
-  assert.equal(focused,1);
+  assert.equal(focused,2);
 });
 
 test('group note preview is independent of run notes and survives filtering and previous attempts', () => {

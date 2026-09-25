@@ -321,18 +321,23 @@
         </header>
         <div class="panel-body" id="panel-results-body">
           <div class="results-toolbar" role="search" aria-label="Filter saved results">
-            <label class="results-search" for="resultSearch">Search results
-              <input id="resultSearch" type="search" placeholder="Name, batch or run ID" maxlength="256" autocomplete="off" aria-controls="savedResultsRows" aria-describedby="resultFilterHint">
-            </label>
-            <label class="results-state-filter" for="resultStateFilter">Status
-              <select id="resultStateFilter" aria-controls="savedResultsRows">
-                <option value="all">All statuses</option>
-                <option value="active">In progress</option>
-                <option value="completed">Completed</option>
-                <option value="attention">Needs attention</option>
-              </select>
-            </label>
-            <div class="results-filter-reset"><button class="secondary-button" id="clearResultFilters" type="button" hidden>Clear filters</button></div>
+            <div class="results-search">
+              <label for="resultSearch">Search results</label>
+              <div class="results-search-field">
+                <svg class="results-search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+                <input id="resultSearch" type="search" placeholder="Name, batch or run ID" maxlength="256" autocomplete="off" aria-controls="savedResultsRows" aria-describedby="resultFilterHint">
+                <button id="clearResultSearch" type="button" aria-label="Clear search" title="Clear search" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+              </div>
+            </div>
+            <fieldset class="results-status-filter" id="resultStatusFilter">
+              <legend>Status</legend>
+              <div class="results-status-options">
+                <label><input class="visually-hidden" type="radio" name="resultStatus" id="resultStatus-all" value="all" aria-controls="savedResultsRows" checked><span>All</span></label>
+                <label><input class="visually-hidden" type="radio" name="resultStatus" id="resultStatus-active" value="active" aria-controls="savedResultsRows"><span>In progress</span></label>
+                <label><input class="visually-hidden" type="radio" name="resultStatus" id="resultStatus-completed" value="completed" aria-controls="savedResultsRows"><span>Completed</span></label>
+                <label><input class="visually-hidden" type="radio" name="resultStatus" id="resultStatus-attention" value="attention" aria-controls="savedResultsRows"><span>Needs attention</span></label>
+              </div>
+            </fieldset>
           </div>
           <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
           <details class="results-guide"><summary>About results, retries, and downloads</summary>

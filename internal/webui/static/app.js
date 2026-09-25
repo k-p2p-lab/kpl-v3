@@ -1353,11 +1353,15 @@ function filterSavedResults(results, query = "", status = "all") {
   return results.filter(run => matches.has(key(run)));
 }
 
-function clearResultFilters() {
+function setResultStatus(status) {
+  if (!["all", "active", "completed", "attention"].includes(status)) return;
+  state.resultStatus = status;
+  renderSavedResults();
+}
+
+function clearResultSearch() {
   state.resultQuery = "";
-  state.resultStatus = "all";
   $("#resultSearch").value = "";
-  $("#resultStateFilter").value = "all";
   renderSavedResults();
   $("#resultSearch").focus();
 }
@@ -1366,7 +1370,10 @@ function renderSavedResults() {
   const results = state.savedResults || [];
   const visible = filterSavedResults(results, state.resultQuery || "", state.resultStatus || "all");
   const filtered = Boolean((state.resultQuery || "").trim()) || (state.resultStatus || "all") !== "all";
-  $("#clearResultFilters").hidden = !filtered;
+  $("#clearResultSearch").hidden = !state.resultQuery;
+  for (const value of ["all", "active", "completed", "attention"]) {
+    $(`#resultStatus-${value}`).checked = value === (state.resultStatus || "all");
+  }
   setText($("#resultFilterSummary"), state.savedResults === null ? "" : filtered
     ? `${formatNumber(visible.length)} of ${formatNumber(results.length)} saved runs`
     : `${formatNumber(results.length)} saved runs`);
@@ -2061,11 +2068,10 @@ $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
   renderSavedResults();
 });
-$("#resultStateFilter").addEventListener("change", (event) => {
-  state.resultStatus = event.target.value;
-  renderSavedResults();
+$("#resultStatusFilter").addEventListener("change", (event) => {
+  if (event.target.matches('input[name="resultStatus"]')) setResultStatus(event.target.value);
 });
-$("#clearResultFilters").addEventListener("click", clearResultFilters);
+$("#clearResultSearch").addEventListener("click", clearResultSearch);
 $("#openScenario").addEventListener("click", openScenarioEditor);
 $("#refreshScenarios").addEventListener("click", refreshSavedScenarios);
 $("#newScenario").addEventListener("click", startNewScenario);

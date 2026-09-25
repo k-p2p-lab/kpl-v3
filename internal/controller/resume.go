@@ -150,6 +150,11 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 		if err := json.Unmarshal(metadata, &original); err != nil {
 			return model.Experiment{}, err
 		}
+		logical := savedResult{ID: original.ID, BatchID: original.BatchID, Repetitions: original.Repetitions}
+		if err := s.applyBatchExtension(&logical); err != nil {
+			return model.Experiment{}, err
+		}
+		original.Repetitions = logical.Repetitions
 		if original.ID != member.ID || original.BatchID != id || original.Iteration != member.Iteration || original.Repetitions != expected || !retry && !original.StartedAt.IsZero() {
 			return model.Experiment{}, errBatchNotResumable
 		}

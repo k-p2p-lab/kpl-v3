@@ -53,6 +53,10 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 			return fmt.Errorf("prepare web audit log %s: %w", log.name, err)
 		}
 	}
+	if err := s.recoverBatchExtensions(ctx); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("recover batch extensions: %w", err)
+	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	// Do not wait for filesystem syscalls on a disconnected NAS during shutdown.
@@ -165,6 +169,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/results", s.handleResults)
 	mux.HandleFunc("/api/v1/result-storage", s.handleResultStorage)
 	mux.HandleFunc("/api/v1/results/", s.handleResultAction)
+	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/append", s.handleBatchAppend(ctx))
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/resume", s.handleBatchResume(ctx, false))
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/retry", s.handleBatchResume(ctx, true))
 	mux.HandleFunc("/api/v1/result-batches/", s.handleResultBatchAction)

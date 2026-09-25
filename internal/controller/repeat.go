@@ -113,7 +113,22 @@ func (s *Server) reserveRepeatedResults(experiments []model.Experiment, raw []by
 }
 
 // Caller holds cancelMu and persistMu. Used by retry admission as well.
-func (s *Server) reserveRepeatedResultsLocked(experiments []model.Experiment, raw []byte) (resultErr error) {
+func (s *Server) reserveRepeatedResultsLocked(experiments []model.Experiment, raw []byte) error {
+	if err := s.reserveRepeatedFilesLocked(experiments, raw); err != nil {
+		return err
+	}
+	s.state.mu.Lock()
+	for _, experiment := range experiments {
+		s.state.experiments[experiment.ID] = experiment
+	}
+	s.state.mu.Unlock()
+	s.state.notify()
+	return nil
+}
+
+// Reserve files without exposing in-memory runs; append commits its group record
+// only after every new result directory has been prepared.
+func (s *Server) reserveRepeatedFilesLocked(experiments []model.Experiment, raw []byte) (resultErr error) {
 	if err := os.MkdirAll(s.config.DataDir, 0o755); err != nil {
 		return err
 	}
@@ -150,12 +165,6 @@ func (s *Server) reserveRepeatedResultsLocked(experiments []model.Experiment, ra
 			return err
 		}
 	}
-	s.state.mu.Lock()
-	for _, experiment := range experiments {
-		s.state.experiments[experiment.ID] = experiment
-	}
-	s.state.mu.Unlock()
-	s.state.notify()
 	return nil
 }
 

@@ -87,7 +87,7 @@ test("dashboard has one per-result image dialog and no comparison workspace", ()
   assert.match(html, /src="\/result-images.js"/);
   assert.doesNotMatch(
     html,
-    /analysisPanel|analysisRun|analysisGroup|Add run|Visualize &amp; compare|\/analysis.js/,
+    /analysisPanel|analysisRun|analysisGroup|Add run\b|Visualize &amp; compare|\/analysis.js/,
   );
   const app = fs.readFileSync(__dirname + "/static/app.js", "utf8");
   assert.match(app, /data-result-images=/);

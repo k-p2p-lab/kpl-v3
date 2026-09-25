@@ -653,6 +653,9 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	}
 	defer file.file.Close()
 	result, err := readResultMetadata(file, id, active)
+	if err == nil {
+		err = s.applyBatchExtension(&result)
+	}
 	// Never trust a size supplied by experiment.json; stat the current inputs.
 	result.SourceBytes = sourceBytes
 	result.Note = note.summary()
@@ -754,6 +757,9 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		}
 	}
 	result, err := readResultMetadata(snapshot.files[1], id, snapshot.active)
+	if err == nil {
+		err = s.applyBatchExtension(&result)
+	}
 	if err == nil {
 		// Probe both ends before committing HTTP headers. Later I/O failures
 		// still abort the response instead of finishing a misleading ZIP.

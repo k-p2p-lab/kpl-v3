@@ -455,3 +455,18 @@ test('group note preview is independent of run notes and survives filtering and 
   assert.ok(!html.includes('data-group-note="other"'));
   assert.equal(api.savedResultBatches(runs)[0].note.preview, '<script>group</script>');
 });
+
+test('only complete current groups offer append and analysis or pending admission disables it', () => {
+  const runs=[1,2].map(iteration=>({id:`run-${iteration}`,batchId:'group',name:'Completed group',iteration,repetitions:2,state:'completed'}));
+  const {api,state,element}=fixture(runs);
+  assert.match(element('#savedResultsRows').innerHTML,/data-append-batch="group"/);
+  const batch=api.savedResultBatches(runs)[0];
+  assert.equal(api.canAppendBatch(batch),true);
+  assert.equal(api.canAppendBatch({...batch,expected:3}),false);
+  assert.equal(api.canAppendBatch({...batch,runs:[runs[0],{...runs[1],state:'failed'}]}),false);
+  state.pendingAppends.add('group');api.renderSavedResults();
+  assert.match(element('#savedResultsRows').innerHTML,/data-append-batch="group"[^>]*disabled/);
+  assert.match(element('#savedResultsRows').innerHTML,/data-delete-batch="group"[^>]*disabled/);
+  state.pendingAppends.clear();runs[0].analysis={state:'running'};api.renderSavedResults();
+  assert.match(element('#savedResultsRows').innerHTML,/data-append-batch="group"[^>]*disabled/);
+});

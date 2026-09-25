@@ -519,6 +519,23 @@
     </form>
   </dialog>
 
+  <dialog id="appendBatchDialog" aria-labelledby="appendBatchHeading" aria-describedby="appendBatchName appendBatchHelp">
+    <form id="appendBatchForm" class="dialog-shell">
+      <header><h2 id="appendBatchHeading">Add runs to this group</h2></header>
+      <p class="delete-result-name" id="appendBatchName"></p>
+      <p class="result-id" id="appendBatchID"></p>
+      <label for="appendBatchCount">Additional runs</label>
+      <input id="appendBatchCount" type="number" min="1" max="99" step="1" value="1" required inputmode="numeric" aria-describedby="appendBatchSummary appendBatchHelp">
+      <p class="dialog-help" id="appendBatchSummary" role="status" aria-live="polite"></p>
+      <p class="dialog-help" id="appendBatchHelp">New runs use the same saved scenario and start after existing Peers are cleaned up. Group notes stay with this group. Analyze batch mean after completion to include all runs.</p>
+      <p class="dialog-error" id="appendBatchError" role="alert"></p>
+      <footer>
+        <button class="secondary-button" id="cancelAppendBatch" type="button">Cancel</button>
+        <button class="primary-button" id="confirmAppendBatch" type="submit">Add and start</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="deleteResultDialog" aria-labelledby="deleteResultHeading">
     <form method="dialog" class="dialog-shell">
       <header><h2 id="deleteResultHeading">Delete saved result?</h2></header>
@@ -542,6 +559,7 @@
   <script src="/research-compare.js" defer></script>
   <script src="/research-ui.js" defer></script>
   <script src="/batch-analysis.js" defer></script>
+  <script src="/batch-append.js" defer></script>
   <script src="/result-images.js" defer></script>
   <script src="/result-notes.js" defer></script>
   <script src="/result-storage.js" defer></script>

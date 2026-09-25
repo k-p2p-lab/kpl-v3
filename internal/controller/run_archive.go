@@ -262,7 +262,14 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		if err != nil {
 			return err
 		}
+		result, err := readResultMetadata(metadata, id, false)
 		metadata.close()
+		if err != nil {
+			return err
+		}
+		if err := s.applyBatchExtension(&result); err != nil {
+			return err
+		}
 		manifest, err = readRunArchive(root, id)
 		if err != nil {
 			return err

@@ -749,3 +749,9 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .result-storage:is(.pending,.archiving) { color: var(--amber); border-color: rgba(242,183,76,.3); }
 .results-storage-status { margin: 0; padding: .4rem 1.2rem .75rem; color: var(--muted); font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
 .results-storage-status[data-warning="true"] { color: var(--amber); }
+
+#appendBatchDialog { width: min(34rem, calc(100% - 1rem)); }
+#appendBatchForm { min-width: 0; }
+#appendBatchForm p { overflow-wrap: anywhere; }
+#appendBatchCount { width: 100%; min-width: 0; }
+#appendBatchForm footer { flex-wrap: wrap; }

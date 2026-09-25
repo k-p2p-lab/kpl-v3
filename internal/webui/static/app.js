@@ -12,7 +12,7 @@ const state = {
   scenarioValidating: false, scenarioValidation: null, scenarioValidationVersion: 0,
   scenarioDeletingId: null, pendingScenarioDeleteId: null, scenarioLoadVersion: 0, scenarioSubmitting: false, scenarioEditorVersion: 0,
   agentNumbers: loadAgentNumbers(),
-  pendingStops: new Set(), pendingResumes: new Set(), deletedResultIDs: new Set(),
+  pendingStops: new Set(), pendingResumes: new Set(), pendingAppends: new Set(), deletedResultIDs: new Set(),
   pendingDelete: null, deletingResultId: null, loginRedirecting: false,
   topology: {
     layout: {},
@@ -715,7 +715,7 @@ async function requestRunStop(id) {
 }
 
 function resultLocked(run) {
-  if (run.batchId && state.pendingResumes?.has(run.batchId)) return true;
+  if (run.batchId && (state.pendingResumes?.has(run.batchId) || state.pendingAppends?.has(run.batchId))) return true;
   if (isPendingRun(run)) return true;
   return Boolean(run.batchId && [...(state.savedResults || []), ...(state.snapshot?.experiments || [])].some((other) => other.batchId === run.batchId && isPendingRun(other)));
 }
@@ -1189,6 +1189,21 @@ function retryBatchRuns(batch) {
   return batch.runs.filter(run => ["failed", "interrupted", "canceled"].includes(run.state)).sort((a, b) => a.iteration - b.iteration);
 }
 
+function canAppendBatch(batch) {
+  return !batch.active && batch.expected >= 1 && batch.runs.length === batch.expected
+    && batch.runs.every((run, index) => run.state === "completed" && run.iteration === index + 1 && run.repetitions === batch.expected);
+}
+
+function appendBatchButton(batch, locked = false) {
+  if (!canAppendBatch(batch)) return "";
+  const pending = state.pendingAppends?.has(batch.id);
+  const analyzing = ["queued", "running"].includes(batch.job?.state)
+    || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
+  const hint = batch.expected >= 100 ? "This group has reached the 100-run limit."
+    : "Append runs using this group's saved scenario. Batch statistics will include all completed runs.";
+  return `<button type="button" class="secondary-button batch-append-button" data-append-batch="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Add runs to group: ${batch.name}`)}" ${locked || pending || analyzing || batch.expected >= 100 || state.deletingResultId ? "disabled" : ""}>${pending ? "Adding runs…" : "Add runs"}</button>`;
+}
+
 function retryBatchButton(batch, locked = false) {
   const runs = retryBatchRuns(batch);
   if (!runs.length) return "";
@@ -1258,6 +1273,7 @@ function savedResultBatch(batch) {
       <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
+        ${appendBatchButton(batch, locked)}
         ${retryBatchButton(batch, locked)}
         ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
         <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
@@ -1293,7 +1309,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
 }
 
@@ -1412,7 +1428,7 @@ function resultNoteMarkup(run, group = false) {
 
 function savedResultRow(run) {
   const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
-  const retry = singleBatch && !singleBatch.previousRuns.length ? retryBatchButton(singleBatch, resultLocked(run)) : "";
+  const retry = singleBatch && !singleBatch.previousRuns.length ? appendBatchButton(singleBatch, resultLocked(run)) + retryBatchButton(singleBatch, resultLocked(run)) : "";
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
@@ -2099,6 +2115,16 @@ document.addEventListener("click", async (event) => {
     if (!capacityButton.disabled) openAgentCapacity(capacityButton.dataset.agentCapacity);
     return;
   }
+  const appendButton = event.target.closest("[data-append-batch]");
+  if (appendButton) {
+    event.preventDefault();
+    const batch = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === appendButton.dataset.appendBatch);
+    if (!appendButton.disabled && batch && canAppendBatch(batch)) {
+      rememberResultDialogFocus("#appendBatchDialog", appendButton);
+      globalThis.KPLBatchAppend?.open(batch);
+    }
+    return;
+  }
   const retryButton = event.target.closest("[data-retry-batch]");
   if (retryButton) {
     event.preventDefault();
@@ -2204,6 +2230,23 @@ $("#deleteResultDialog").addEventListener("close", () => {
 });
 
 globalThis.KPLResultStorage?.init({ api });
+globalThis.KPLBatchAppend?.init({api, onBusy: (id, busy) => {
+  if (busy) state.pendingAppends.add(id); else state.pendingAppends.delete(id);
+  renderResultViews();
+}, onAdded: (run, count) => {
+  for (const member of [...(state.savedResults || []), ...(state.snapshot?.experiments || [])]) {
+    if (member.batchId === run.batchId) { member.repetitions = run.repetitions; member.batchAnalysis = null; }
+  }
+  if (state.savedResults && !state.savedResults.some(member => member.id === run.id)) state.savedResults.push(run);
+  if (state.snapshot) {
+    state.snapshot.experiments ||= [];
+    if (!state.snapshot.experiments.some(member => member.id === run.id)) state.snapshot.experiments.push(run);
+  }
+  if (state.resultStatus === "completed") state.resultStatus = "all";
+  showToast(`Added ${count} runs. This group now has ${run.repetitions} total runs.`);
+  renderResultViews();
+  void refreshSavedResults();
+}, onError: () => { void refreshSavedResults(); }});
 globalThis.KPLResultNotes?.init({ api, formatTime: formatResultTime, onSaved: () => {
   showToast("Note saved.");
   void refreshSavedResults();

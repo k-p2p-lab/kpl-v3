@@ -1,6 +1,6 @@
 #!/bin/sh
 # Trusted configuration helpers, sourced by swarm.sh. Configuration is never sourced.
-swarm_config_keys='KPL_STACK_NAME KPL_CONTROL_NODE_ID KPL_PEER_NETWORK KPL_PEER_SUBNET KPL_IMAGE KPL_AGENT_CAPACITY KPL_AGENT_METRICS_PORT KPL_USER KPL_PASSWORD GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD KPL_HTTP_PORT PROMETHEUS_PORT GRAFANA_PORT KPL_MIN_AGENTS KPL_DOCKER_TIMEOUT KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_IMAGE_PULL_TIMEOUT KPL_CONTROLLER_STOP_TIMEOUT KPL_AGENT_STOP_TIMEOUT'
+swarm_config_keys='KPL_STACK_NAME KPL_CONTROL_NODE_ID KPL_PEER_NETWORK KPL_PEER_SUBNET KPL_IMAGE KPL_AGENT_CAPACITY KPL_RUN_MIN_FREE_BYTES KPL_AGENT_METRICS_PORT KPL_USER KPL_PASSWORD GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD KPL_HTTP_PORT PROMETHEUS_PORT GRAFANA_PORT KPL_MIN_AGENTS KPL_DOCKER_TIMEOUT KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_IMAGE_PULL_TIMEOUT KPL_CONTROLLER_STOP_TIMEOUT KPL_AGENT_STOP_TIMEOUT'
 
 swarm_config_key() {
     case "$1" in ''|*[!A-Z0-9_]*) return 1 ;; esac
@@ -66,6 +66,9 @@ swarm_validate_setting() {
         KPL_HTTP_PORT|KPL_AGENT_METRICS_PORT|PROMETHEUS_PORT|GRAFANA_PORT)
             case "$2" in ''|0*|*[!0-9]*) fail "$1 must be a port between 1 and 65535." ;; esac
             [ "$2" -le 65535 ] 2>/dev/null || fail "$1 must be a port between 1 and 65535." ;;
+        KPL_RUN_MIN_FREE_BYTES)
+            case "$2" in 0) return 0 ;; ''|0*|*[!0-9]*) fail "$1 must be a nonnegative integer without leading zeros." ;; esac
+            [ "$2" -ge 0 ] 2>/dev/null || fail "$1 exceeds the supported integer range." ;;
         KPL_AGENT_CAPACITY|KPL_MIN_AGENTS|KPL_DOCKER_TIMEOUT|KPL_IMAGE_BUILD_TIMEOUT|KPL_IMAGE_PUSH_TIMEOUT|KPL_IMAGE_PULL_TIMEOUT|KPL_CONTROLLER_STOP_TIMEOUT|KPL_AGENT_STOP_TIMEOUT)
             case "$2" in ''|0*|*[!0-9]*) fail "$1 must be a positive integer without leading zeros." ;; esac
             [ "$2" -gt 0 ] 2>/dev/null || fail "$1 exceeds the supported integer range." ;;
@@ -118,6 +121,7 @@ swarm_validate_port_conflicts() {
 swarm_config_defaults() {
     export KPL_STACK_NAME=${KPL_STACK_NAME:-kpl}
     export KPL_PEER_NETWORK=${KPL_PEER_NETWORK:-$KPL_STACK_NAME-peers}
+    export KPL_RUN_MIN_FREE_BYTES=${KPL_RUN_MIN_FREE_BYTES:-1073741824}
     export KPL_AGENT_CAPACITY=${KPL_AGENT_CAPACITY:-20} KPL_MIN_AGENTS=${KPL_MIN_AGENTS:-1}
     export KPL_USER=${KPL_USER:-admin}
     export GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}

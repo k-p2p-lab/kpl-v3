@@ -114,7 +114,7 @@ func (s *state) recordAnalysisObservation(runID string, now time.Time) error {
 	if !exists || run.State != "running" {
 		return nil
 	}
-	path := filepath.Join(s.dataDir, "runs", safeName(runID), "observations.jsonl")
+	path := filepath.Join(s.dataDir, currentRunsDirectory, safeName(runID), "observations.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open observations: %w", err)
@@ -123,6 +123,9 @@ func (s *state) recordAnalysisObservation(runID string, now time.Time) error {
 	closeErr := file.Close()
 	if writeErr != nil {
 		return writeErr
+	}
+	if closeErr == nil {
+		s.markRunArchiveDirty(runID)
 	}
 	return closeErr
 }

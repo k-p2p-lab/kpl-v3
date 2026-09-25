@@ -28,7 +28,7 @@ reject() { if run "$@"; then printf 'Unexpected acceptance: %s\n' "$1" >&2; exit
 # First-time setup persists all requested values and independently generated secrets.
 run init KPL_IMAGE=registry.example:5000/team/kpl:v3 KPL_AGENT_CAPACITY=40 KPL_MIN_AGENTS=2 KPL_PEER_SUBNET=10.11.0.0/24
 [ "$(stat -c '%a' "$config_path")" = 600 ]
-for line in KPL_IMAGE=registry.example:5000/team/kpl:v3 KPL_CONTROL_NODE_ID=manager1 KPL_AGENT_CAPACITY=40 KPL_AGENT_METRICS_PORT=9091 KPL_MIN_AGENTS=2 KPL_PEER_SUBNET=10.11.0.0/24; do
+for line in KPL_IMAGE=registry.example:5000/team/kpl:v3 KPL_CONTROL_NODE_ID=manager1 KPL_AGENT_CAPACITY=40 KPL_RUN_MIN_FREE_BYTES=1073741824 KPL_AGENT_METRICS_PORT=9091 KPL_MIN_AGENTS=2 KPL_PEER_SUBNET=10.11.0.0/24; do
     grep -Fxq "$line" "$config_path"
 done
 grep -Fxq 'KPL_USER=admin' "$config_path"
@@ -72,7 +72,7 @@ unset KPL_IMAGE KPL_AGENT_CAPACITY KPL_PASSWORD
 
 # A malformed edit is transactional: file contents, mode, and Docker calls stay unchanged.
 cp "$config_path" "$scratch/original"
-for setting in UNKNOWN=value KPL_IMAGE=registry.example/kpl KPL_IMAGE=https://registry.example/kpl:v3 KPL_AGENT_CAPACITY=0 KPL_AGENT_METRICS_PORT=0 KPL_AGENT_METRICS_PORT=09091 KPL_AGENT_METRICS_PORT=65536 KPL_IMAGE_BUILD_TIMEOUT=08 KPL_IMAGE_PUSH_TIMEOUT=-1 KPL_HTTP_PORT=65536 KPL_STACK_NAME=Bad KPL_CONTROL_NODE_ID=bad/id KPL_PASSWORD=; do
+for setting in KPL_RUN_MIN_FREE_BYTES=-1 KPL_RUN_MIN_FREE_BYTES=01 KPL_RUN_MIN_FREE_BYTES=abc UNKNOWN=value KPL_IMAGE=registry.example/kpl KPL_IMAGE=https://registry.example/kpl:v3 KPL_AGENT_CAPACITY=0 KPL_AGENT_METRICS_PORT=0 KPL_AGENT_METRICS_PORT=09091 KPL_AGENT_METRICS_PORT=65536 KPL_IMAGE_BUILD_TIMEOUT=08 KPL_IMAGE_PUSH_TIMEOUT=-1 KPL_HTTP_PORT=65536 KPL_STACK_NAME=Bad KPL_CONTROL_NODE_ID=bad/id KPL_PASSWORD=; do
     reject configure KPL_AGENT_CAPACITY=50 "$setting"
     cmp "$config_path" "$scratch/original"
 done
@@ -183,3 +183,8 @@ grep -Fxq 'KPL_IMAGE=registry.example/kpl:environment' "$config_path"
 grep -Fxq 'KPL_AGENT_CAPACITY=12' "$config_path"
 if find "$scratch" -name '.env.swarm.stage.*' | grep -q .; then exit 1; fi
 printf '%s\n' 'PASS: Swarm configuration persists validated settings atomically, preserves credentials, redacts secrets, and never evaluates configuration.'
+
+run configure KPL_RUN_MIN_FREE_BYTES=0
+grep -Fxq 'KPL_RUN_MIN_FREE_BYTES=0' "$config_path"
+run configure KPL_RUN_MIN_FREE_BYTES=2147483648
+grep -Fxq 'KPL_RUN_MIN_FREE_BYTES=2147483648' "$config_path"

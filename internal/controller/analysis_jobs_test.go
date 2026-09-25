@@ -109,7 +109,7 @@ func TestAnalysisJobArtifactPersistsAndIsReusedUntilExplicitRefresh(t *testing.T
 	}
 	s.analysisWorkers.Wait()
 	// The saved artifact remains usable even if the source is no longer analyzable.
-	if err := os.WriteFile(filepath.Join(s.config.DataDir, "runs", "run", "events.jsonl"), []byte("invalid\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.config.DataDir, currentRunsDirectory, "run", "events.jsonl"), []byte("invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	restarted := New(s.config, nil)
@@ -145,7 +145,7 @@ func TestAnalysisJobsReportProgressAndDoNotResurrectDeletedResults(t *testing.T)
 	resultFixture(t, s, "run", "completed", time.Unix(1, 0))
 	line := `{"runId":"run","type":"test","timestamp":"2026-09-09T00:00:00Z"}` + "\n"
 	content := strings.Repeat(line, 3000)
-	if err := os.WriteFile(filepath.Join(s.config.DataDir, "runs", "run", "events.jsonl"), []byte(content), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.config.DataDir, currentRunsDirectory, "run", "events.jsonl"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := s.captureResultFiles("run", false)
@@ -182,7 +182,7 @@ func TestAnalysisJobsReportProgressAndDoNotResurrectDeletedResults(t *testing.T)
 	if response.Code != 404 {
 		t.Fatalf("deleted job still readable: %d", response.Code)
 	}
-	if _, err := os.Stat(filepath.Join(s.config.DataDir, "runs", "run")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(s.config.DataDir, currentRunsDirectory, "run")); !os.IsNotExist(err) {
 		t.Fatal("worker recreated deleted result")
 	}
 }

@@ -31,6 +31,7 @@ var (
 )
 
 type savedResult struct {
+	Storage                *runArchiveStatus    `json:"storage,omitempty"`
 	Note                   *resultNoteSummary   `json:"note,omitempty"`
 	PreviousRunIDs         []string             `json:"previousRunIds,omitempty"`
 	BatchAnalysis          *batchAnalysisStatus `json:"batchAnalysis,omitempty"`
@@ -53,10 +54,12 @@ type savedResult struct {
 }
 
 type resultFile struct {
-	name string
-	file *os.File
-	size int64
-	info os.FileInfo
+	parts  []resultFile
+	remote *storedRunFile
+	name   string
+	file   *os.File
+	size   int64
+	info   os.FileInfo
 }
 
 type resultArchiveVersion struct {
@@ -96,9 +99,7 @@ type resultSnapshot struct {
 
 func (snapshot *resultSnapshot) close() {
 	for _, file := range snapshot.files {
-		if file.file != nil {
-			_ = file.file.Close()
-		}
+		file.close()
 	}
 	if snapshot.release != nil {
 		snapshot.release()
@@ -202,7 +203,7 @@ func (s *Server) openResultRuns() (*os.Root, error) {
 		return nil, err
 	}
 	defer data.Close()
-	return openResultDirectory(data, "runs")
+	return openResultDirectory(data, currentRunsDirectory)
 }
 
 // The marker survives Controller restarts. Persistence callers hold persistMu
@@ -349,7 +350,7 @@ func (s *Server) resultDeletionBusyLocked(id string) bool {
 	s.state.mu.RLock()
 	experiment := s.state.experiments[id]
 	s.state.mu.RUnlock()
-	return experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || s.resultDownloads[id] > 0
+	return experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || s.resultDownloads[id] > 0 || s.resultReadPins[id] > 0
 }
 
 // Caller holds the same locks as resultDeletionBusyLocked.
@@ -442,7 +443,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				s.logger.Warn("read saved result metadata", "run", id, "error", err)
 				result = savedResult{ID: id, Name: id, State: "unreadable", SourceBytes: result.SourceBytes, Note: result.Note}
-			} else if !result.Active && result.State != "queued" && s.hasPreparedResultArchive(id) {
+			} else if !result.Active && result.State != "queued" && (result.Storage == nil || result.Storage.State == "local") && s.hasPreparedResultArchive(id) {
 				snapshot, snapshotErr := s.captureResultFiles(id, false)
 				if snapshotErr == nil {
 					archiveInfo, ready := s.cachedResultArchiveInfo(snapshot, time.Now().UTC())
@@ -564,22 +565,25 @@ func (s *Server) extendPendingResultArchiveCache(results []savedResult, now time
 var resultSourceFiles = [...]string{"scenario.yaml", "experiment.json", "events.jsonl", "observations.jsonl", resultNoteFile}
 
 func resultSourceBytes(root *os.Root) (*int64, error) {
+	manifest, err := readRunArchive(root, "")
+	if err != nil {
+		return nil, err
+	}
 	var total int64
 	for _, name := range resultSourceFiles {
-		info, err := root.Lstat(name)
+		file, err := captureRunSource(root, manifest, name)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("%s is not a regular source file", name)
-		}
-		if info.Size() < 0 || info.Size() > math.MaxInt64-total {
+		size := file.size
+		file.close()
+		if size < 0 || size > math.MaxInt64-total {
 			return nil, errors.New("source file size is out of range")
 		}
-		total += info.Size()
+		total += size
 	}
 	return &total, nil
 }
@@ -606,9 +610,11 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	var sourceBytes *int64
 	var noteFile resultFile
 	var noteErr error
+	var storage runArchiveStatus
 	if err == nil {
 		var sizeErr error
 		sourceBytes, sizeErr = resultSourceBytes(root)
+		storage = resultStorageStatus(root, id)
 		if sizeErr != nil {
 			s.logger.Warn("stat saved result sources", "run", id, "error", sizeErr)
 		}
@@ -633,6 +639,7 @@ func (s *Server) readSavedResult(runs *os.Root, id string) (savedResult, error) 
 	// Never trust a size supplied by experiment.json; stat the current inputs.
 	result.SourceBytes = sourceBytes
 	result.Note = note.summary()
+	result.Storage = &storage
 	return result, err
 }
 
@@ -644,6 +651,9 @@ func (s *Server) captureResult(id string) (*resultSnapshot, error) {
 // deletion. Only an actual ZIP download needs a deletion lease. On the Swarm
 // Linux hosts, captured descriptors remain readable after files are unlinked.
 func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, error) {
+	return s.captureResultFilesContext(context.Background(), id, download)
+}
+func (s *Server) captureResultFilesContext(ctx context.Context, id string, download bool) (*resultSnapshot, error) {
 	if !validResultID(id) {
 		return nil, errResultNotFound
 	}
@@ -676,12 +686,16 @@ func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, 
 			return err
 		}
 		defer root.Close()
+		manifest, err := readRunArchive(root, id)
+		if err != nil {
+			return err
+		}
 		for _, name := range resultSourceFiles {
-			file, err := openResultFile(root, name)
+			file, err := captureRunSource(root, manifest, name)
 			if err != nil && !((name == "events.jsonl" || name == "observations.jsonl" || name == resultNoteFile) && errors.Is(err, os.ErrNotExist)) {
 				return fmt.Errorf("open %s: %w", name, err)
 			}
-			if (name == "observations.jsonl" || name == resultNoteFile) && file.file == nil {
+			if (name == "observations.jsonl" || name == resultNoteFile) && file.file == nil && len(file.parts) == 0 && file.remote == nil {
 				continue
 			}
 			snapshot.files = append(snapshot.files, file)
@@ -708,6 +722,20 @@ func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, 
 		snapshot.close()
 		return nil, err
 	}
+	releaseRemote, err := s.resolveArchivedFiles(ctx, id, snapshot.files)
+	if err != nil {
+		snapshot.close()
+		return nil, err
+	}
+	if releaseRemote != nil {
+		previousRelease := snapshot.release
+		snapshot.release = func() {
+			releaseRemote()
+			if previousRelease != nil {
+				previousRelease()
+			}
+		}
+	}
 	result, err := readResultMetadata(snapshot.files[1], id, snapshot.active)
 	if err == nil {
 		// Probe both ends before committing HTTP headers. Later I/O failures
@@ -717,10 +745,10 @@ func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, 
 				continue
 			}
 			var probe [1]byte
-			if _, err = file.file.ReadAt(probe[:], 0); err != nil {
+			if _, err = file.reader().ReadAt(probe[:], 0); err != nil {
 				break
 			}
-			if _, err = file.file.ReadAt(probe[:], file.size-1); err != nil {
+			if _, err = file.reader().ReadAt(probe[:], file.size-1); err != nil {
 				break
 			}
 		}
@@ -739,7 +767,7 @@ func (s *Server) handleResultDownload(w http.ResponseWriter, r *http.Request, id
 		methodNotAllowed(w)
 		return
 	}
-	snapshot, err := s.captureResultFiles(id, r.Method == http.MethodGet)
+	snapshot, err := s.captureResultFilesContext(r.Context(), id, r.Method == http.MethodGet)
 	if err != nil {
 		if errors.Is(err, errResultNotFound) {
 			http.NotFound(w, r)
@@ -799,12 +827,12 @@ func (s *Server) handleResultDownload(w http.ResponseWriter, r *http.Request, id
 }
 
 func (snapshot *resultSnapshot) archiveVersion() resultArchiveVersion {
-	version := resultArchiveVersion{
-		files:  make([]resultFileVersion, len(snapshot.files)),
-		active: snapshot.result.Active, state: snapshot.result.State, storedState: snapshot.storedState,
-	}
-	for index, file := range snapshot.files {
-		version.files[index] = resultFileVersion{name: file.name, size: file.size, info: file.info}
+	version := resultArchiveVersion{active: snapshot.result.Active, state: snapshot.result.State, storedState: snapshot.storedState}
+	for _, file := range snapshot.files {
+		version.files = append(version.files, resultFileVersion{name: file.name, size: file.size, info: file.info})
+		for i, part := range file.parts {
+			version.files = append(version.files, resultFileVersion{name: fmt.Sprintf("%s/%d/%s", file.name, i, part.name), size: part.size, info: part.info})
+		}
 	}
 	return version
 }
@@ -985,8 +1013,8 @@ func (snapshot *resultSnapshot) writeZIPMeasured(ctx context.Context, output io.
 		if err != nil {
 			return err
 		}
-		if file.file != nil {
-			if _, err := io.CopyN(entry, io.NewSectionReader(file.file, 0, file.size), file.size); err != nil {
+		if file.file != nil || len(file.parts) > 0 {
+			if _, err := io.CopyN(entry, file.reader(), file.size); err != nil {
 				return fmt.Errorf("copy %s: %w", file.name, err)
 			}
 		}
@@ -994,8 +1022,8 @@ func (snapshot *resultSnapshot) writeZIPMeasured(ctx context.Context, output io.
 	}
 	var eventLog io.Reader = strings.NewReader("")
 	for _, file := range snapshot.files {
-		if file.name == "events.jsonl" && file.file != nil {
-			eventLog = io.NewSectionReader(file.file, 0, file.size)
+		if file.name == "events.jsonl" && (file.file != nil || len(file.parts) > 0) {
+			eventLog = file.reader()
 			break
 		}
 	}

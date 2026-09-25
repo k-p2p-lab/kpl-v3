@@ -23,7 +23,7 @@ func batchFixture(t *testing.T, s *Server, batch, id, state string, iteration, e
 	if err := s.persistManifest(run, []byte("version: 1\nname: repeated\nphases:\n  - action: stop-all\n")); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.Create(filepath.Join(s.config.DataDir, "runs", id, "events.jsonl"))
+	file, err := os.Create(filepath.Join(s.config.DataDir, currentRunsDirectory, id, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestBatchAnalysisFailureIsExplicitAndRetryable(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	batchFixture(t, s, "batch", "one", "completed", 1, 2, 0)
 	batchFixture(t, s, "batch", "two", "completed", 2, 2, 0)
-	filename := filepath.Join(s.config.DataDir, "runs", "two", "events.jsonl")
+	filename := filepath.Join(s.config.DataDir, currentRunsDirectory, "two", "events.jsonl")
 	if err := os.WriteFile(filename, []byte("invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

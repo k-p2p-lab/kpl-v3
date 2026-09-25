@@ -21,6 +21,9 @@ const (
 )
 
 type state struct {
+	archiveQueueMu          sync.Mutex
+	archiveVersions         map[string]uint64
+	archivePending          map[string]bool
 	mu                      sync.RWMutex
 	persistMu               sync.Mutex
 	agentSettingsMu         sync.Mutex
@@ -440,7 +443,7 @@ func (s *state) persistEventsLocked(runID string, events []model.TraceEvent) err
 		}
 	}
 	runID = safeName(runID)
-	dir := filepath.Join(s.dataDir, "runs", runID)
+	dir := filepath.Join(s.dataDir, currentRunsDirectory, runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create run directory: %w", err)
 	}
@@ -461,7 +464,11 @@ func (s *state) persistEventsLocked(runID string, events []model.TraceEvent) err
 		}
 		return fmt.Errorf("write event: %w", err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	s.markRunArchiveDirty(runID)
+	return nil
 }
 
 // Narrow REST endpoints must not materialize or sort the entire Peer history.

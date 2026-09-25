@@ -131,7 +131,11 @@ func (s *Server) persistAnalysisJob(status analysisJobStatus) error {
 		return err
 	}
 	defer root.Close()
-	return writeAnalysisJSON(root, analysisJobFile, status)
+	if err := writeAnalysisJSON(root, analysisJobFile, status); err != nil {
+		return err
+	}
+	s.state.markRunArchiveDirty(status.RunID)
+	return nil
 }
 
 // Completed results survive restart. In-flight jobs are explicitly interrupted,
@@ -257,7 +261,7 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		snapshot, err := s.captureResultFiles(job.status.RunID, false)
+		snapshot, err := s.captureResultFilesContext(ctx, job.status.RunID, false)
 		if err != nil {
 			return err
 		}
@@ -398,6 +402,7 @@ func (s *Server) saveAnalysisJob(ctx context.Context, job *analysisJob, analysis
 		return err
 	}
 	job.status = completed
+	s.state.markRunArchiveDirty(job.status.RunID)
 	return nil
 }
 
@@ -476,7 +481,11 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 		if strings.HasSuffix(r.URL.Path, "/summary") {
 			name = analysisSummaryFile
 		}
-		return openResultFile(root, name)
+		manifest, err := readRunArchive(root, id)
+		if err != nil {
+			return resultFile{}, err
+		}
+		return captureRunSource(root, manifest, name)
 	}()
 	if err != nil {
 		code := http.StatusUnprocessableEntity
@@ -489,7 +498,18 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 		writeError(w, code, err.Error())
 		return
 	}
-	defer file.file.Close()
+	captured := []resultFile{file}
+	release, resolveErr := s.resolveArchivedFiles(r.Context(), id, captured)
+	file = captured[0]
+	if resolveErr != nil {
+		file.close()
+		writeError(w, http.StatusServiceUnavailable, "archive is unavailable; retry when storage reconnects")
+		return
+	}
+	if release != nil {
+		defer release()
+	}
+	defer file.close()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-analysis.json"`, id))
 	http.ServeContent(w, r, id+"-analysis.json", file.info.ModTime(), file.file)

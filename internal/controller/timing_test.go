@@ -154,7 +154,7 @@ func TestTimingLifecyclePublishesAndRetiresLiveEstimates(t *testing.T) {
 		if exp.Timing == nil || exp.Timing.RemainingSeconds < 3500*float64(i+1) {
 			t.Fatalf("missing queued ETA: %+v", exp)
 		}
-		stored, err := os.ReadFile(filepath.Join(s.config.DataDir, "runs", exp.ID, "experiment.json"))
+		stored, err := os.ReadFile(filepath.Join(s.config.DataDir, currentRunsDirectory, exp.ID, "experiment.json"))
 		if err != nil {
 			t.Fatal(err)
 		}

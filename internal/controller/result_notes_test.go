@@ -47,7 +47,7 @@ func TestResultNotesPersistIndependentlyAndExport(t *testing.T) {
 	if note.Text != text || note.Revision == "0" || note.UpdatedAt == nil {
 		t.Fatalf("saved note: %+v", note)
 	}
-	unchanged, _ := os.ReadFile(filepath.Join(server.config.DataDir, "runs", experiment.ID, "experiment.json"))
+	unchanged, _ := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "experiment.json"))
 	if !bytes.Equal(original, unchanged) {
 		t.Fatal("note changed experiment metadata")
 	}
@@ -93,7 +93,7 @@ func TestResultNotesPersistIndependentlyAndExport(t *testing.T) {
 		t.Fatalf("source size does not include note: got %d want %d", *results[0].SourceBytes, total)
 	}
 	// An unreadable experiment must not hide its independently saved note.
-	if err := os.WriteFile(filepath.Join(server.config.DataDir, "runs", experiment.ID, "experiment.json"), []byte("broken"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "experiment.json"), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	list = resultRequest(restarted, "GET", "/api/v1/results")
@@ -221,7 +221,7 @@ func TestResultNoteValidationAndDeletedResult(t *testing.T) {
 			}
 		}
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", "run-validation")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, "run-validation")); !os.IsNotExist(err) {
 		t.Fatal("note recreated deleted result")
 	}
 }
@@ -231,7 +231,7 @@ func TestResultNoteRejectsUnsafeOrCorruptStorage(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 			resultFixture(t, server, "run-storage", "completed", time.Now())
-			notePath := filepath.Join(server.config.DataDir, "runs", "run-storage", resultNoteFile)
+			notePath := filepath.Join(server.config.DataDir, currentRunsDirectory, "run-storage", resultNoteFile)
 			outside := filepath.Join(t.TempDir(), "outside.json")
 			if err := os.WriteFile(outside, []byte("untouched"), 0600); err != nil {
 				t.Fatal(err)

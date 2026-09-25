@@ -103,6 +103,7 @@ func (s *Server) resultNote(id string, text *string, revision string) (resultNot
 	if err := writeAnalysisJSON(root, resultNoteFile, note); err != nil {
 		return resultNote{}, err
 	}
+	s.state.markRunArchiveDirty(id)
 	return note, nil
 }
 

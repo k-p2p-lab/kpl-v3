@@ -42,7 +42,7 @@ func TestResultDeleteRequiresAuthenticationAndRejectsDownloadLease(t *testing.T)
 	if response := request(); response.Code != http.StatusNoContent {
 		t.Fatalf("delete after snapshot status=%d: %s", response.Code, response.Body)
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", experiment.ID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)); !os.IsNotExist(err) {
 		t.Fatalf("saved directory remains: %v", err)
 	}
 	server.resultArchiveMu.Lock()
@@ -73,7 +73,7 @@ func TestResultDeleteBlocksRunningQueuedAndFinalizingRuns(t *testing.T) {
 			if err := server.deleteSavedResult(experiment.ID); !errors.Is(err, errResultBusy) {
 				t.Fatalf("busy result delete error=%v", err)
 			}
-			if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", experiment.ID, "experiment.json")); err != nil {
+			if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "experiment.json")); err != nil {
 				t.Fatalf("busy result was altered: %v", err)
 			}
 		})
@@ -96,7 +96,7 @@ func TestResultDeletionTombstonePreventsLateEventResurrectionAfterRestart(t *tes
 			t.Fatal(err)
 		}
 		current.updateExperiment(experiment.ID, func(run *model.Experiment) { run.State = "running" })
-		if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", experiment.ID)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)); !os.IsNotExist(err) {
 			t.Fatalf("late telemetry recreated deleted result: %v", err)
 		}
 		if response := resultRequest(current, http.MethodGet, "/api/v1/experiments/"+experiment.ID+"/download"); response.Code != http.StatusNotFound {
@@ -124,14 +124,14 @@ func TestResultDeletionRejectsUnsafePathsAndDoesNotFollowLinks(t *testing.T) {
 	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(server.config.DataDir, "runs", "run-link")
+	link := filepath.Join(server.config.DataDir, currentRunsDirectory, "run-link")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := server.deleteSavedResult("run-link"); err == nil {
 		t.Fatal("accepted symlinked result directory")
 	}
-	if err := os.Symlink(outside, filepath.Join(server.config.DataDir, "runs", "run-safe", "extra-link")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(server.config.DataDir, currentRunsDirectory, "run-safe", "extra-link")); err != nil {
 		t.Fatal(err)
 	}
 	if err := server.deleteSavedResult("run-safe"); err != nil {
@@ -163,7 +163,7 @@ func TestQueuedSavedResultBecomesInterruptedAfterControllerRestart(t *testing.T)
 			t.Fatal("result list performed a cold archive measurement")
 		}
 	}
-	if data, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", experiment.ID, "experiment.json")); err != nil || string(data) != string(original) {
+	if data, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "experiment.json")); err != nil || string(data) != string(original) {
 		t.Fatal("restart listing rewrote queued metadata")
 	}
 }

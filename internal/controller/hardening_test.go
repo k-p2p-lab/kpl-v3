@@ -25,7 +25,7 @@ func TestEventBatchRejectsTrailingJSONBeforePersistence(t *testing.T) {
 			t.Errorf("invalid body accepted: status=%d body=%s", response.Code, response.Body.String())
 		}
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", "invalid-body", "events.jsonl")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, "invalid-body", "events.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("invalid request persisted data: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestEventBatchRejectsUnboundedCanonicalEventBeforePersistence(t *testing.T)
 	if response.Code != 413 {
 		t.Errorf("unreadable event accepted: status=%d", response.Code)
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", "oversize", "events.jsonl")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, "oversize", "events.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("rejected batch partially persisted: %v", err)
 	}
 }

@@ -78,7 +78,7 @@ func TestResultDeletionDuringArchiveMeasurement(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("archive request did not release its resources")
 			}
-			if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", experiment.ID)); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)); !os.IsNotExist(err) {
 				t.Fatalf("deleted directory remains: %v", err)
 			}
 			server.resultArchiveMu.Lock()

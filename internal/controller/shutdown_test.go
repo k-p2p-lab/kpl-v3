@@ -83,7 +83,7 @@ func TestControllerShutdownWaitsForCleanupAndFinalState(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Controller failed to finish after cleanup, including the open SSE request")
 	}
-	data, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", experiment.ID, "experiment.json"))
+	data, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "experiment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,17 +26,22 @@ import (
 )
 
 type ServerConfig struct {
-	User           string
-	Password       string
-	Listen         string
-	DataDir        string
-	Token          string
-	MetricsURL     string
-	PrometheusPort int
-	GrafanaPort    int
+	RunMinFreeBytes uint64
+	User            string
+	Password        string
+	Listen          string
+	DataDir         string
+	Token           string
+	MetricsURL      string
+	PrometheusPort  int
+	GrafanaPort     int
 }
 
 type Server struct {
+	archiveQueueLoaded     bool
+	archiveLastScan        time.Time
+	archiveChecking        bool
+	archiveCheckStartedAt  time.Time
 	webLogs                *webLogs
 	auth                   *browserAuth
 	config                 ServerConfig
@@ -50,6 +55,12 @@ type Server struct {
 	nodeSeq                atomic.Uint64
 	repeatBatches          map[string]*repeatBatch
 	resultDownloads        map[string]int
+	resultReadPins         map[string]int
+	archiveReadSlots       chan struct{}
+	archiveStatusMu        sync.RWMutex
+	archiveCheckedAt       time.Time
+	archiveError           string
+	archiveIOCheck         func()
 	resultArchiveMu        sync.Mutex
 	resultArchives         map[string]resultArchiveInfo
 	resultArchiveFlights   map[string]*resultArchiveFlight
@@ -98,6 +109,8 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger:                 logger,
 		cancels:                make(map[string]context.CancelFunc),
 		resultArchives:         make(map[string]resultArchiveInfo),
+		resultReadPins:         make(map[string]int),
+		archiveReadSlots:       make(chan struct{}, 2),
 		resultArchiveFlights:   make(map[string]*resultArchiveFlight),
 		resultArchiveSlots:     make(chan struct{}, resultArchiveMeasureLimit),
 		analysisSlots:          make(chan struct{}, 1),
@@ -1291,7 +1304,7 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 }
 
 func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error {
-	dir := filepath.Join(s.config.DataDir, "runs", safeName(experiment.ID))
+	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, safeName(experiment.ID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create run directory: %w", err)
 	}
@@ -1302,7 +1315,7 @@ func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error 
 }
 
 func (s *Server) persistExperiment(experiment model.Experiment) error {
-	dir := filepath.Join(s.config.DataDir, "runs", safeName(experiment.ID))
+	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, safeName(experiment.ID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create run directory: %w", err)
 	}
@@ -1310,7 +1323,11 @@ func (s *Server) persistExperiment(experiment model.Experiment) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(dir, "experiment.json"), metadata, 0o644)
+	if err := writeFileAtomic(filepath.Join(dir, "experiment.json"), metadata, 0644); err != nil {
+		return err
+	}
+	s.state.markRunArchiveDirty(experiment.ID)
+	return nil
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

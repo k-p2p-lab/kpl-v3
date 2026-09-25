@@ -59,7 +59,7 @@ func TestOperationContinueRecordsFailuresAndAttemptsRemainingNodes(t *testing.T)
 				if event.Type != "phase-operation-failed" || event.NodeID != "node-a" || event.RunID != "run" || event.Fields["action"] != action || event.Fields["job"] != "job-1" {
 					t.Fatalf("failure event = %+v", event)
 				}
-				data, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", "run", "events.jsonl"))
+				data, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, "run", "events.jsonl"))
 				if err != nil || !strings.Contains(string(data), "peer expired") {
 					t.Fatalf("persisted error = %v, events = %s", err, data)
 				}

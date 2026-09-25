@@ -1386,6 +1386,16 @@ function renderSavedResults() {
   updateSavedResultsList(savedResultsMarkup(visible));
 }
 
+function resultStorageMarkup(run) {
+  const labels = {local: "Local", pending: "Archive pending", archiving: "Archiving", archived: "Archived"};
+  const status = run.storage?.state;
+  if (!labels[status]) return "";
+  const help = status === "archived" ? "Source logs are stored in the archive; a small local index keeps results available."
+    : status === "local" ? "Recording locally. Results are archived after recording stops."
+    : "Local data is retained until the archive copy is verified. Transfers pause between chunks while an experiment runs.";
+  return `<span class="result-storage ${escapeHTML(status)}" title="${escapeHTML(help)}">${labels[status]}</span>`;
+}
+
 function resultNoteMarkup(run) {
   return `<div class="result-note"><button class="result-note-button secondary-button" type="button" data-result-note="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${run.note ? "Edit" : "Add"} note: ${run.name || run.id}`)}">${run.note ? "Edit note" : "Add note"}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</div>`;
 }
@@ -1396,7 +1406,7 @@ function savedResultRow(run) {
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}</span>${resultNoteMarkup(run)}</td>
+    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span></td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
@@ -2172,6 +2182,7 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
+globalThis.KPLResultStorage?.init({ api });
 globalThis.KPLResultNotes?.init({ api, formatTime: formatResultTime, onSaved: () => {
   showToast("Note saved.");
   void refreshSavedResults();

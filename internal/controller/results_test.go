@@ -31,7 +31,7 @@ func resultFixture(t *testing.T, server *Server, id, state string, started time.
 	if err := server.persistManifest(experiment, []byte("version: 3\nname: original scenario\n")); err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", id, "experiment.json"))
+	metadata, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, id, "experiment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +76,10 @@ func TestResultsListReadsDiskAfterRestartAndReportsUnreadableMetadata(t *testing
 	_, original := resultFixture(t, server, "run-old", "running", started)
 	resultFixture(t, server, "run-new", "completed", started.Add(time.Hour))
 	resultFixture(t, server, "run-corrupt", "completed", started)
-	if err := os.WriteFile(filepath.Join(server.config.DataDir, "runs", "run-corrupt", "experiment.json"), []byte("broken json"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(server.config.DataDir, currentRunsDirectory, "run-corrupt", "experiment.json"), []byte("broken json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(server.config.DataDir, "runs", "run-missing"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(server.config.DataDir, currentRunsDirectory, "run-missing"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// A new Controller has no active runs, even though old metadata says running.
@@ -103,7 +103,7 @@ func TestResultsListReadsDiskAfterRestartAndReportsUnreadableMetadata(t *testing
 	if !strings.Contains(logs.String(), "run-corrupt") || !strings.Contains(logs.String(), "run-missing") {
 		t.Fatalf("missing warnings: %s", logs.String())
 	}
-	unchanged, _ := os.ReadFile(filepath.Join(server.config.DataDir, "runs", "run-old", "experiment.json"))
+	unchanged, _ := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, "run-old", "experiment.json"))
 	if !bytes.Equal(original, unchanged) {
 		t.Fatal("listing changed stored metadata")
 	}
@@ -112,7 +112,7 @@ func TestResultsListReadsDiskAfterRestartAndReportsUnreadableMetadata(t *testing
 func TestResultDownloadIncludesFullPersistedFilesAndOriginalInterruptedState(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir(), Token: "secret"}, nil)
 	_, original := resultFixture(t, server, "run-export", "running", time.Now().UTC())
-	dir := filepath.Join(server.config.DataDir, "runs", "run-export")
+	dir := filepath.Join(server.config.DataDir, currentRunsDirectory, "run-export")
 	events := []byte(strings.Repeat("{\"kind\":\"deliver\"}\n", recentEventLimit+200))
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), events, 0o644); err != nil {
 		t.Fatal(err)
@@ -588,7 +588,7 @@ func TestResultSnapshotPinsFileDescriptorsAndEventLengths(t *testing.T) {
 	if err := server.state.appendEvents(first); err != nil {
 		t.Fatal(err)
 	}
-	eventPath := filepath.Join(server.config.DataDir, "runs", experiment.ID, "events.jsonl")
+	eventPath := filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "events.jsonl")
 	originalEvents, err := os.ReadFile(eventPath)
 	if err != nil {
 		t.Fatal(err)
@@ -673,7 +673,7 @@ func TestResultDownloadRejectsUnreadableFilesBeforeZIPHeaders(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			server := New(ServerConfig{DataDir: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			resultFixture(t, server, "run-test", "completed", time.Now().UTC())
-			dir := filepath.Join(server.config.DataDir, "runs", "run-test")
+			dir := filepath.Join(server.config.DataDir, currentRunsDirectory, "run-test")
 			metadata := filepath.Join(dir, "experiment.json")
 			var err error
 			switch failure {
@@ -704,7 +704,7 @@ func TestResultDownloadRejectsUnreadableFilesBeforeZIPHeaders(t *testing.T) {
 func TestResultSnapshotTruncationCannotProduceSuccessfulZIP(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	resultFixture(t, server, "run-truncated", "completed", time.Now().UTC())
-	path := filepath.Join(server.config.DataDir, "runs", "run-truncated", "events.jsonl")
+	path := filepath.Join(server.config.DataDir, currentRunsDirectory, "run-truncated", "events.jsonl")
 	if err := os.WriteFile(path, []byte("{\"kind\":\"deliver\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +810,7 @@ func TestResultDownloadRejectsSymlinksAndUnsafeIDs(t *testing.T) {
 			if err := os.WriteFile(secret, []byte("PRIVATE CONTENT"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			runs := filepath.Join(server.config.DataDir, "runs")
+			runs := filepath.Join(server.config.DataDir, currentRunsDirectory)
 			path := filepath.Join(runs, "run-safe", target)
 			if target == "run" {
 				path = filepath.Join(runs, "run-link")

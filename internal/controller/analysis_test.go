@@ -26,7 +26,7 @@ func analysisWriteLines[T any](t *testing.T, server *Server, id, name string, va
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(server.config.DataDir, "runs", id, name), data.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(server.config.DataDir, currentRunsDirectory, id, name), data.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -169,7 +169,7 @@ func TestResultAnalysisErrorsAndCapturedFileBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer snapshot.close()
-	file, err := os.OpenFile(filepath.Join(server.config.DataDir, "runs", "empty", "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(filepath.Join(server.config.DataDir, currentRunsDirectory, "empty", "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestAnalysisObservationsPersistExportAndStopAfterDeletion(t *testing.T) {
 	if err := server.state.recordAnalysisObservation(run.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs", run.ID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, run.ID)); !os.IsNotExist(err) {
 		t.Fatalf("recreated deleted result: %v", err)
 	}
 	if got := resultRequest(server, http.MethodGet, "/api/v1/experiments/observed/analysis").Code; got != 404 {

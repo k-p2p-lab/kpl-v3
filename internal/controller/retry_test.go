@@ -45,12 +45,12 @@ func TestRetryRestartsFailedIterationAndPreservesCompletedResults(t *testing.T) 
 			}
 			before := map[string][]byte{}
 			for _, run := range runs {
-				p := filepath.Join(f.server.config.DataDir, "runs", run.ID, "experiment.json")
+				p := filepath.Join(f.server.config.DataDir, currentRunsDirectory, run.ID, "experiment.json")
 				before[p], _ = os.ReadFile(p)
 			}
 			// A failed attempt's partial log must never enter the new attempt
 			// or prevent analyzing the completed retry.
-			oldLog := filepath.Join(f.server.config.DataDir, "runs", runs[1].ID, "events.jsonl")
+			oldLog := filepath.Join(f.server.config.DataDir, currentRunsDirectory, runs[1].ID, "events.jsonl")
 			if err := os.WriteFile(oldLog, []byte("partial old failure log\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -307,11 +307,11 @@ func TestRetryRejectsBusyOrInvalidBatchBeforeReservation(t *testing.T) {
 			case "shutdown":
 				f.server.shuttingDown = true
 			case "bad-scenario":
-				if err := os.WriteFile(filepath.Join(f.server.config.DataDir, "runs", runs[2].ID, "scenario.yaml"), []byte("invalid scenario"), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(f.server.config.DataDir, currentRunsDirectory, runs[2].ID, "scenario.yaml"), []byte("invalid scenario"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			case "missing-scenario":
-				if err := os.Remove(filepath.Join(f.server.config.DataDir, "runs", runs[2].ID, "scenario.yaml")); err != nil {
+				if err := os.Remove(filepath.Join(f.server.config.DataDir, currentRunsDirectory, runs[2].ID, "scenario.yaml")); err != nil {
 					t.Fatal(err)
 				}
 			case "duplicate-iteration":
@@ -320,7 +320,7 @@ func TestRetryRejectsBusyOrInvalidBatchBeforeReservation(t *testing.T) {
 			if _, err := f.server.RetryScenarioBatch(context.Background(), runs[0].BatchID); err == nil {
 				t.Fatal("invalid retry accepted")
 			}
-			entries, err := os.ReadDir(filepath.Join(f.server.config.DataDir, "runs"))
+			entries, err := os.ReadDir(filepath.Join(f.server.config.DataDir, currentRunsDirectory))
 			if err != nil || len(entries) != 3 {
 				t.Fatalf("partial retry reservation: %v %v", entries, err)
 			}

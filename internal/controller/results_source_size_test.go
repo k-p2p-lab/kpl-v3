@@ -33,7 +33,7 @@ func readSourceSizeResult(t *testing.T, server *Server) savedResult {
 func TestSavedResultSourceBytesUseStatsWithoutReadingLargeLogs(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	experiment, _ := resultFixture(t, server, "large-source", "completed", time.Now().UTC())
-	dir := filepath.Join(server.config.DataDir, "runs", experiment.ID)
+	dir := filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)
 	// A large sparse, invalid JSONL log is still sizeable without decoding it,
 	// walking its contents, reconstructing metrics, or running a ZIP encoder.
 	file, err := os.Create(filepath.Join(dir, "events.jsonl"))
@@ -89,7 +89,7 @@ func TestSourceBytesAvailableForRunningQueuedInterruptedAndUnreadableResults(t *
 			if state == "running" || state == "queued" {
 				server.state.experiments[experiment.ID] = model.Experiment{ID: experiment.ID, State: state}
 			}
-			dir := filepath.Join(server.config.DataDir, "runs", experiment.ID)
+			dir := filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)
 			if state == "unreadable" {
 				if err := os.WriteFile(filepath.Join(dir, "experiment.json"), []byte("invalid metadata"), 0600); err != nil {
 					t.Fatal(err)
@@ -112,7 +112,7 @@ func TestSourceBytesAvailableForRunningQueuedInterruptedAndUnreadableResults(t *
 func TestSourceSizeDoesNotFollowLinksOrTrustStoredSize(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	experiment, _ := resultFixture(t, server, "source", "completed", time.Now().UTC())
-	dir := filepath.Join(server.config.DataDir, "runs", experiment.ID)
+	dir := filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID)
 	metadata := []byte(`{"id":"source","state":"completed","sourceBytes":1}`)
 	if err := os.WriteFile(filepath.Join(dir, "experiment.json"), metadata, 0600); err != nil {
 		t.Fatal(err)

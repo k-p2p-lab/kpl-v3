@@ -55,6 +55,11 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	// Do not wait for filesystem syscalls on a disconnected NAS during shutdown.
+	// Local logs and the archive manifest make unfinished transfers restartable.
+	archiveCtx, cancelArchive := context.WithCancel(ctx)
+	defer cancelArchive()
+	go s.runArchiveLoop(archiveCtx)
 	// Agents must still be able to deliver final Peer events after run cancellation.
 	ingestCtx, cancelIngest := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelIngest()
@@ -158,6 +163,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/scenarios/", s.handleScenarioAction)
 	mux.HandleFunc("/api/v1/experiments", s.handleExperiments(ctx))
 	mux.HandleFunc("/api/v1/results", s.handleResults)
+	mux.HandleFunc("/api/v1/result-storage", s.handleResultStorage)
 	mux.HandleFunc("/api/v1/results/", s.handleResultAction)
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/resume", s.handleBatchResume(ctx, false))
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/retry", s.handleBatchResume(ctx, true))
@@ -580,7 +586,11 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 			}
 			experiment, err := s.StartScenarioRepeated(ctx, raw, repetitions)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
+				status := http.StatusBadRequest
+				if errors.Is(err, errRunStorageFull) {
+					status = http.StatusInsufficientStorage
+				}
+				writeError(w, status, err.Error())
 				return
 			}
 			writeJSON(w, http.StatusAccepted, experiment)

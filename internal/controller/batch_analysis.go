@@ -307,7 +307,7 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				snapshot, err := s.captureResultFiles(member.ID, false)
+				snapshot, err := s.captureResultFilesContext(ctx, member.ID, false)
 				if err != nil {
 					return fmt.Errorf("run %s: %w", member.ID, err)
 				}

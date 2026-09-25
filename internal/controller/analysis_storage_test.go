@@ -85,7 +85,7 @@ func newAnalysisStorageFixture(t *testing.T, batch bool) analysisStorageFixture 
 			t.Fatal(err)
 		}
 		f.path = "/api/v1/analysis-jobs/run"
-		f.artifact = filepath.Join(s.config.DataDir, "runs", "run", analysisResultFile)
+		f.artifact = filepath.Join(s.config.DataDir, currentRunsDirectory, "run", analysisResultFile)
 		f.save = func(value any) error {
 			return s.saveAnalysisJob(ctx, f.job, value, map[string]string{"summary": "saved"})
 		}

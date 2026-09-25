@@ -43,6 +43,9 @@ func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repet
 	if repetitions < 1 || repetitions > maxScenarioRepetitions {
 		return model.Experiment{}, fmt.Errorf("repetitions must be an integer between 1 and %d", maxScenarioRepetitions)
 	}
+	if err := s.checkRunStorage(); err != nil {
+		return model.Experiment{}, err
+	}
 	spec, err := scenario.Parse(raw)
 	if err != nil {
 		return model.Experiment{}, err
@@ -119,10 +122,10 @@ func (s *Server) reserveRepeatedResultsLocked(experiments []model.Experiment, ra
 		return err
 	}
 	defer data.Close()
-	if err := data.Mkdir("runs", 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := data.Mkdir(currentRunsDirectory, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	runs, err := openResultDirectory(data, "runs")
+	runs, err := openResultDirectory(data, currentRunsDirectory)
 	if err != nil {
 		return err
 	}
@@ -192,8 +195,15 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 			return
 		}
 		if experiment.State == "queued" {
+			if err := s.waitRunStorage(ctx, experiment.ID); err != nil {
+				s.cancelQueuedIterations(experiments[index:], "Cannot start next run: "+err.Error())
+				return
+			}
+		}
+		if experiment.State == "queued" {
 			s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 				current.State = "running"
+				current.PhaseName = ""
 				current.StartedAt = time.Now().UTC()
 			})
 			s.state.mu.RLock()

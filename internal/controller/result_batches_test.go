@@ -51,7 +51,7 @@ func TestResultBatchDeletionRemovesOnlyItsRunsAndMean(t *testing.T) {
 		t.Fatalf("wrong deletion scope: %+v", body)
 	}
 	for _, id := range body.DeletedIDs {
-		if _, err := os.Stat(filepath.Join(s.config.DataDir, "runs", id)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(s.config.DataDir, currentRunsDirectory, id)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("run %s remains: %v", id, err)
 		}
 		if _, err := os.Stat(filepath.Join(s.config.DataDir, ".deleted-results", id)); err != nil {
@@ -61,7 +61,7 @@ func TestResultBatchDeletionRemovesOnlyItsRunsAndMean(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.config.DataDir, "batch-analyses", "batch")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("batch mean remains: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(s.config.DataDir, "runs", "unrelated", "experiment.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.config.DataDir, currentRunsDirectory, "unrelated", "experiment.json")); err != nil {
 		t.Fatalf("another group was changed: %v", err)
 	}
 	if len(s.state.experiments) != 0 || len(s.state.runMetrics) != 0 || len(s.state.events) != 1 || s.state.events[0].RunID != "unrelated" {
@@ -93,7 +93,7 @@ func TestResultBatchDeletionPreflightsEveryMember(t *testing.T) {
 					s.state.experiments["last"] = run
 				}
 				if reason == "unreadable-active" {
-					if err := os.WriteFile(filepath.Join(s.config.DataDir, "runs", "last", "experiment.json"), []byte("invalid"), 0600); err != nil {
+					if err := os.WriteFile(filepath.Join(s.config.DataDir, currentRunsDirectory, "last", "experiment.json"), []byte("invalid"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -112,7 +112,7 @@ func TestResultBatchDeletionPreflightsEveryMember(t *testing.T) {
 			if response.Code != http.StatusConflict {
 				t.Fatalf("busy deletion: %d %s", response.Code, response.Body)
 			}
-			for _, relative := range []string{"runs/first/experiment.json", "runs/last/experiment.json", "batch-analyses/batch/job.json"} {
+			for _, relative := range []string{"current-run/first/experiment.json", "current-run/last/experiment.json", "batch-analyses/batch/job.json"} {
 				if _, err := os.Stat(filepath.Join(s.config.DataDir, relative)); err != nil {
 					t.Fatalf("preflight altered %s: %v", relative, err)
 				}
@@ -147,7 +147,7 @@ func TestResultBatchDeletionCancelsAnalysesWithoutResurrection(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("deleted analyses did not stop")
 	}
-	for _, relative := range []string{"runs/one", "runs/two", "batch-analyses/batch"} {
+	for _, relative := range []string{"current-run/one", "current-run/two", "batch-analyses/batch"} {
 		if _, err := os.Stat(filepath.Join(s.config.DataDir, relative)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("analysis recreated %s: %v", relative, err)
 		}
@@ -182,7 +182,7 @@ func TestResultBatchDeletionHandlesOrphanMeanAndUnsafePaths(t *testing.T) {
 	if _, err := s.deleteSavedBatch(context.Background(), "linked"); err == nil {
 		t.Fatal("accepted symlinked mean directory")
 	}
-	if _, err := os.Stat(filepath.Join(s.config.DataDir, "runs", "keep", "experiment.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.config.DataDir, currentRunsDirectory, "keep", "experiment.json")); err != nil {
 		t.Fatalf("unsafe mean changed the run: %v", err)
 	}
 }

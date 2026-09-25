@@ -139,7 +139,7 @@ func TestWholeRunMetricsDedupPersistenceAndArchiveRebuild(t *testing.T) {
 	if len(snapshot.Events) != 300 || snapshot.Metrics.RunID != "run" || snapshot.Metrics.Published != 1 || snapshot.Metrics.EligibleDeliveries != 500 || snapshot.Metrics.LatencySamples != 500 {
 		t.Fatalf("whole-run history lost: %+v", snapshot.Metrics)
 	}
-	data, err := os.ReadFile(filepath.Join(s.dataDir, "runs", "run", "events.jsonl"))
+	data, err := os.ReadFile(filepath.Join(s.dataDir, currentRunsDirectory, "run", "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

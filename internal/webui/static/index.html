@@ -338,6 +338,7 @@
           <details class="results-guide"><summary>About results, retries, and downloads</summary>
             <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
           </details>
+          <p class="results-storage-status" id="resultStorageStatus" role="status" aria-live="polite"></p>
           <p class="results-status" id="savedResultsStatus" role="status" aria-live="polite">Loading saved results…</p>
           <div id="savedResultsTable" hidden>
             <div id="savedResultsRows" class="saved-results-list"></div>
@@ -538,6 +539,7 @@
   <script src="/batch-analysis.js" defer></script>
   <script src="/result-images.js" defer></script>
   <script src="/result-notes.js" defer></script>
+  <script src="/result-storage.js" defer></script>
   <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
   <script src="/app.js" defer></script>

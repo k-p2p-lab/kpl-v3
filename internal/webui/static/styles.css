@@ -730,3 +730,8 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 #resultNoteConflict { min-width: 0; }
 #resultNoteConflict label { display: block; margin-bottom: .4rem; }
 #resultNoteText[aria-invalid="true"] { border-color: var(--red); }
+
+.result-storage { font-size: .7rem; padding: .05rem .4rem; border: 1px solid var(--line); border-radius: .35rem; color: var(--muted); white-space: nowrap; }
+.result-storage:is(.pending,.archiving) { color: var(--amber); border-color: rgba(242,183,76,.3); }
+.results-storage-status { margin: 0; padding: .4rem 1.2rem .75rem; color: var(--muted); font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
+.results-storage-status[data-warning="true"] { color: var(--amber); }

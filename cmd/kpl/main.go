@@ -59,6 +59,15 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
 	listen := flags.String("listen", ":8080", "HTTP listen address")
 	dataDir := flags.String("data-dir", "data", "experiment data directory")
+	minimumFree := uint64(1 << 30)
+	if raw := os.Getenv("KPL_RUN_MIN_FREE_BYTES"); raw != "" {
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid KPL_RUN_MIN_FREE_BYTES: %w", err)
+		}
+		minimumFree = value
+	}
+	runMinFree := flags.Uint64("run-min-free-bytes", minimumFree, "minimum local free bytes before starting each run (0 disables admission guard)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusPort := flags.String("prometheus-port", os.Getenv("PROMETHEUS_PORT"), "public Prometheus port advertised to the Dashboard (default 9090)")
@@ -75,13 +84,14 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
-		Listen:         *listen,
-		DataDir:        *dataDir,
-		User:           user,
-		Password:       password,
-		MetricsURL:     *metricsURL,
-		PrometheusPort: parsedPrometheusPort,
-		GrafanaPort:    parsedGrafanaPort,
+		Listen:          *listen,
+		DataDir:         *dataDir,
+		RunMinFreeBytes: *runMinFree,
+		User:            user,
+		Password:        password,
+		MetricsURL:      *metricsURL,
+		PrometheusPort:  parsedPrometheusPort,
+		GrafanaPort:     parsedGrafanaPort,
 	}, logger)
 	return server.Run(ctx)
 }

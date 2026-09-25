@@ -73,7 +73,7 @@ func (s *Server) handleResultAnalysis(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusGatewayTimeout, "analysis timed out waiting for another analysis; try one result at a time")
 		return
 	}
-	snapshot, err := s.captureResultFiles(id, false)
+	snapshot, err := s.captureResultFilesContext(ctx, id, false)
 	if err != nil {
 		if errors.Is(err, errResultNotFound) {
 			http.NotFound(w, r)
@@ -128,11 +128,11 @@ func reportAnalysisProgress(ctx context.Context, phase string, bytes int64) {
 }
 
 func scanAnalysisFile(ctx context.Context, file resultFile, consume func([]byte) error) error {
-	if file.file == nil {
+	if file.file == nil && len(file.parts) == 0 {
 		return nil
 	}
 	reportAnalysisProgress(ctx, file.name, 0)
-	reader := analysisProgressReader{Reader: io.NewSectionReader(file.file, 0, file.size), report: func(n int64) { reportAnalysisProgress(ctx, file.name, n) }}
+	reader := analysisProgressReader{Reader: file.reader(), report: func(n int64) { reportAnalysisProgress(ctx, file.name, n) }}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	line := 0

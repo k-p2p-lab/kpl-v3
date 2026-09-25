@@ -103,7 +103,7 @@ func (f *resumeFixture) failedBatch(t *testing.T, count int) []model.Experiment 
 
 func persistedExperiment(t *testing.T, server *Server, id string) model.Experiment {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", id, "experiment.json"))
+	raw, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, id, "experiment.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestResumePreservesFailedResultAndRunsOnlyRemainingIterations(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			f := newResumeFixture(t)
 			runs := f.failedBatch(t, 3)
-			failedPath := filepath.Join(f.server.config.DataDir, "runs", runs[0].ID, "experiment.json")
+			failedPath := filepath.Join(f.server.config.DataDir, currentRunsDirectory, runs[0].ID, "experiment.json")
 			before, _ := os.ReadFile(failedPath)
 			server := f.server
 			if restart {
@@ -290,7 +290,7 @@ func TestResumeRejectsInvalidRemainderWithoutChangingEarlierMembers(t *testing.T
 		t.Run(file, func(t *testing.T) {
 			f := newResumeFixture(t)
 			runs := f.failedBatch(t, 3)
-			target := filepath.Join(f.server.config.DataDir, "runs", runs[2].ID, file)
+			target := filepath.Join(f.server.config.DataDir, currentRunsDirectory, runs[2].ID, file)
 			if err := os.WriteFile(target, []byte("unexpected prior data"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -319,7 +319,7 @@ func TestResumePreservesSuccessfulRunsBeforeTheFailure(t *testing.T) {
 	}
 	before := make(map[string][]byte)
 	for _, run := range runs[:2] {
-		raw, err := os.ReadFile(filepath.Join(f.server.config.DataDir, "runs", run.ID, "experiment.json"))
+		raw, err := os.ReadFile(filepath.Join(f.server.config.DataDir, currentRunsDirectory, run.ID, "experiment.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,7 +334,7 @@ func TestResumePreservesSuccessfulRunsBeforeTheFailure(t *testing.T) {
 	}
 	waitRepetitions(t, f.server)
 	for id, original := range before {
-		raw, err := os.ReadFile(filepath.Join(f.server.config.DataDir, "runs", id, "experiment.json"))
+		raw, err := os.ReadFile(filepath.Join(f.server.config.DataDir, currentRunsDirectory, id, "experiment.json"))
 		if err != nil || !bytes.Equal(raw, original) {
 			t.Fatalf("attempted result changed: %s %v", id, err)
 		}

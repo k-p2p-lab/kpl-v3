@@ -22,7 +22,7 @@ import (
 // failed HTTP retry, event dedup, archive persistence and fresh-Controller replay.
 func TestBandwidthTelemetrySurvivesAgentRetryAndControllerRestart(t *testing.T) {
 	dir := t.TempDir()
-	runDir := filepath.Join(dir, "runs", "run")
+	runDir := filepath.Join(dir, "current-run", "run")
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		t.Fatal(err)
 	}

@@ -70,7 +70,7 @@ func TestRepeatedScenariosReserveUniqueRunsAndContinueWithoutBrowser(t *testing.
 	if first.BatchID != first.ID || first.Iteration != 1 || first.Repetitions != 3 || first.State != "running" {
 		t.Fatalf("first response lost compatibility/batch metadata: %+v", first)
 	}
-	entries, err := os.ReadDir(filepath.Join(server.config.DataDir, "runs"))
+	entries, err := os.ReadDir(filepath.Join(server.config.DataDir, currentRunsDirectory))
 	if err != nil || len(entries) != 3 {
 		t.Fatalf("all iterations must be reserved before admission returns: %v %v", entries, err)
 	}
@@ -84,7 +84,7 @@ func TestRepeatedScenariosReserveUniqueRunsAndContinueWithoutBrowser(t *testing.
 		if index > 0 && experiment.StartedAt.Before(experiments[index-1].FinishedAt) {
 			t.Fatal("iterations overlapped")
 		}
-		manifest, err := os.ReadFile(filepath.Join(server.config.DataDir, "runs", experiment.ID, "scenario.yaml"))
+		manifest, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, experiment.ID, "scenario.yaml"))
 		if err != nil || string(manifest) != scenarioYAML {
 			t.Fatalf("original scenario changed: %q %v", manifest, err)
 		}
@@ -182,7 +182,7 @@ func TestRepetitionValidationAndLegacyYAMLSubmission(t *testing.T) {
 	if len(server.state.snapshot().Experiments) != 0 {
 		t.Fatal("invalid submission reserved experiments")
 	}
-	if _, err := os.Stat(filepath.Join(server.config.DataDir, "runs")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory)); !os.IsNotExist(err) {
 		t.Fatalf("invalid submission wrote result files: %v", err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/experiments", strings.NewReader("name: legacy\nphases: [{action: wait, duration: 1ms}]\n"))

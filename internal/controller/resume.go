@@ -154,15 +154,19 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 			return model.Experiment{}, errBatchNotResumable
 		}
 		if !retry {
+			manifest, err := readRunArchive(root, member.ID)
+			if err != nil {
+				return model.Experiment{}, err
+			}
 			for _, name := range []string{"events.jsonl", "observations.jsonl"} {
-				file, err := openResultFile(root, name)
+				file, err := captureRunSource(root, manifest, name)
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
 				if err != nil {
 					return model.Experiment{}, err
 				}
-				_ = file.file.Close()
+				file.close()
 				if file.size != 0 {
 					return model.Experiment{}, fmt.Errorf("%w: run %s already has observations", errBatchNotResumable, member.ID)
 				}
@@ -213,6 +217,7 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 		// Publish every queued manifest before admitting work. Roll back a partial
 		// write failure; no worker or in-memory state is exposed before this succeeds.
 		for i, experiment := range pending {
+			s.state.markRunArchiveDirty(experiment.ID)
 			if err := writeAnalysisJSON(roots[i], "experiment.json", experiment); err != nil {
 				for j := 0; j < i; j++ {
 					err = errors.Join(err, writeAnalysisJSON(roots[j], "experiment.json", originals[j]))

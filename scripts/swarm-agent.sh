@@ -8,34 +8,55 @@ fail() { printf 'Swarm Agent: %s\n' "$*" >&2; exit 1; }
 : "${KPL_SWARM_NODE_ID:?Swarm node ID is required}"
 : "${KPL_PEER_NETWORK:?Peer overlay network is required}"
 
-# Never advertise the service VIP: it can send a node-specific operation to a
-# different Agent. Select this task's address on the common Peer network.
-addresses=$(docker inspect --type container --format '{{range $name, $net := .NetworkSettings.Networks}}{{printf "%s %s\n" $name $net.IPAddress}}{{end}}' "$KPL_SWARM_TASK_NAME")
-address=$(printf '%s\n' "$addresses" | while read -r network ip; do
-    if [ "$network" = "$KPL_PEER_NETWORK" ]; then printf '%s\n' "$ip"; fi
-done)
-case "$address" in
-    ''|*[!0-9.]*) fail "No unambiguous IPv4 address on $KPL_PEER_NETWORK" ;;
-esac
-
-# Prometheus reaches this task through the node's host-mode published metrics
-# port. Keep the node-local control API on the overlay address above.
+# Reject configuration errors before retrying Docker discovery.
 metrics_port=${KPL_AGENT_METRICS_PORT:-9091}
 case "$metrics_port" in
     ''|0*|*[!0-9]*) fail 'KPL_AGENT_METRICS_PORT must be a port between 1 and 65535' ;;
 esac
 [ "$metrics_port" -le 65535 ] 2>/dev/null || fail 'KPL_AGENT_METRICS_PORT must be a port between 1 and 65535'
-node_address=$(docker info --format '{{.Swarm.NodeAddr}}') || fail 'Cannot read this Docker node Swarm address'
-case "$node_address" in
-    ''|*[!0-9a-fA-F:.]*) fail 'Docker returned an invalid Swarm node address' ;;
-esac
+
+# A task can start while its daemon/overlay metadata is still becoming ready.
+# Bound each Docker call and retry discovery without recreating the task. Never
+# fall back to the service VIP: node-specific operations must reach this Agent.
+docker_read() { timeout -k 1 5 docker "$@"; }
+discover_task() {
+    startup_stage='task Peer overlay address'
+    addresses=$(docker_read inspect --type container --format '{{range $name, $net := .NetworkSettings.Networks}}{{printf "%s %s\n" $name $net.IPAddress}}{{end}}' "$KPL_SWARM_TASK_NAME") || return 1
+    address=$(printf '%s\n' "$addresses" | while read -r network ip; do
+        if [ "$network" = "$KPL_PEER_NETWORK" ]; then printf '%s\n' "$ip"; fi
+    done)
+    [ -n "$address" ] || return 1
+    case "$address" in
+        *[!0-9.]*) fail "No unambiguous IPv4 address on $KPL_PEER_NETWORK" ;;
+    esac
+
+    startup_stage='Swarm node address'
+    node_address=$(docker_read info --format '{{.Swarm.NodeAddr}}') || return 1
+    [ -n "$node_address" ] || return 1
+    case "$node_address" in
+        *[!0-9a-fA-F:.]*) fail 'Docker returned an invalid Swarm node address' ;;
+    esac
+
+    # The task has already pulled this image. Pin Peers to its local content ID.
+    startup_stage='running task image'
+    image=$(docker_read inspect --type container --format '{{.Image}}' "$KPL_SWARM_TASK_NAME") || return 1
+    [ -n "$image" ] || return 1
+    case "$image" in sha256:*) ;; *) fail 'Cannot resolve the running service image' ;; esac
+}
+# Stop discovery promptly when Swarm cancels a starting task.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+startup_attempt=1
+until discover_task; do
+    [ "$startup_attempt" -lt 5 ] || fail "Cannot resolve $startup_stage after $startup_attempt attempts"
+    printf 'Swarm Agent: Waiting for %s (attempt %s/5); retrying in 2s.\n' "$startup_stage" "$startup_attempt" >&2
+    startup_attempt=$((startup_attempt + 1))
+    sleep 2
+done
+
+# Prometheus uses the host-mode published metrics port; control stays on overlay.
 metrics_host=$node_address
 case "$metrics_host" in *:*) metrics_host=[$metrics_host] ;; esac
-
-# The service task has already pulled this exact image on this worker. Use its
-# local content ID so a mutable tag cannot give Peers a different binary.
-image=$(docker inspect --type container --format '{{.Image}}' "$KPL_SWARM_TASK_NAME")
-case "$image" in sha256:*) ;; *) fail 'Cannot resolve the running service image' ;; esac
 
 exec kpl agent \
     --id "$KPL_SWARM_SERVICE_NAME-$KPL_SWARM_NODE_ID" \

@@ -38,6 +38,7 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	agentRefreshMu         sync.Mutex
 	submissionMu           sync.Mutex
 	archiveQueueLoaded     bool
 	archiveLastScan        time.Time

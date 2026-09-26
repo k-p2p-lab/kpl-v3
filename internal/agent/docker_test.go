@@ -57,7 +57,7 @@ func TestDockerCLIHelper(t *testing.T) {
 		delayMS, _ := strconv.Atoi(os.Getenv("KPL_DOCKER_DELAY_MS"))
 		time.Sleep(time.Duration(delayMS) * time.Millisecond)
 	}
-	if os.Getenv("KPL_DOCKER_HANG") == args[0] {
+	if os.Getenv("KPL_DOCKER_HANG") == args[0] || (args[0] == "rm" && os.Getenv("KPL_DOCKER_HANG_ID") == args[len(args)-1]) {
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -628,4 +628,65 @@ func TestDockerCheckRejectsInactiveSwarmBeforeInspectingResources(t *testing.T) 
 			}
 		})
 	}
+}
+
+func TestDockerReconcileSlowContainerDoesNotBlockOtherCleanup(t *testing.T) {
+	const count = 10
+	d, path := fakeDocker(t, map[string]string{"PS_COUNT": strconv.Itoa(count), "HANG_ID": fmt.Sprintf("%064x", 0)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- d.removeAgentContainers(ctx, "agent-a") }()
+	defer func() { cancel(); <-done }()
+	waitDockerRemovals(t, path, count)
+	select {
+	case err := <-done:
+		done <- err
+		t.Fatalf("cleanup completed while a container was still blocked: %v", err)
+	default:
+	}
+}
+
+func TestDockerReconcileBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
+	d, path := fakeDocker(t, map[string]string{"PS_COUNT": "12", "HANG": "rm"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.removeAgentContainers(ctx, "agent-a") }()
+	waitDockerRemovals(t, path, dockerReconcileWorkers)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled cleanup was acknowledged: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup cleanup did not honor cancellation")
+	}
+	removals := 0
+	for _, call := range dockerCalls(t, path) {
+		if call.Args[0] == "rm" {
+			removals++
+		}
+	}
+	if removals != dockerReconcileWorkers {
+		t.Fatalf("started %d simultaneous removals, want %d", removals, dockerReconcileWorkers)
+	}
+}
+
+func waitDockerRemovals(t *testing.T, path string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		count := 0
+		for _, call := range dockerCalls(t, path) {
+			if call.Args[0] == "rm" {
+				count++
+			}
+		}
+		if count >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("fewer than %d Peer removals started", want)
 }

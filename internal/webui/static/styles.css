@@ -194,6 +194,10 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 .metric-card[data-metric-group="observation"] { --metric-color: var(--metric-observation); }
 
 .agents-panel { align-self: start; width: 100%; }
+.agents-panel > .panel-header { flex-wrap: wrap; }
+#refreshAgents { flex: 0 0 auto; }
+.agent-refresh-status { margin: 0; padding: .7rem 1.1rem; color: var(--muted); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.agent-refresh-status[data-error="true"] { color: var(--amber); }
 .panel {
   min-width: 0;
   border: 1px solid var(--line-soft);

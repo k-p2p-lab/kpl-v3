@@ -154,6 +154,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/prometheus/controller-targets", s.handlePrometheusControllerTargets)
 	mux.HandleFunc("/api/v1/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/api/v1/agents", s.handleAgents)
+	mux.HandleFunc("/api/v1/agents/refresh", s.handleAgentRefresh)
 	mux.HandleFunc("PUT /api/v1/agents/{agentID}/capacity", s.handleAgentCapacity)
 	mux.HandleFunc("/api/v1/agents/register", s.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", s.handleAgentHeartbeat)

@@ -6,9 +6,28 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 mkdir "$scratch/bin"
 export KPL_TEST_ARGUMENTS="$scratch/arguments"
+export KPL_TEST_DISCOVERY_STATE="$scratch/discovery-state"
+export KPL_TEST_SLEEPS="$scratch/sleeps"
 cat > "$scratch/bin/docker" <<'MOCK_DOCKER'
 #!/bin/sh
 set -eu
+stage=address
+if [ "$1" = info ]; then stage=node; fi
+if [ "${5:-}" = '{{.Image}}' ]; then stage=image; fi
+if [ "${KPL_TEST_FAIL_STAGE:-}" = "$stage" ]; then
+    attempt=0
+    if [ -f "$KPL_TEST_DISCOVERY_STATE" ]; then attempt=$(cat "$KPL_TEST_DISCOVERY_STATE"); fi
+    attempt=$((attempt + 1))
+    printf '%s\n' "$attempt" > "$KPL_TEST_DISCOVERY_STATE"
+    if [ "$attempt" -le "${KPL_TEST_FAILURES:-1}" ]; then
+        if [ "${KPL_TEST_EMPTY_METADATA:-no}" = yes ]; then
+            if [ "$stage" = address ]; then printf 'lab_monitoring 10.1.0.8\n'; fi
+            exit 0
+        fi
+        printf 'temporary Docker metadata failure\n' >&2
+        exit 1
+    fi
+fi
 case "$1 $2" in
     'info --format')
         [ "$3" = '{{.Swarm.NodeAddr}}' ] || exit 2
@@ -26,7 +45,23 @@ cat > "$scratch/bin/kpl" <<'MOCK_KPL'
 #!/bin/sh
 printf '%s\n' "$@" > "$KPL_TEST_ARGUMENTS"
 MOCK_KPL
-chmod +x "$scratch/bin/docker" "$scratch/bin/kpl"
+cat > "$scratch/bin/timeout" <<'MOCK_TIMEOUT'
+#!/bin/sh
+set -eu
+[ "$1" = -k ] && [ "$2" = 1 ] && [ "$3" = 5 ] && [ "$4" = docker ] || exit 2
+shift 3
+if [ "${KPL_TEST_TIMEOUT:-no}" = yes ] && [ ! -f "$KPL_TEST_DISCOVERY_STATE" ]; then
+    : > "$KPL_TEST_DISCOVERY_STATE"
+    exit 124
+fi
+exec "$@"
+MOCK_TIMEOUT
+cat > "$scratch/bin/sleep" <<'MOCK_SLEEP'
+#!/bin/sh
+[ "$1" = 2 ] || exit 2
+printf 'retry\n' >> "$KPL_TEST_SLEEPS"
+MOCK_SLEEP
+chmod +x "$scratch/bin/docker" "$scratch/bin/kpl" "$scratch/bin/timeout" "$scratch/bin/sleep"
 export PATH="$scratch/bin:$PATH"
 export KPL_SWARM_TASK_NAME=lab_agent.node.task KPL_SWARM_SERVICE_NAME=lab_agent KPL_SWARM_NODE_ID=node
 export KPL_PEER_NETWORK=lab-peers KPL_AGENT_CAPACITY=37
@@ -58,6 +93,32 @@ if KPL_TEST_IP='fd00::9' sh "$root/scripts/swarm-agent.sh" 2>/dev/null; then
     echo 'IPv6-only task was incorrectly admitted' >&2
     exit 1
 fi
+# Transient Docker errors and not-yet-attached overlays must recover in place.
+for stage in address node image; do
+    for empty in no yes; do
+        rm -f "$KPL_TEST_DISCOVERY_STATE" "$KPL_TEST_ARGUMENTS" "$KPL_TEST_SLEEPS"
+        KPL_TEST_FAIL_STAGE=$stage KPL_TEST_EMPTY_METADATA=$empty sh "$root/scripts/swarm-agent.sh" 2> "$scratch/retry.log"
+        grep -qx 'lab_agent-node' "$KPL_TEST_ARGUMENTS"
+        [ "$(cat "$KPL_TEST_DISCOVERY_STATE")" = 2 ]
+        [ "$(wc -l < "$KPL_TEST_SLEEPS" | tr -d ' ')" = 1 ]
+        grep -Fq 'retrying in 2s' "$scratch/retry.log"
+    done
+done
+rm -f "$KPL_TEST_DISCOVERY_STATE" "$KPL_TEST_ARGUMENTS"
+KPL_TEST_TIMEOUT=yes sh "$root/scripts/swarm-agent.sh" 2> "$scratch/retry.log"
+grep -qx 'lab_agent-node' "$KPL_TEST_ARGUMENTS"
+
+# Persistent failure stays bounded and must never start with a guessed address.
+rm -f "$KPL_TEST_DISCOVERY_STATE" "$KPL_TEST_ARGUMENTS" "$KPL_TEST_SLEEPS"
+if KPL_TEST_FAIL_STAGE=address KPL_TEST_FAILURES=99 sh "$root/scripts/swarm-agent.sh" 2> "$scratch/retry.log"; then
+    echo 'Agent started without task metadata' >&2
+    exit 1
+fi
+[ ! -f "$KPL_TEST_ARGUMENTS" ]
+[ "$(cat "$KPL_TEST_DISCOVERY_STATE")" = 5 ]
+[ "$(wc -l < "$KPL_TEST_SLEEPS" | tr -d ' ')" = 4 ]
+grep -Fq 'Cannot resolve task Peer overlay address after 5 attempts' "$scratch/retry.log"
+
 agent_stack=$(sed -n '/^  agent:/,/^  prometheus:/p' "$root/stack.swarm.yaml")
 printf '%s\n' "$agent_stack" | grep -Fq 'KPL_AGENT_METRICS_PORT: "${KPL_AGENT_METRICS_PORT:-9091}"'
 printf '%s\n' "$agent_stack" | grep -Fq 'target: 9091'
@@ -76,4 +137,4 @@ if grep -Fq 'tasks.agent' "$root/monitoring/prometheus/swarm.yml"; then
     echo 'Legacy Swarm DNS discovery is still configured' >&2
     exit 1
 fi
-printf '%s\n' 'PASS: Swarm task identity, overlay address, node-address metrics URL, local image and port validation.'
+printf '%s\n' 'PASS: Swarm task identity, overlay address, node-address metrics URL, local image, port validation and bounded startup recovery.'

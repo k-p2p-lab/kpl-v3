@@ -4,7 +4,7 @@ const state = {
   streamWatchdogTimer: null, streamAuthAbort: null, streamFailures: 0,
   savedResults: null, resultsLoading: false, resultsError: "",
   resultQuery: "", resultStatus: "all",
-  agentSettingsID: null, agentSettingsSaving: false,
+  agentSettingsID: null, agentSettingsSaving: false, agentsRefreshing: false,
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
   scenarioQuery: "", scenarioActionScope: "editor",
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
@@ -1545,6 +1545,49 @@ async function confirmResultDeletion() {
   }
 }
 
+async function refreshAgents() {
+  if (state.agentsRefreshing) return;
+  state.agentsRefreshing = true;
+  const button = $("#refreshAgents"), status = $("#agentRefreshStatus");
+  const initialIDs = new Set((state.snapshot?.agents || []).map(agent => agent.id));
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  setText(button, "Refreshing…");
+  status.hidden = false;
+  status.dataset.error = "false";
+  setText(status, "Checking registered Agents, including offline Agents…");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const result = await api("/api/v1/agents/refresh", { method: "POST", signal: controller.signal });
+    if (!Array.isArray(result?.agents) || !Array.isArray(result?.failures)
+      || !Number.isInteger(result.requested) || !Number.isInteger(result.refreshed)) throw new Error("Unexpected Agent refresh response.");
+    // A heartbeat delivered over SSE while the request was in flight may be newer.
+    const agents = new Map(result.agents.map(agent => [agent.id, agent]));
+    for (const current of state.snapshot?.agents || []) {
+      const refreshed = agents.get(current.id);
+      if ((!refreshed && !initialIDs.has(current.id))
+        || (refreshed && Date.parse(current.lastSeen) > Date.parse(refreshed.lastSeen))) agents.set(current.id, current);
+    }
+    state.snapshot = { ...(state.snapshot || {}), agents: [...agents.values()] };
+    render(state.snapshot);
+    status.dataset.error = String(result.failures.length > 0);
+    const failed = result.failures.map(agent => agent.name || agent.id);
+    setText(status, result.requested === 0 ? "No Agents are registered. Waiting for Agents to connect."
+      : `Refreshed ${result.refreshed} of ${result.requested} Agents.`
+        + (failed.length ? ` Could not refresh: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}.` : ""));
+  } catch (error) {
+    status.dataset.error = "true";
+    setText(status, `${error.name === "AbortError" ? "Agent refresh timed out." : `Could not refresh Agents: ${error.message}`} Showing the last known status.`);
+  } finally {
+    clearTimeout(timeout);
+    state.agentsRefreshing = false;
+    button.disabled = false;
+    button.setAttribute("aria-busy", "false");
+    setText(button, "Refresh Agents");
+  }
+}
+
 function renderAgents(agents) {
   rememberAgents(agents.map((agent) => agent.id));
   if (!agents.length) {
@@ -2122,6 +2165,7 @@ $("#agentCapacityMode").addEventListener("change", updateAgentCapacityMode);
 $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);
+$("#refreshAgents").addEventListener("click", refreshAgents);
 $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
   renderSavedResults();

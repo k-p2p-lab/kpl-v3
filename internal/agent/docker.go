@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -27,6 +28,7 @@ const (
 	managedContainerLabel  = "io.kpl.managed=true"
 	dockerAdmissionTimeout = 45 * time.Second
 	dockerStartupTimeout   = 45 * time.Second
+	dockerReconcileWorkers = 4
 )
 
 var (
@@ -295,13 +297,30 @@ func (d *dockerRuntime) removeAgentContainers(ctx context.Context, agentID strin
 	if err != nil {
 		return err
 	}
-	var failures []error
-	for _, id := range ids {
-		if err := d.remove(ctx, id); err != nil {
-			failures = append(failures, err)
-		}
+	// Serial removal makes startup proportional to every leftover container's
+	// Docker latency. Keep concurrency small to avoid flooding the local daemon,
+	// while allowing other leftovers to be reclaimed if one removal is slow.
+	failures := make([]error, len(ids))
+	jobs := make(chan int, len(ids))
+	for i := range ids {
+		jobs <- i
 	}
-	return errors.Join(failures...)
+	close(jobs)
+	var workers sync.WaitGroup
+	for range min(dockerReconcileWorkers, len(ids)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				failures[i] = d.remove(ctx, ids[i])
+			}
+		}()
+	}
+	workers.Wait()
+	return errors.Join(ctx.Err(), errors.Join(failures...))
 }
 
 func (d *dockerRuntime) agentContainerIDs(ctx context.Context, agentID string) ([]string, error) {

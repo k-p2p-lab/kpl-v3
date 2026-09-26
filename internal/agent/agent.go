@@ -173,6 +173,7 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listener) (resultErr error) {
+	s.logger.Info("agent startup checking Docker runtime", "id", s.config.ID)
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := s.docker.check(checkCtx)
 	cancel()
@@ -188,6 +189,8 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	if value := strings.TrimSpace(string(imageID)); strings.HasPrefix(value, "sha256:") {
 		s.docker.image = value
 	}
+	s.logger.Info("agent startup cleaning previous Peer containers", "id", s.config.ID)
+	cleanupStarted := time.Now()
 	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, containerStopTimeout)
 	err = s.docker.removeAgentContainers(cleanupCtx, s.config.ID)
 	cleanupCancel()
@@ -195,6 +198,7 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 		return fmt.Errorf("clean up previous peer containers: %w", err)
 	}
 	s.startupReconciled = true
+	s.logger.Info("agent startup cleanup complete", "id", s.config.ID, "elapsed", time.Since(cleanupStarted))
 	server := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -317,6 +321,7 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 				s.logger.Warn("agent registration failed", "error", err)
 			} else {
 				registered = true
+				s.logger.Info("agent registered", "id", s.config.ID, "controller", s.config.ControllerURL)
 			}
 		}
 		select {
@@ -326,7 +331,13 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 			if registered {
 				if err := s.heartbeat(ctx); err != nil {
 					s.logger.Warn("agent heartbeat failed", "error", err)
-					registered = false
+					// A timeout or temporary Controller outage does not invalidate
+					// registration. Replaying all acknowledged history on every
+					// transport failure can prevent a busy Agent from recovering.
+					var responseErr *controllerResponseError
+					if errors.As(err, &responseErr) && responseErr.statusCode == http.StatusConflict {
+						registered = false
+					}
 				}
 			}
 		}
@@ -956,6 +967,16 @@ func (s *Server) postJSON(ctx context.Context, path string, input, output any) e
 	return s.postData(ctx, path, data, output)
 }
 
+type controllerResponseError struct {
+	statusCode int
+	status     string
+	message    string
+}
+
+func (e *controllerResponseError) Error() string {
+	return fmt.Sprintf("controller returned %s: %s", e.status, e.message)
+}
+
 func (s *Server) postData(ctx context.Context, path string, data []byte, output any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.config.ControllerURL, "/")+path, bytes.NewReader(data))
 	if err != nil {
@@ -972,7 +993,7 @@ func (s *Server) postData(ctx context.Context, path string, data []byte, output 
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("controller returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+		return &controllerResponseError{resp.StatusCode, resp.Status, strings.TrimSpace(string(message))}
 	}
 	if path == "/api/v1/agents/register" || path == "/api/v1/agents/heartbeat" {
 		if raw := resp.Header.Get("X-KPL-Agent-Capacity"); raw != "" {
@@ -989,6 +1010,11 @@ func (s *Server) postData(ctx context.Context, path string, data []byte, output 
 	if output != nil {
 		return json.NewDecoder(resp.Body).Decode(output)
 	}
+	// Registration returns JSON even when the caller only needs its headers.
+	// Consume small responses so net/http can reuse the Controller connection.
+	// The success status already acknowledged the request; a drain failure must
+	// not turn accepted telemetry into another send.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	return nil
 }
 

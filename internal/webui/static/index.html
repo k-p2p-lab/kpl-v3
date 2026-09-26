@@ -283,10 +283,12 @@
           <div>
             <p class="eyebrow">FLEET</p>
             <h2>Agent status</h2>
-            <p class="panel-note">Topology labels use these Agent numbers. Configure capacity per Agent below.</p>
+            <p class="panel-note">Refresh checks registered Agents, including offline ones. Configure capacity per Agent below.</p>
           </div>
+          <button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button>
         </header>
         <div class="panel-body" id="panel-agents-body">
+          <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
           <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
           <div class="table-wrap" tabindex="0" role="region" aria-label="Agent status table">
             <table>

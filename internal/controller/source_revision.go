@@ -9,7 +9,7 @@ import (
 
 func sourceRevisionOf(files []resultFile) string {
 	h := sha256.New()
-	for _, name := range []string{"scenario.yaml", "experiment.json", "events.jsonl", "observations.jsonl"} {
+	for _, name := range analysisSourceNames {
 		var size, modified int64
 		var visit func(resultFile)
 		visit = func(f resultFile) {
@@ -25,8 +25,10 @@ func sourceRevisionOf(files []resultFile) string {
 			size += f.size
 			if f.remote != nil {
 				modified = max(modified, f.remote.ModifiedAt)
+				fmt.Fprintf(h, "remote:%s:%s;", f.remote.Object, f.remote.SHA256)
 			} else if f.info != nil {
 				modified = max(modified, f.info.ModTime().UnixNano())
+				fmt.Fprintf(h, "local:%s;", sourceFileIdentity(f.info.Sys()))
 			}
 		}
 		for _, file := range files {
@@ -49,7 +51,7 @@ func sourceRevisionAt(root *os.Root, id string) (string, error) {
 			f.close()
 		}
 	}()
-	for _, name := range []string{"scenario.yaml", "experiment.json", "events.jsonl", "observations.jsonl"} {
+	for _, name := range analysisSourceNames {
 		f, e := captureRunSource(root, manifest, name)
 		if e != nil {
 			if os.IsNotExist(e) && isRunLog(name) {

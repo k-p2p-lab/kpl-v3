@@ -60,7 +60,8 @@ func newAnalysisStorageFixture(t *testing.T, batch bool) analysisStorageFixture 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	f := analysisStorageFixture{server: s, ctx: ctx, cancel: cancel}
-	status := analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: "job-old", State: "running", Phase: "saving", TotalBytes: 100}
+	// The encoder tests start after source verification has already finished.
+	status := analysisJobStatus{SourceHash: "sha256:" + strings.Repeat("0", 64), Version: 1, AnalysisVersion: currentAnalysisVersion, ID: "job-old", State: "running", Phase: "saving", TotalBytes: 100}
 	if batch {
 		batchFixture(t, s, "batch", "run", "completed", 1, 2, 1)
 		batchFixture(t, s, "batch", "second", "completed", 2, 2, 1)

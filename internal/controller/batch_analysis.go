@@ -30,10 +30,12 @@ type batchAnalysisStatus struct {
 	ExpectedRuns  int      `json:"expectedRuns"`
 }
 type batchAnalysisJob struct {
-	status batchAnalysisStatus
-	cancel context.CancelFunc
+	status   batchAnalysisStatus
+	cancel   context.CancelFunc
+	previous *batchAnalysisStatus
 }
 type batchAnalysisResult struct {
+	SourceHash      string                       `json:"sourceHash,omitempty"`
 	Reliability     batchReliability             `json:"reliability"`
 	Version         int                          `json:"version"`
 	AnalysisVersion int                          `json:"analysisVersion"`
@@ -199,11 +201,11 @@ func (s *Server) allBatchMembers(ctx context.Context, id string) ([]savedResult,
 	return members, nil
 }
 func batchMembership(members []savedResult) string {
-	members = currentBatchMembers(members)
+	// Include historical attempts because they contribute to reliability statistics.
 	// Ignore display-only download sizes and job statuses, and normalize order.
 	canonical := make([]savedResult, 0, len(members))
 	for _, m := range members {
-		canonical = append(canonical, savedResult{SourceRevision: m.SourceRevision, ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
+		canonical = append(canonical, savedResult{SourceRevision: m.SourceRevision, PreviousRunIDs: m.PreviousRunIDs, Superseded: m.Superseded, ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
 	}
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].ID < canonical[j].ID })
 	data, _ := json.Marshal(canonical)
@@ -225,13 +227,13 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	if s.shuttingDown || ctx.Err() != nil {
 		return batchAnalysisStatus{}, errors.New("Controller is shutting down")
 	}
-	members, err := s.batchMembers(ctx, id)
+	members, err := s.allBatchMembers(ctx, id)
 	if err != nil {
 		return batchAnalysisStatus{}, err
 	}
 	selected, excluded := []savedResult{}, []savedResult{}
 	expected, iterations := 0, map[int]bool{}
-	for _, m := range members {
+	for _, m := range currentBatchMembers(members) {
 		if m.Active || m.State == "running" || m.State == "queued" || s.cancels[m.ID] != nil || s.repeatBatches[m.ID] != nil {
 			return batchAnalysisStatus{}, errResultBusy
 		}
@@ -257,7 +259,7 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 		return batchAnalysisStatus{}, err
 	}
 	membership := batchMembership(members)
-	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.Membership == membership && existing.status.AnalysisVersion == currentAnalysisVersion {
+	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.Membership == membership && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
 		return existing.status, nil
 	}
 	count := 0
@@ -288,15 +290,31 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	}
 	work, cancel := context.WithCancel(ctx)
 	job := &batchAnalysisJob{status: status, cancel: cancel}
+	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
+		previous := existing.status
+		job.previous = &previous
+	}
 	s.batchAnalysisJobs[id] = job
 	s.analysisWorkers.Add(1)
-	go s.runBatchAnalysis(work, job, selected, excluded, max(0, expected-len(members)))
+	go s.runBatchAnalysis(work, job, selected, excluded, max(0, expected-len(selected)-len(excluded)))
 	return status, nil
 }
 func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, selected, excluded []savedResult, missing int) {
 	defer s.analysisWorkers.Done()
 	result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded, Runs: []resultAnalysis{}}
 	err := func() error {
+		hashes := make(map[string]string, len(selected))
+		if job.previous != nil {
+			var sourceHash string
+			var err error
+			hashes, sourceHash, err = s.hashBatchAnalysisSources(ctx, job, selected)
+			if err != nil {
+				return err
+			}
+			if job.previous.SourceHash == sourceHash {
+				return s.reuseBatchAnalysis(ctx, job)
+			}
+		}
 		for i, member := range selected {
 			err := func() error {
 				select {
@@ -313,7 +331,7 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 					return fmt.Errorf("run %s: %w", member.ID, err)
 				}
 				defer snapshot.close()
-				if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != result.BatchID {
+				if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != result.BatchID || snapshot.result.SourceRevision != member.SourceRevision {
 					return errors.New("batch membership changed; retry after all runs stop")
 				}
 				total := int64(0)
@@ -335,13 +353,14 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 					return err
 				}
 				processed, last := int64(0), time.Time{}
+				lastPhase := ""
 				report := analysisProgress(func(phase string, bytes int64) {
 					processed += bytes
 					now := time.Now().UTC()
-					if now.Sub(last) < time.Second {
+					if phase == lastPhase && now.Sub(last) < time.Second {
 						return
 					}
-					last = now
+					last, lastPhase = now, phase
 					s.analysisJobMu.Lock()
 					defer s.analysisJobMu.Unlock()
 					job.status.Phase = fmt.Sprintf("Run %d/%d · %s", i+1, len(selected), phase)
@@ -352,6 +371,18 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 					}
 					job.status.Progress = 100 * (float64(i) + fraction) / float64(len(selected))
 				})
+				// Fresh/forced analyses hash the same captured files they analyze;
+				// only potentially reusable batches need a separate verification pass.
+				if hashes[member.ID] == "" {
+					report("checking-sources", 0)
+					hash, err := analysisSourceHash(ctx, snapshot.files, func(n int64) { report("checking-sources", n) })
+					if err != nil {
+						return fmt.Errorf("run %s: %w", member.ID, err)
+					}
+					hashes[member.ID] = hash
+					processed = 0
+				}
+				snapshot.result.SourceHash = hashes[member.ID]
 				analysis, err := analyzeResult(context.WithValue(ctx, analysisProgressKey{}, report), snapshot)
 				if err != nil {
 					return fmt.Errorf("run %s: %w", member.ID, err)
@@ -364,7 +395,7 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 				return err
 			}
 		}
-		members, err := s.batchMembers(ctx, result.BatchID)
+		members, err := s.allBatchMembers(ctx, result.BatchID)
 		if err != nil {
 			return err
 		}
@@ -378,9 +409,14 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 		if err != nil {
 			return err
 		}
+		result.SourceHash, err = s.batchSourceHash(ctx, result.BatchID, members, hashes)
+		if err != nil {
+			return err
+		}
 		result.Summary = batchSummary(result.Runs)
 		result.AsOf = time.Now().UTC()
 		s.analysisJobMu.Lock()
+		job.status.SourceHash = result.SourceHash
 		job.status.Phase, job.status.CompletedRuns = "saving", len(selected)
 		job.status.UpdatedAt = time.Now().UTC()
 		s.analysisJobMu.Unlock()
@@ -435,7 +471,7 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 	}
 	// Deletion also takes analysisJobMu, so membership stays stable through
 	// publication even if a member was removed while the large file was saved.
-	members, err := s.batchMembers(ctx, job.status.BatchID)
+	members, err := s.allBatchMembers(ctx, job.status.BatchID)
 	if err != nil {
 		return err
 	}
@@ -478,10 +514,10 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodGet:
 			var members []savedResult
-			members, err = s.batchMembers(r.Context(), id)
+			members, err = s.allBatchMembers(r.Context(), id)
 			if err == nil {
 				status, err = s.batchAnalysisStatus(id)
-				if err == nil && status.State == "completed" && status.Membership != batchMembership(members) {
+				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || status.SourceHash == "") {
 					status.State, status.Stale = "idle", true
 				}
 			}

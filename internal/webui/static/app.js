@@ -726,7 +726,7 @@ function resultLocked(run) {
 
 function resultImagesButton(run) {
   const job = run.analysis;
-  const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.stale ? "Images · Update" : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
+  const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "checking-sources" ? "Images · Checking" : job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.stale ? "Images · Check" : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
   return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" aria-label="${escapeHTML(`View graph images: ${run.name || run.id}`)}" ${run.state === "unreadable" || run.state === "queued" ? "disabled" : ""}>${label}</button>`;
 }
 
@@ -1282,8 +1282,8 @@ function savedResultTable(runs, key, label = "Saved experiment results") {
 
 function savedResultBatch(batch) {
   const job = batch.job;
-  const label = ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : `${Math.floor(job.progress || 0)}%`}`
-    : job?.stale ? "Batch mean · Update" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
+  const label = ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : job.phase?.includes("checking-sources") ? "Checking" : `${Math.floor(job.progress || 0)}%`}`
+    : job?.stale ? "Batch mean · Check" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
   const excluded = batch.runs.length - batch.completed;
   const missing = Math.max(0, batch.expected - batch.runs.length);
   const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";

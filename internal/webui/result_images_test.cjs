@@ -529,3 +529,27 @@ test("filtering metrics keeps expanded charts and does not request or render ima
   assert.deepEqual({ requests, renders }, before);
   element("resultImagesDialog").close();
 });
+
+
+test("hash verification may finish with the original saved job identity", async () => {
+  let gets = 0;
+  const posts = [];
+  const { ui, element } = fixture(async (url, options) => {
+    if (url.includes("/result?")) {
+      assert.match(url, /jobId=run-job$/);
+      return artifact("run");
+    }
+    if (options.method === "POST") {
+      posts.push(url);
+      return job("run", "running", { id: "verification-job", phase: "checking-sources" });
+    }
+    return ++gets === 1 ? job("run", "completed", { stale: true }) : job("run", "completed", { reused: true });
+  });
+  await ui.open("run");
+  assert.deepEqual(posts, ["/api/v1/analysis-jobs/run"]);
+  assert.match(element("resultImagesDate").textContent, /Source unchanged; saved analysis reused/);
+  assert.equal(element("refreshResultImages").hidden, false);
+  assert.match(element("downloadResultAnalysis").href, /jobId=run-job$/);
+  assert.match(images.jobDescription(job("run", "running", { phase: "checking-sources" })), /Comparing source content hashes/);
+  assert.match(images.jobDescription(job("run", "completed", { reused: true })), /Source unchanged/);
+});

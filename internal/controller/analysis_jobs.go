@@ -23,6 +23,8 @@ const analysisSummaryFile = "analysis-summary.json"
 var errAnalysisQueueFull = errors.New("analysis queue is full; try again after a job finishes")
 
 type analysisJobStatus struct {
+	SourceHash      string    `json:"sourceHash,omitempty"`
+	Reused          bool      `json:"reused,omitempty"`
 	SourceRevision  string    `json:"sourceRevision,omitempty"`
 	Stale           bool      `json:"stale,omitempty"`
 	Version         int       `json:"version"`
@@ -44,8 +46,9 @@ type analysisJobStatus struct {
 }
 
 type analysisJob struct {
-	status analysisJobStatus
-	cancel context.CancelFunc
+	status   analysisJobStatus
+	cancel   context.CancelFunc
+	previous *analysisJobStatus
 }
 
 // Callers must hold persistMu. If analysisJobMu is needed, acquire it first.
@@ -196,7 +199,7 @@ func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {
 		if e != nil {
 			return analysisJobStatus{}, e
 		}
-		if current != status.SourceRevision {
+		if current != status.SourceRevision || status.SourceHash == "" {
 			status.Stale = true
 		}
 	}
@@ -220,7 +223,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceRevision == revision {
+	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" && existing.status.SourceRevision == revision {
 		return existing.status, nil
 	}
 	count := 0
@@ -254,6 +257,10 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	}
 	now := time.Now().UTC()
 	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}}
+	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
+		previous := existing.status
+		job.previous = &previous
+	}
 	if err := s.persistAnalysisJob(job.status); err != nil {
 		return analysisJobStatus{}, err
 	}
@@ -282,8 +289,11 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			return err
 		}
 		defer snapshot.close()
-		var total int64
+		var total, hashTotal int64
 		for _, file := range snapshot.files {
+			if file.name != resultNoteFile {
+				hashTotal += file.size
+			}
 			if file.name == "events.jsonl" || file.name == "observations.jsonl" {
 				total += file.size
 			}
@@ -313,8 +323,13 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 				return
 			}
 			job.status.Phase, job.status.ProcessedBytes, job.status.UpdatedAt = phase, processed, now
-			if total > 0 {
-				job.status.Progress = min(100, 100*float64(processed)/float64(total))
+			phaseTotal := total
+			if phase == "checking-sources" {
+				phaseTotal = hashTotal
+			}
+			job.status.TotalBytes = phaseTotal
+			if phaseTotal > 0 {
+				job.status.Progress = min(100, 100*float64(processed)/float64(phaseTotal))
 			}
 			// Persist once per second; a failed write is reported at finalization too.
 			if err := s.persistAnalysisJob(job.status); err != nil {
@@ -322,6 +337,19 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			}
 			lastPhase, lastUpdate = phase, now
 		})
+		report("checking-sources", 0)
+		sourceHash, err := analysisSourceHash(ctx, snapshot.files, func(n int64) { report("checking-sources", n) })
+		if err != nil {
+			return err
+		}
+		if job.previous != nil && job.previous.SourceHash == sourceHash {
+			return s.reuseAnalysisJob(ctx, job, snapshot.result.SourceRevision)
+		}
+		snapshot.result.SourceHash = sourceHash
+		s.analysisJobMu.Lock()
+		job.status.SourceHash = sourceHash
+		s.analysisJobMu.Unlock()
+		processed = 0
 		analysis, err := analyzeResult(context.WithValue(ctx, analysisProgressKey{}, report), snapshot)
 		if err != nil {
 			return err
@@ -356,6 +384,27 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			}
 		}
 	}
+}
+
+// Reuse the completed artifact and its original snapshot/analysis ID after a
+// metadata change has been verified to contain the same source bytes.
+func (s *Server) reuseAnalysisJob(ctx context.Context, job *analysisJob, revision string) error {
+	s.analysisJobMu.Lock()
+	defer s.analysisJobMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.analysisJobs[job.status.RunID] != job {
+		return context.Canceled
+	}
+	status := *job.previous
+	status.SourceRevision, status.Stale, status.Reused = revision, false, true
+	status.UpdatedAt = time.Now().UTC()
+	if err := s.persistAnalysisJob(status); err != nil {
+		return err
+	}
+	job.status = status
+	return nil
 }
 
 // Only directory pinning and publication hold shared locks; JSON encoding and

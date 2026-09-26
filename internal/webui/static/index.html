@@ -370,7 +370,7 @@
       <p class="dialog-help">Analysis continues on the server when you close this window or browser. Return to Saved results to check progress and download completed images.</p>
       <div class="result-images-feedback"><p id="resultImagesStatus" role="status" aria-live="polite"></p><button class="secondary-button" id="retryResultImages" type="button" hidden>Retry</button></div>
       <progress id="resultImagesProgress" max="100" aria-label="Log reading progress" hidden></progress>
-      <div class="result-images-actions"><a class="secondary-button" id="downloadResultAnalysis" hidden>Download analysis JSON</a><button class="secondary-button" id="refreshResultImages" type="button" hidden>Analyze latest snapshot</button></div>
+      <div class="result-images-actions"><a class="secondary-button" id="downloadResultAnalysis" hidden>Download analysis JSON</a><button class="secondary-button" id="refreshResultImages" type="button" hidden title="Recompute analysis even when the source hash is unchanged">Reanalyze</button></div>
       <a class="secondary-button" id="downloadAllResultImages" hidden>Download all PNG + CSV (ZIP)</a>
       <details id="researchTools" hidden>
         <summary>Message images, repeated runs and v2 comparisons</summary>

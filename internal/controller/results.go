@@ -40,6 +40,7 @@ type savedResult struct {
 	CleanupError      string        `json:"cleanupError,omitempty"`
 	Agents            []model.Agent `json:"agents,omitempty"`
 
+	SourceHash             string               `json:"sourceHash,omitempty"`
 	SourceRevision         string               `json:"sourceRevision,omitempty"`
 	ExecutionID            string               `json:"executionId,omitempty"`
 	Superseded             bool                 `json:"superseded,omitempty"`
@@ -545,7 +546,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			job, err := s.batchAnalysisStatus(id)
 			if err == nil && job.State != "idle" {
-				if job.State == "completed" && job.Membership != batchMembership(batchMembers[id]) {
+				if job.State == "completed" && (job.Membership != batchMembership(batchMembers[id]) || job.SourceHash == "") {
 					job.State, job.Stale = "idle", true
 				}
 				status = &job

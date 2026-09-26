@@ -689,16 +689,17 @@
     if (job.state === "queued")
       return "Queued — waiting for an analysis worker.";
     if (job.state === "completed")
-      return "Analysis complete. Preparing PNG downloads…";
+      return job.reused ? "Source unchanged. Reusing saved analysis…" : "Analysis complete. Preparing PNG downloads…";
     const phase =
       {
         starting: "Opening saved logs",
+        "checking-sources": "Comparing source content hashes",
         "events.jsonl": "Reading event log",
         "observations.jsonl": "Reading topology and score history",
         aggregating: "Calculating metrics and chart data",
         saving: "Saving analysis result",
       }[job.phase] ||
-      job.phase ||
+      job.phase?.replace("checking-sources", "Comparing source content hashes") ||
       "Analyzing";
     const mb = (bytes) => number(bytes / 1048576);
     return `${phase} · ${mb(job.processedBytes)} / ${mb(job.totalBytes)} MiB read`;
@@ -1075,7 +1076,7 @@
         if (revision !== requestRevision) return;
         if (isBatch) {
           $("resultImagesName").textContent = `${data.name || id} · Batch mean`;
-          $("resultImagesDate").textContent = `${batch.description(data)} · Computed ${timeLabel(data.asOf)}`;
+          $("resultImagesDate").textContent = `${batch.description(data)} · Computed ${timeLabel(data.asOf)}${job.reused ? " · Source unchanged; saved analysis reused" : ""}`;
           const summary = $("batchAnalysisSummary");
           if (summary) {
             summary.hidden = false;
@@ -1084,7 +1085,7 @@
           await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
         } else {
           $("resultImagesName").textContent = data.result.name || id;
-          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}${job.stale ? " · Newer source data available; refresh analysis." : ""}`;
+          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}${job.reused ? " · Source unchanged; saved analysis reused" : job.stale ? " · Source may have changed; reopen to check." : ""}`;
           currentData = data;
           researchTools?.setData(data);
           await prepareImages(buildCharts(data), id, view, requestRevision);

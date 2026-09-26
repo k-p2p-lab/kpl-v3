@@ -477,7 +477,7 @@ test('retired attempts stay excluded after their replacement is deleted and stal
  const f=fixture([old,current]),groups=f.api.savedResultBatches([old,current]);
  assert.equal(groups[0].runs.length,1);assert.equal(groups[0].previousRuns.length,1);
  const markup=f.element('#savedResultsRows').innerHTML;
- assert.match(markup,/Batch mean · Update/);assert.match(markup,/Peer cleanup failed/);assert.match(markup,/Experiment data may be incomplete/);assert.match(markup,/Agent &lt;offline&gt;/);
+ assert.match(markup,/Batch mean · Check/);assert.match(markup,/Peer cleanup failed/);assert.match(markup,/Experiment data may be incomplete/);assert.match(markup,/Agent &lt;offline&gt;/);
 });
 
 

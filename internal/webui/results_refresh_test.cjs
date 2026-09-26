@@ -519,3 +519,50 @@ test('recording errors still warn during an active run and escape error text', (
   assert.match(markup, /Write failed &lt;disk&gt;/);
   assert.doesNotMatch(markup, /class="result-activity"|<disk>/);
 });
+
+test('storage revisions refresh completed Local results through Archived without analysis jobs', async () => {
+  const run = {id:'saved', state:'completed', storage:{state:'local'}};
+  const {api,state,element,resolve} = fixture([run]);
+  api.refreshResultsForStorage({resultsRevision:'first'});
+  assert.equal(state.resultsLoading,true);
+  resolve([{...run,storage:{state:'archived'}}]);
+  await new Promise(setImmediate);
+  assert.equal(state.resultsLoading,false);
+  assert.match(element('#savedResultsRows').innerHTML,/result-storage archived/);
+  assert.equal(state.resultsLoadedStorageRevision,'first');
+  api.refreshResultsForStorage({resultsRevision:'first'});
+  assert.equal(state.resultsLoading,false,'unchanged storage causes no result-list poll');
+  api.refreshResultsForStorage({resultsRevision:'late-note'});
+  resolve([{...run,storage:{state:'pending'}}]);
+  await new Promise(setImmediate);
+  assert.match(element('#savedResultsRows').innerHTML,/Archive pending/);
+});
+
+test('storage change during an in-flight list request is fetched after that request finishes', async () => {
+  const run = {id:'saved',state:'completed',storage:{state:'local'}};
+  const {api,state,resolve} = fixture([run]);
+  api.refreshResultsForStorage({resultsRevision:'local'});
+  api.refreshResultsForStorage({resultsRevision:'archived'});
+  resolve([run]);
+  await new Promise(setImmediate);
+  assert.equal(state.resultsLoading,true,'new revision was lost behind the old request');
+  resolve([{...run,storage:{state:'archived'}}]);
+  await new Promise(setImmediate);
+  assert.equal(state.resultsLoading,false);
+  assert.equal(state.resultsLoadedStorageRevision,'archived');
+  assert.equal(state.savedResults[0].storage.state,'archived');
+});
+
+test('failed storage-driven refresh retries the same revision on the next storage status poll', async () => {
+  const {api,state,resolve,reject} = fixture([{id:'saved',state:'completed',storage:{state:'local'}}]);
+  api.refreshResultsForStorage({resultsRevision:'archived'});
+  reject(new Error('Temporary failure'));
+  await new Promise(setImmediate);
+  assert.equal(state.resultsLoading,false,'failure must not start an immediate retry loop');
+  assert.equal(state.resultsLoadedStorageRevision,null);
+  api.refreshResultsForStorage({resultsRevision:'archived'});
+  assert.equal(state.resultsLoading,true);
+  resolve([{id:'saved',state:'completed',storage:{state:'archived'}}]);
+  await new Promise(setImmediate);
+  assert.equal(state.resultsLoadedStorageRevision,'archived');
+});

@@ -41,3 +41,25 @@ test('old Controller status does not interpret total cycle time as a NAS timeout
   assert.equal(status.warning, false);
   assert.match(status.text, /Archive work in progress/);
 });
+
+test('storage polling notifies result refresh and catches changes after returning to the page', async () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const listeners = {}, timers = new Map(), seen = [];
+  const document = {hidden:false, querySelector:()=>({dataset:{}}), addEventListener:(name,fn)=>listeners[name]=fn};
+  const context = {document, AbortController, Intl, setTimeout:(fn,delay)=>{timers.set(delay,fn);return delay;}, clearTimeout:id=>timers.delete(id), addEventListener:(name,fn)=>listeners[name]=fn};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/static/result-storage.js`,'utf8'),context);
+  let revision='local', polls=0;
+  context.KPLResultStorage.init({api:async()=>{polls++;return {...ready,resultsRevision:revision};},onStatus:status=>seen.push(status.resultsRevision)});
+  await new Promise(setImmediate);
+  assert.deepEqual(seen,['local']);
+  revision='archived'; timers.get(15000)(); await new Promise(setImmediate);
+  assert.deepEqual(seen,['local','archived']);
+  document.hidden=true; listeners.visibilitychange();
+  assert.equal(timers.has(15000),false);
+  revision='late-data'; document.hidden=false; listeners.visibilitychange(); await new Promise(setImmediate);
+  assert.equal(seen.at(-1),'late-data');
+  listeners.pagehide(); assert.equal(timers.has(15000),false);
+  const stoppedPolls=polls; listeners.pageshow(); await new Promise(setImmediate);
+  assert.equal(polls,stoppedPolls+1);
+});

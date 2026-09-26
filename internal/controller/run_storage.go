@@ -284,10 +284,27 @@ func (s *Server) setRunArchiveStatus(id, state string, cause error) {
 	if cause != nil {
 		status.Error = cause.Error()
 	}
-	if err := writeAnalysisJSON(root, runArchiveStatusFile, status); err != nil {
+	if err := s.writeRunArchiveStatus(root, id, status); err != nil {
 		s.logger.Warn("save archive status", "run", id, "error", err)
 	}
 }
+
+// The storage overview exposes only this cheap revision. Browsers reload the
+// local result index when it changes, without scanning the NAS or polling every
+// completed result continuously. Publish after the local status is committed.
+func (s *Server) writeRunArchiveStatus(root *os.Root, id string, status runArchiveStatus) error {
+	if err := writeAnalysisJSON(root, runArchiveStatusFile, status); err != nil {
+		return err
+	}
+	s.state.archiveQueueMu.Lock()
+	if status.State == "archived" {
+		delete(s.state.archiveDirtyNotified, id)
+	}
+	s.state.resultsRevision.Add(1)
+	s.state.archiveQueueMu.Unlock()
+	return nil
+}
+
 func readRunArchiveStatus(root *os.Root) runArchiveStatus {
 	var status runArchiveStatus
 	file, err := openResultFile(root, runArchiveStatusFile)

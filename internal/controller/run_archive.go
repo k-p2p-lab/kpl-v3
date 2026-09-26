@@ -159,6 +159,15 @@ func (s *state) markRunArchiveDirty(id string) {
 		s.archivePending = map[string]bool{}
 	}
 	s.archiveVersions[id]++
+	// Coalesce writes until an archived status has been published. The queue
+	// may still hold an older version when a late write needs a new notification.
+	if s.archiveDirtyNotified == nil {
+		s.archiveDirtyNotified = map[string]bool{}
+	}
+	if !s.archiveDirtyNotified[id] {
+		s.resultsRevision.Add(1)
+	}
+	s.archiveDirtyNotified[id] = true
 	s.archivePending[id] = true
 }
 
@@ -358,6 +367,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	}
 	uploads := []upload{}
 	cleanup := []resultFile{}
+	manifestChanged := false
 	for _, file := range files {
 		logical := ""
 		for _, name := range []string{"events.jsonl", "observations.jsonl"} {
@@ -388,6 +398,14 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				return err
 			}
 			if previous, ok := manifest.Files[file.name]; ok && previous.SHA256 == digest {
+				// Atomic rewrites can preserve bytes while changing local mtime.
+				// Status uses this hint; leaving it stale strands a fully copied
+				// run in Archive pending after the queue entry has been removed.
+				if previous.ModifiedAt != file.info.ModTime().UnixNano() || previous.Size != file.size {
+					previous.ModifiedAt, previous.Size = file.info.ModTime().UnixNano(), file.size
+					manifest.Files[file.name] = previous
+					manifestChanged = true
+				}
 				if !retainedRunFile(file.name) {
 					cleanup = append(cleanup, file)
 				}
@@ -396,7 +414,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			}
 		}
 	}
-	if len(uploads) == 0 && len(cleanup) == 0 {
+	if len(uploads) == 0 && len(cleanup) == 0 && !manifestChanged {
 		return nil
 	}
 	s.setRunArchiveStatus(id, "archiving", nil)
@@ -544,7 +562,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			}
 		}
 	}
-	return writeAnalysisJSON(local, runArchiveStatusFile, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
+	return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
 }
 func syncRunDirectory(root *os.Root) error {
 	dir, err := root.Open(".")

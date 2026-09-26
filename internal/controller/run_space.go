@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -59,6 +60,7 @@ func (s *Server) waitRunStorage(ctx context.Context, id string) error {
 }
 
 type resultStorageOverview struct {
+	ResultsRevision  string    `json:"resultsRevision"`
 	Phase            string    `json:"phase"`
 	LastProgressAt   time.Time `json:"lastProgressAt"`
 	Stalled          bool      `json:"stalled"`
@@ -80,6 +82,7 @@ func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
 	free, err := s.runStorageFree()
 	s.archiveStatusMu.RLock()
 	result := resultStorageOverview{Checking: s.archiveChecking, CheckStartedAt: s.archiveCheckStartedAt, LocalDirectory: currentRunsDirectory, ArchiveDirectory: archivedRunsDirectory, AvailableBytes: free, MinFreeBytes: s.config.RunMinFreeBytes, LastCheckedAt: s.archiveCheckedAt, Error: s.archiveError}
+	result.ResultsRevision = strconv.FormatUint(s.state.resultsRevision.Load(), 10)
 	result.Phase = s.archivePhase
 	result.LastProgressAt = s.archiveLastProgressAt
 	result.Stalled = result.Checking && archivePhaseCanStall(result.Phase) && !result.LastProgressAt.IsZero() && time.Since(result.LastProgressAt) > archiveStallAfter

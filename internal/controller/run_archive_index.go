@@ -254,7 +254,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 				return err
 			}
 			s.state.markRunArchiveDirty(id)
-			return writeAnalysisJSON(local, runArchiveStatusFile, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
+			return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
 		}()
 		if err != nil {
 			return err

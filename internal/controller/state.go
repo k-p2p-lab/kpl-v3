@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -21,10 +22,12 @@ const (
 )
 
 type state struct {
+	resultsRevision         atomic.Uint64
 	failedRunWrites         map[string]bool
 	archiveQueueMu          sync.Mutex
 	archiveVersions         map[string]uint64
 	archivePending          map[string]bool
+	archiveDirtyNotified    map[string]bool
 	mu                      sync.RWMutex
 	persistMu               sync.Mutex
 	agentSettingsMu         sync.Mutex
@@ -60,6 +63,8 @@ func newState(dataDir string) *state {
 		dataDir:         dataDir,
 		runMetrics:      make(map[string]*runMetricAccumulator),
 	}
+	// Distinguish storage changes across Controller restarts as well as in-process updates.
+	s.resultsRevision.Store(uint64(time.Now().UnixNano()))
 	s.agentReportedCapacities = make(map[string]int)
 	s.agentCapacityRevisions = make(map[string]string)
 	s.agentCapacityOverrides, s.agentSettingsErr = loadAgentCapacities(dataDir)

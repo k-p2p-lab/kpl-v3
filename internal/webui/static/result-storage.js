@@ -27,7 +27,7 @@
       : !status.lastCheckedAt || status.lastCheckedAt.startsWith("0001-") ? "Discovering saved archives…" : "Archive connected.";
     return {text: `Local result space: ${bytes(status.availableBytes)} free. ${low ? "Waiting for space before starting the next run. " : ""}${archive}`, warning: low || !!status.error || stalled};
   }
-  function init({api}) {
+  function init({api, onStatus}) {
     const element = root.document.querySelector("#resultStorageStatus");
     if (!element) return;
     let timer, controller, stopped = false;
@@ -41,6 +41,7 @@
         element.textContent = message.text;
         element.dataset.warning = String(message.warning);
         element.title = status.error || (status.minFreeBytes ? `Minimum local free space before starting a run: ${bytes(status.minFreeBytes)}.` : "Local free-space admission guard is disabled.");
+        if (!stopped && !root.document.hidden) onStatus?.(status);
       } catch (error) {
         if (!stopped && error.status !== 401) {
           element.textContent = "Storage status is temporarily unavailable.";

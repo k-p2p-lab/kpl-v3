@@ -6,6 +6,7 @@ const state = {
   resultQuery: "", resultStatus: "all",
   agentSettingsID: null, agentSettingsSaving: false, agentsRefreshing: false,
   resultsRefreshTimer: null, resultsRefreshPending: false, runStates: null,
+  resultsStorageRevision: null, resultsLoadedStorageRevision: null,
   scenarioQuery: "", scenarioActionScope: "editor",
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
   selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false,
@@ -1112,6 +1113,14 @@ async function confirmScenarioDeletion(id) {
   }
 }
 
+function refreshResultsForStorage(status) {
+  if (typeof status?.resultsRevision !== "string") return;
+  state.resultsStorageRevision = status.resultsRevision;
+  if (state.resultsLoadedStorageRevision !== state.resultsStorageRevision && !state.resultsLoading) {
+    void refreshSavedResults();
+  }
+}
+
 async function refreshSavedResults() {
   clearTimeout(state.resultsRefreshTimer);
   state.resultsRefreshTimer = null;
@@ -1120,6 +1129,7 @@ async function refreshSavedResults() {
     return;
   }
   state.resultsLoading = true;
+  const storageRevision = state.resultsStorageRevision;
   state.resultsError = "";
   renderSavedResults();
   const controller = new AbortController();
@@ -1129,6 +1139,7 @@ async function refreshSavedResults() {
     const results = await api("/api/v1/results", { cache: "no-store", signal: controller.signal });
     if (!Array.isArray(results)) throw new Error("Unexpected saved results response.");
     state.savedResults = results.filter((run) => !state.deletedResultIDs.has(run.id));
+    state.resultsLoadedStorageRevision = storageRevision;
     refreshed = true;
   } catch (error) {
     state.resultsError = error.name === "AbortError" ? "Request timed out." : error.message;
@@ -1136,9 +1147,9 @@ async function refreshSavedResults() {
     clearTimeout(timeout);
     state.resultsLoading = false;
     renderResultViews();
-    if (state.resultsRefreshPending) {
+    if (state.resultsRefreshPending || (refreshed && state.resultsLoadedStorageRevision !== state.resultsStorageRevision)) {
       state.resultsRefreshPending = false;
-      refreshSavedResults();
+      void refreshSavedResults();
     } else if (refreshed && (state.savedResults || []).some(run => ["queued", "running"].includes(run.analysis?.state) || ["queued", "running"].includes(run.batchAnalysis?.state))) {
       state.resultsRefreshTimer = setTimeout(refreshSavedResults, 3000);
     }
@@ -2315,7 +2326,7 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
-globalThis.KPLResultStorage?.init({ api });
+globalThis.KPLResultStorage?.init({ api, onStatus: refreshResultsForStorage });
 globalThis.KPLBatchAppend?.init({api, onBusy: (id, busy) => {
   if (busy) state.pendingAppends.add(id); else state.pendingAppends.delete(id);
   renderResultViews();

@@ -306,7 +306,7 @@
               <select id="resourceMeasurementSelect" disabled><option value="">No completed measurements</option></select>
               <button class="secondary-button" type="button" data-resource-export="measurement-samples" disabled>Interval CSV</button>
               <button class="secondary-button" type="button" data-resource-export="measurement-summary" disabled>Interval summary CSV</button>
-              <button class="secondary-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
+              <button class="danger-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
             </div>
             <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
             <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads use Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>

@@ -375,7 +375,7 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .scenario-library > header, .scenario-editor-heading { min-height: 4.2rem; padding: 0.8rem 0.9rem; border-bottom: 1px solid var(--line-soft); }
 .scenario-library > header { flex: 0 0 auto; flex-wrap: wrap; gap: .65rem; margin: 0; }
 .scenario-library-title { display: flex; align-items: center; gap: .5rem; min-width: 0; }
-.scenario-library-title .count-badge { min-width: 1.5rem; height: 1.5rem; padding: 0 .35rem; font-size: .7rem; }
+.scenario-library-title .count-badge { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 1.5rem; height: 1.5rem; padding: 0 .35rem; font-size: .7rem; line-height: 1; }
 .scenario-library h3, .scenario-editor h3 { margin: 0; font-size: .85rem; }
 .scenario-editor-heading p { margin-top: .25rem; color: var(--muted); font-size: .72rem; line-height: 1.4; overflow-wrap: anywhere; }
 .scenario-library-toolbar, .scenario-save-row, .scenario-item-actions { display: flex; align-items: center; gap: .5rem; }

@@ -29,7 +29,7 @@ test('service totals count a shared host once and weight distinct hosts by capac
  assert.equal(total.hosts,2);assert.equal(total.measured,3);assert.equal(total.partial,3);
  assert.equal(total.containers,6);assert.equal(total.measuredContainers,3);
  const html=services.tableRows([controller,prometheus,other],now);
- assert.match(html,/^<tr class="resource-total-row" data-resource-total="services">/);
+ assert.match(html,/^<tr class="resource-total-row resource-has-notice" data-resource-total="services">/);
  assert.match(html,/29.2%/);assert.match(html,/9 KiB/);assert.match(html,/Partial · 3\/6 containers/);
  assert.equal((html.match(/data-service=/g)||[]).length,3);
 });
@@ -71,4 +71,17 @@ test('Swarm isolates service monitoring from Agent participation and Grafana use
  const panels=JSON.parse(fs.readFileSync(path.join(root,'monitoring/grafana/dashboards/kpl-experiments.json'))).panels;
  const service=panels.filter(p=>p.title.startsWith('Service '));assert.equal(service.length,6);
  for(const p of service){assert.match(p.targets[0].expr,/kpl_service_/);assert.doesNotMatch(p.targets[0].expr,/agent_id/);assert.match(p.targets[0].legendFormat,/node_id/);}
+});
+
+test('service notices share one footer instead of repeating inside resource cells',()=>{
+ const html=services.tableRows([row()],now),rows=html.match(/<tr[\s\S]*?<\/tr>/g);
+ assert.equal(rows.length,4);
+ for(const index of [0,2]) {
+  assert.doesNotMatch(rows[index],/>Partial|services measured<|class="agent-resource-partial"/);
+  assert.match(rows[index+1],/class="resource-notice-row/);
+  assert.match(rows[index+1],/colspan="6"/);
+  assert.equal((rows[index+1].match(/Partial/g)||[]).length,1);
+ }
+ const complete=row();complete.resources.complete=true;complete.resources.measuredContainers=2;
+ assert.doesNotMatch(services.tableRows([complete],now),/resource-notice-row/);
 });

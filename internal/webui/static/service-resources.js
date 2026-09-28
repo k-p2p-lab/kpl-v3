@@ -49,18 +49,28 @@
   }
   function tableRows(rows, now = Date.now()) {
     const a = aggregate(rows, now);
-    const partial = a.partial || a.measured < a.total;
-    const total = `<tr class="resource-total-row" data-resource-total="services">
+    const partial = a.partial || a.measured < a.total || a.cpuMeasured < a.measured;
+    const messages = [`${number(a.measured)} / ${number(a.total)} services measured`];
+    if (a.partial) messages.push(`Partial · ${number(a.measuredContainers)}/${number(a.containers)} containers`);
+    if (a.cpuMeasured !== a.measured) messages.push(`CPU coverage: ${number(a.cpuMeasured)} / ${number(a.total)} services measured`);
+    const footer = partial ? root.KPLAgentResources.noticeRow(messages.join(" · "), {columns:6, total:true}) : "";
+    const total = `<tr class="resource-total-row${footer ? " resource-has-notice" : ""}" data-resource-total="services">
       <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(a.total)} services</span></th>
       <td>${number(a.running)} / ${number(a.total)} running</td>
       <td>${number(a.hosts)} hosts</td>
-      <td title="CPU uses each measured host's capacity once; services with an unknown host or CPU capacity are excluded."><span class="agent-resource-value">${a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`}</span><span class="agent-capacity-note${a.cpuMeasured < a.total ? " agent-resource-partial" : ""}">${number(a.cpuMeasured)} / ${number(a.total)} services measured</span></td>
-      <td title="Measured working set; memory including cache: ${a.measured ? bytes(a.memoryUsageBytes) : "N/A"}."><span class="agent-resource-value">${a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A"}</span><span class="agent-capacity-note${a.measured < a.total ? " agent-resource-partial" : ""}">${number(a.measured)} / ${number(a.total)} services measured</span></td>
-      <td class="${partial ? "agent-resource-partial" : ""}">${a.measured ? `${partial ? "Partial · " : ""}${number(a.measuredContainers)}/${number(a.containers)} containers` : "No current measurement"}</td>
-    </tr>`;
+      <td title="CPU uses each measured host's capacity once; services with an unknown host or CPU capacity are excluded."><span class="agent-resource-value">${a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`}</span></td>
+      <td title="Measured working set; memory including cache: ${a.measured ? bytes(a.memoryUsageBytes) : "N/A"}."><span class="agent-resource-value">${a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A"}</span></td>
+      <td>${a.measured ? `${number(a.measuredContainers)}/${number(a.containers)} containers` : "—"}</td>
+    </tr>${footer}`;
     return total + (rows.length ? rows.map(row => {
-      const d = describe(row, now);
-      return `<tr data-service="${escape(row.service)}"><th scope="row" class="service-resource-name">${escape(d.name)}</th><td><span class="service-resource-state" data-state="${escape(d.state)}">${escape(d.status)}</span></td><td class="service-resource-host" title="${escape(row.nodeId)}">${escape(row.nodeName || row.nodeId || "Host not reported")}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.cpu)}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.memory)}</td><td class="${d.available && !row.resources.complete ? "agent-resource-partial" : ""}">${escape(d.coverage)}</td></tr>`;
+      const d = describe(row, now), messages = [];
+      if (!d.available) messages.push(d.state === "running" ? d.coverage : `${d.status} · No current measurement`);
+      else {
+        if (!row.resources.complete) messages.push(d.coverage);
+        if (!Number.isFinite(d.cpuPercent)) messages.push("Host CPU count unavailable");
+      }
+      const footer = root.KPLAgentResources.noticeRow(messages.join(" · "), {columns:6});
+      return `<tr${footer ? ' class="resource-has-notice"' : ""} data-service="${escape(row.service)}"><th scope="row" class="service-resource-name">${escape(d.name)}</th><td><span class="service-resource-state" data-state="${escape(d.state)}">${escape(d.status)}</span></td><td class="service-resource-host" title="${escape(row.nodeId)}">${escape(row.nodeName || row.nodeId || "Host not reported")}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.cpu)}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.memory)}</td><td>${d.available ? `${number(row.resources.measuredContainers)}/${number(row.resources.containers)} containers` : "—"}</td></tr>${footer}`;
     }).join("") : '<tr><td colspan="6" class="empty-cell">No service resources reported.</td></tr>');
   }
   function init({api}) {

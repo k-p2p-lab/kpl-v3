@@ -1610,7 +1610,8 @@ function renderAgents(agents) {
   }
   setHTML($("#agentRows"), totalRow + [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
     const usage = agent.capacity ? Math.min(100, Math.round((agent.activeNodes / agent.capacity) * 100)) : 0;
-    return `<tr>
+    const resourceNotice = globalThis.KPLAgentResources?.notice(agent, resourceNow) || "";
+    return `<tr${resourceNotice ? ' class="resource-has-notice"' : ""}>
       <td class="agent-number">${agentNumber(agent.id)}</td>
       <td><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
       <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
@@ -1624,7 +1625,7 @@ function renderAgents(agents) {
       <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td>${agentMetricsLink(agent)}</td>
       <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
-    </tr>`;
+    </tr>${resourceNotice}`;
   }).join(""));
 }
 

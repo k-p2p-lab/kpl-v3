@@ -229,3 +229,26 @@ test('Agent Total row keeps scope breakdowns and excludes disabled/offline capac
  a.resources.peers={cpuCores:0,memoryUsageBytes:0,memoryWorkingSetBytes:0,containers:0,measuredContainers:0,complete:true};
  assert.match(resources.totalRow([a],now),/>0%</);assert.match(resources.totalRow([a],now),/>0 B</);
 });
+
+test('Agent notices consolidate scope coverage and shared failures in one full-width footer',()=>{
+ const a=agent();a.resources.complete=false;a.resources.measuredContainers=3;
+ a.resources.agent={cpuCores:.5,memoryUsageBytes:1024,memoryWorkingSetBytes:768,containers:1,measuredContainers:1,complete:true};
+ a.resources.peers={cpuCores:1,memoryUsageBytes:3072,memoryWorkingSetBytes:2304,containers:3,measuredContainers:2,complete:false};
+ for(const metric of ['cpu','memory']) assert.doesNotMatch(resources.cell(a,metric,now),/agent-capacity-note/);
+ const footer=resources.notice(a,now);
+ assert.equal((footer.match(/<tr /g)||[]).length,1);assert.match(footer,/colspan="11"/);
+ assert.equal((footer.match(/Partial measurement/g)||[]).length,1);
+ assert.match(footer,/Total: 3\/4 containers; Peers: 2\/3 containers/);
+ const total=resources.totalRow([a],now).split('</tr>');
+ assert.equal((total[1].match(/Partial measurement/g)||[]).length,1);
+ assert.match(total[1],/colspan="11"/);
+ assert.doesNotMatch(total[0],/class="agent-capacity-note agent-resource-partial"/);
+ a.resources.cpuCapacityCores=0;
+ assert.equal((resources.notice(a,now).match(/Host CPU count unavailable/g)||[]).length,1);
+ a.state='offline';assert.equal((resources.notice(a,now).match(/Offline/g)||[]).length,1);
+ a.state='online';a.resources.sampledAt=new Date(now-31000).toISOString();
+ assert.equal((resources.notice(a,now).match(/Stale sample/g)||[]).length,1);
+ assert.doesNotMatch(resources.notice({...a,disabled:true},now),/resource-notice-warning/);
+ assert.equal(resources.notice(agent(),now),'');
+ assert.doesNotMatch(resources.noticeRow('<img src=x onerror=alert(1)>'),/<img/);
+});

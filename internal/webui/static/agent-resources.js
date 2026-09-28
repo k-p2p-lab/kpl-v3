@@ -43,12 +43,42 @@
   function cell(agent, metric, now) {
     const d = describe(agent, now);
     if (agent.disabled || (!agent.resources?.agent && !agent.resources?.peers)) {
-      return `<span class="agent-resource-value" title="${escape(d.title)}">${escape(d[metric])}</span><span class="agent-capacity-note${d.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? d.detail : d.memoryDetail)}</span>`;
+      return `<span class="agent-resource-value" title="${escape(d.title)}">${escape(d[metric])}</span>`;
     }
     return [["agent_and_peers", "Total"], ["agent", "Agent"], ["peers", "Peers"]].map(([scope, label]) => {
       const value = describe(agent, now, scope);
-      return `<div class="agent-resource-scope" title="${escape(value.title)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${escape(value[metric])}</span>${value.partial || !value.available ? `<span class="agent-capacity-note${value.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? value.detail : value.memoryDetail)}</span>` : ""}</div>`;
+      return `<div class="agent-resource-scope" title="${escape(value.title)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${escape(value[metric])}</span></div>`;
     }).join("");
+  }
+  function noticeRow(message, {columns = 11, total = false, warning = true} = {}) {
+    if (!message) return "";
+    return `<tr class="resource-notice-row${total ? " resource-total-row" : ""}${warning ? " resource-notice-warning" : ""}"><td colspan="${columns}"><div class="resource-row-notice">${escape(message)}</div></td></tr>`;
+  }
+  function groupedNotes(entries, scopeCount) {
+    const groups = new Map();
+    for (const [label, message] of entries) {
+      if (!message) continue;
+      if (!groups.has(message)) groups.set(message, []);
+      groups.get(message).push(label);
+    }
+    return [...groups].map(([message, labels]) => labels.length === scopeCount ? message : `${labels.join(", ")}: ${message}`).join("; ");
+  }
+  function notice(agent, now = Date.now()) {
+    if (agent.disabled) return noticeRow("Agent disabled · Excluded from hardware monitoring totals.", {warning:false});
+    const scopes = agent.resources?.agent || agent.resources?.peers ? [["agent_and_peers", "Total"], ["agent", "Agent"], ["peers", "Peers"]] : [["agent_and_peers", "Total"]];
+    const partial = [], unavailable = [];
+    let missingCPU = false;
+    for (const [scope, label] of scopes) {
+      const d = describe(agent, now, scope), r = sample(agent, scope);
+      if (!d.available) unavailable.push([label, d.detail]);
+      if (d.partial) partial.push([label, `${number(r.measuredContainers)}/${number(r.containers)} containers`]);
+      if (d.available && cpuPercent(r) === null) missingCPU = true;
+    }
+    const messages = [];
+    if (partial.length) messages.push(`Partial measurement · ${groupedNotes(partial, scopes.length)}`);
+    if (unavailable.length) messages.push(groupedNotes(unavailable, scopes.length));
+    if (missingCPU) messages.push("Host CPU count unavailable");
+    return noticeRow(messages.join(". "));
   }
   function aggregate(agents, now = Date.now(), scope = "agent_and_peers") {
     const result = {cpuPercent:null, cpuCores:0, cpuCapacityCores:0, cpuMeasured:0, memoryWorkingSetBytes:0, memoryUsageBytes:0, measured:0, total:agents.filter(a => !a.disabled).length, partial:0, containers:0, measuredContainers:0};
@@ -81,12 +111,22 @@
       return scopes.map(({scope, label, value:a}) => {
         const measured = metric === "cpu" ? a.cpuMeasured : a.measured;
         const value = metric === "cpu" ? (a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`) : (a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A");
-        const partial = a.partial || measured < a.total;
         const coverage = `${number(measured)}/${number(a.total)} Agents measured${a.partial ? ` · ${number(a.measuredContainers)}/${number(a.containers)} containers` : ""}`;
-        return `<div class="agent-resource-scope" title="${escape(`${scopeLabels[scope]}; ${coverage}. Disabled Agents and unavailable samples are excluded.`)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${value}</span>${partial || !measured ? `<span class="agent-capacity-note${partial ? " agent-resource-partial" : ""}">${coverage}</span>` : ""}</div>`;
+        return `<div class="agent-resource-scope" title="${escape(`${scopeLabels[scope]}; ${coverage}. Disabled Agents and unavailable samples are excluded.`)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${value}</span></div>`;
       }).join("");
     }
-    return `<tr class="resource-total-row" data-resource-total="agents">
+    const partial = [], unavailable = [], cpuUnavailable = [];
+    for (const {label, value:a} of scopes) {
+      if (a.partial) partial.push([label, `${number(a.measuredContainers)}/${number(a.containers)} containers`]);
+      if (a.measured < a.total) unavailable.push([label, `${number(a.measured)}/${number(a.total)} Agents measured`]);
+      if (a.cpuMeasured !== a.measured) cpuUnavailable.push([label, `${number(a.cpuMeasured)}/${number(a.total)} Agents measured`]);
+    }
+    const messages = [];
+    if (partial.length) messages.push(`Partial measurement · ${groupedNotes(partial, scopes.length)}`);
+    if (unavailable.length) messages.push(`Resource coverage · ${groupedNotes(unavailable, scopes.length)}`);
+    if (cpuUnavailable.length) messages.push(`CPU coverage · ${groupedNotes(cpuUnavailable, scopes.length)}`);
+    const footer = noticeRow(messages.join(". "), {total:true});
+    return `<tr class="resource-total-row${footer ? " resource-has-notice" : ""}" data-resource-total="agents">
       <td class="agent-number">—</td>
       <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(enabled.length)} enabled${agents.length > enabled.length ? ` · ${number(agents.length - enabled.length)} disabled` : ""}</span></th>
       <td>${number(online.length)} / ${number(enabled.length)} online</td>
@@ -96,7 +136,7 @@
       <td class="agent-resource-cell">${totalCell("cpu")}</td>
       <td class="agent-resource-cell">${totalCell("memory")}</td>
       <td>—</td><td>—</td><td class="agent-settings-cell">—</td>
-    </tr>`;
+    </tr>${footer}`;
   }
   function update(agents, now = Date.now()) {
     for (const [scope, id] of [["agent_and_peers","agentResourceSummary"],["agent","agentOnlyResourceSummary"],["peers","peersOnlyResourceSummary"]]) {
@@ -244,7 +284,7 @@
       finally { clearTimeout(timer); busy = false; controls(); }
     });
   }
-  const exports = {valid, describe, cell, aggregate, totalRow, update, init};
+  const exports = {valid, describe, cell, notice, noticeRow, aggregate, totalRow, update, init};
   if (typeof module !== "undefined" && module.exports) module.exports = exports;
   else root.KPLAgentResources = exports;
 })(globalThis);

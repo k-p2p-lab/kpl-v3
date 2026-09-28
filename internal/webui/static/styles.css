@@ -773,7 +773,6 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .resource-total-row > :is(th, td) { background: var(--surface-raised); border-bottom: 1px solid var(--line); }
 .resource-total-label { display: block; color: var(--text); font-weight: 750; }
 .resource-total-row .agent-capacity-note { font-weight: 400; }
-.resource-total-row .agent-resource-cell .agent-capacity-note { white-space: normal; max-width: 16rem; }
 .agent-resource-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .agent-resource-history { margin: 12px 0 8px; }
 .agent-resource-history label { color: var(--muted); font-size: 12px; }
@@ -786,7 +785,6 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .agent-resource-scope + .agent-resource-scope { margin-top: 5px; }
 .agent-resource-scope-label { color: var(--muted); font-size: .72rem; }
 .agent-resource-scope .agent-resource-value { text-align: right; }
-.agent-resource-scope .agent-capacity-note { grid-column: 1 / -1; }
 .agent-resource-scope:first-child .agent-resource-value { font-weight: 650; }
 .agent-resource-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .agents-panel .panel-header { flex-wrap: wrap; }
@@ -832,3 +830,9 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .service-resource-state[data-state="running"] { color: var(--green); }
 .service-resource-state[data-state="not_running"], .service-resource-state[data-state="stale"] { color: var(--red); }
 .service-resource-host { min-width: 8rem; max-width: 18rem; white-space: normal; overflow-wrap: anywhere; }
+
+/* Resource notices belong to the whole row, shared by CPU and memory. */
+.resource-has-notice > :is(th, td) { border-bottom: 0; padding-bottom: .35rem; }
+.resource-notice-row > td { padding-top: 0; padding-bottom: .75rem; white-space: normal; color: var(--muted); }
+.resource-notice-warning > td { color: var(--amber); }
+.resource-row-notice { position: sticky; left: 1.1rem; width: max-content; max-width: min(100%, calc(100vw - 7rem)); white-space: normal; overflow-wrap: anywhere; font-size: .75rem; line-height: 1.6; }

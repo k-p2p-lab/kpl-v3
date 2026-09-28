@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,6 +164,45 @@ func fakeDocker(t *testing.T, settings map[string]string) (*dockerRuntime, strin
 		}
 		return command
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/containers/"+fakeContainerID+"/wait" || r.URL.Query().Get("condition") != "not-running" {
+			t.Errorf("unexpected wait request: %s %s", r.Method, r.URL)
+			w.WriteHeader(400)
+			return
+		}
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(500)
+			return
+		}
+		data, _ := json.Marshal(dockerInvocation{Args: []string{"wait", fakeContainerID}})
+		_, _ = f.Write(append(data, '\n'))
+		_ = f.Close()
+		if settings["HANG"] == "wait" {
+			<-r.Context().Done()
+			return
+		}
+		if settings["DELAY"] == "wait" {
+			ms, _ := strconv.Atoi(settings["DELAY_MS"])
+			select {
+			case <-time.After(time.Duration(ms) * time.Millisecond):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		if strings.Contains(settings["FAIL"], "wait") {
+			w.WriteHeader(500)
+			return
+		}
+		code := settings["EXIT"]
+		if code == "" {
+			code = "0"
+		}
+		fmt.Fprintf(w, `{"StatusCode":%s}`, code)
+	}))
+	t.Cleanup(server.Close)
+	runtime.waitClient, runtime.waitURL = server.Client(), server.URL
 	return runtime, logPath
 }
 

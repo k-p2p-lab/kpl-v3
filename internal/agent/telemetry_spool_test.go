@@ -25,7 +25,7 @@ func TestTelemetrySpoolRecoversUnacknowledgedSuffixAndTermination(t *testing.T) 
 	if err = spool.append(events); err != nil {
 		t.Fatal(err)
 	}
-	if err = spool.acknowledge(events[:1]); err != nil {
+	if _, err = spool.acknowledge(1); err != nil {
 		t.Fatal(err)
 	}
 	restarted, pending, err := openTelemetrySpool(directory)
@@ -38,7 +38,7 @@ func TestTelemetrySpoolRecoversUnacknowledgedSuffixAndTermination(t *testing.T) 
 	if err != nil || len(pending) != 3 {
 		t.Fatalf("termination not durable: %+v %v", pending, err)
 	}
-	if err = restored.acknowledge(pending); err != nil {
+	if _, err = restored.acknowledge(len(pending)); err != nil {
 		t.Fatal(err)
 	}
 	_, pending, err = openTelemetrySpool(directory)
@@ -52,7 +52,7 @@ func TestTelemetrySpoolRefusesAcknowledgmentOnDiskFailure(t *testing.T) {
 	if err := os.WriteFile(blocked, []byte("x"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{spool: &telemetrySpool{directory: blocked, refs: map[string][]telemetryRef{}}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s := &Server{spool: &telemetrySpool{directory: blocked}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	if s.enqueueEvents(model.EventBatch{Events: []model.TraceEvent{{EventID: "must-retry"}}}) {
 		t.Fatal("unpersisted events acknowledged")
 	}

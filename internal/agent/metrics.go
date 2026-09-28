@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -96,30 +97,42 @@ func newAgentMetricsRegistry(s *Server) *prometheus.Registry {
 	// These describe the Agent's own Go runtime and OS process. Peer containers
 	// have separate processes and are not included in these CPU/memory metrics.
 	processRegistry := prometheus.WrapRegistererWith(prometheus.Labels{"agent_id": s.config.ID}, registry)
-	processRegistry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	processRegistry.MustRegister(collectors.NewGoCollector(collectors.WithGoCollectorRuntimeMetrics(collectors.GoRuntimeMetricsRule{Matcher: regexp.MustCompile(`^/(cpu/classes/(gc/.*|total)|gc/(heap/(live|goal)|cycles/.*)|memory/classes/(heap/.*|metadata/.*|total)):`)})), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return registry
 }
 
 type localCollector struct {
-	server                                          *Server
-	nodes, capacity, cleanupPending, telemetryQueue *prometheus.Desc
-	historyRecords, historyRetired, historyErrors   *prometheus.Desc
+	memory, memoryAt, waits                            *prometheus.Desc
+	queueBytes, windowBytes, decoders, decoderRejected *prometheus.Desc
+	server                                             *Server
+	nodes, capacity, cleanupPending, telemetryQueue    *prometheus.Desc
+	historyRecords, historyRetired, historyErrors      *prometheus.Desc
 }
 
 func newLocalCollector(s *Server) *localCollector {
 	return &localCollector{
-		server:         s,
-		historyRecords: prometheus.NewDesc("kpl_local_history_records", "Terminal Peer records and run fences currently retained in Agent memory.", []string{"agent_id", "kind"}, nil),
-		historyRetired: prometheus.NewDesc("kpl_local_history_retired_total", "Acknowledged terminal Peers and run fences moved from Agent memory to local storage.", []string{"agent_id", "kind"}, nil),
-		historyErrors:  prometheus.NewDesc("kpl_local_history_cleanup_errors_total", "Failed history maintenance passes. Evidence remains in memory until storage recovers.", []string{"agent_id"}, nil),
-		nodes:          prometheus.NewDesc("kpl_local_nodes", "Peer records held by this Agent, including retained stopped and failed records, by current state and peer runtime.", []string{"agent_id", "state", "runtime"}, nil),
-		capacity:       prometheus.NewDesc("kpl_local_capacity", "Configured peer admission capacity of this Agent; this is not a CPU or memory limit.", []string{"agent_id"}, nil),
-		cleanupPending: prometheus.NewDesc("kpl_local_cleanup_pending", "Docker peers awaiting cleanup or whose previous container cleanup failed.", []string{"agent_id"}, nil),
-		telemetryQueue: prometheus.NewDesc("kpl_local_telemetry_queue_events", "Queued, in-flight and pending termination events retained by this Agent for forwarding to the Controller.", []string{"agent_id"}, nil),
+		memory:          prometheus.NewDesc("kpl_local_agent_memory_bytes", "Agent container memory accounting from Docker, including subprocesses and cgroup cache/kernel charges. Categories overlap; do not sum them.", []string{"agent_id", "kind"}, nil),
+		memoryAt:        prometheus.NewDesc("kpl_local_agent_memory_sample_timestamp_seconds", "Timestamp of the available Agent container memory sample.", []string{"agent_id"}, nil),
+		waits:           prometheus.NewDesc("kpl_local_peer_wait_connections", "Active Docker Engine Peer exit waits; these do not start Docker CLI subprocesses.", []string{"agent_id"}, nil),
+		queueBytes:      prometheus.NewDesc("kpl_local_telemetry_backlog_bytes", "Serialized event bytes awaiting acknowledgement, including disk backlog and in-flight events; not Go heap usage.", []string{"agent_id"}, nil),
+		windowBytes:     prometheus.NewDesc("kpl_local_telemetry_window_bytes", "Serialized size of the loaded or in-flight forwarding window; not decoded Go heap usage.", []string{"agent_id"}, nil),
+		decoders:        prometheus.NewDesc("kpl_local_telemetry_decoders", "Telemetry requests currently decoding or waiting for durable admission; capped at two.", []string{"agent_id"}, nil),
+		decoderRejected: prometheus.NewDesc("kpl_local_telemetry_decoder_rejected_total", "Telemetry requests rejected before decoding because admission slots were busy; clients must retry.", []string{"agent_id"}, nil),
+		server:          s,
+		historyRecords:  prometheus.NewDesc("kpl_local_history_records", "Terminal Peer records and run fences currently retained in Agent memory.", []string{"agent_id", "kind"}, nil),
+		historyRetired:  prometheus.NewDesc("kpl_local_history_retired_total", "Acknowledged terminal Peers and run fences moved from Agent memory to local storage.", []string{"agent_id", "kind"}, nil),
+		historyErrors:   prometheus.NewDesc("kpl_local_history_cleanup_errors_total", "Failed history maintenance passes. Evidence remains in memory until storage recovers.", []string{"agent_id"}, nil),
+		nodes:           prometheus.NewDesc("kpl_local_nodes", "Peer records held by this Agent, including retained stopped and failed records, by current state and peer runtime.", []string{"agent_id", "state", "runtime"}, nil),
+		capacity:        prometheus.NewDesc("kpl_local_capacity", "Configured peer admission capacity of this Agent; this is not a CPU or memory limit.", []string{"agent_id"}, nil),
+		cleanupPending:  prometheus.NewDesc("kpl_local_cleanup_pending", "Docker peers awaiting cleanup or whose previous container cleanup failed.", []string{"agent_id"}, nil),
+		telemetryQueue:  prometheus.NewDesc("kpl_local_telemetry_queue_events", "Queued, in-flight and pending termination events retained by this Agent for forwarding to the Controller.", []string{"agent_id"}, nil),
 	}
 }
 
 func (c *localCollector) Describe(ch chan<- *prometheus.Desc) {
+	for _, desc := range []*prometheus.Desc{c.memory, c.memoryAt, c.waits, c.queueBytes, c.windowBytes, c.decoders, c.decoderRejected} {
+		ch <- desc
+	}
 	ch <- c.nodes
 	ch <- c.capacity
 	ch <- c.cleanupPending
@@ -149,16 +162,38 @@ func (c *localCollector) Collect(ch chan<- prometheus.Metric) {
 			cleanupPending++
 		}
 	}
+	memory, memoryAt := s.agentMemory, s.agentMemorySampleAt
 	historyFences, peersRetired, fencesRetired, historyErrors := len(s.runFences), s.historyPeersRetired, s.historyFencesRetired, s.historyErrors
 	s.mu.RUnlock()
+	for kind, value := range memory {
+		ch <- prometheus.MustNewConstMetric(c.memory, prometheus.GaugeValue, float64(value), agentID, kind)
+	}
+	if !memoryAt.IsZero() {
+		ch <- prometheus.MustNewConstMetric(c.memoryAt, prometheus.GaugeValue, float64(memoryAt.UnixNano())/1e9, agentID)
+	}
+
 	ch <- prometheus.MustNewConstMetric(c.historyRecords, prometheus.GaugeValue, float64(historyPeers), agentID, "peers")
 	ch <- prometheus.MustNewConstMetric(c.historyRecords, prometheus.GaugeValue, float64(historyFences), agentID, "run_fences")
 	ch <- prometheus.MustNewConstMetric(c.historyRetired, prometheus.CounterValue, float64(peersRetired), agentID, "peers")
 	ch <- prometheus.MustNewConstMetric(c.historyRetired, prometheus.CounterValue, float64(fencesRetired), agentID, "run_fences")
 	ch <- prometheus.MustNewConstMetric(c.historyErrors, prometheus.CounterValue, float64(historyErrors), agentID)
 	s.eventsMu.Lock()
-	queued := len(s.events) + s.eventsInFlight + len(s.terminations)
+	queued := s.pendingEventsLocked()
+	backlogBytes, windowBytes := s.pendingBytesLocked(), s.eventsBytes+s.inFlightBytes
+	if s.spool != nil && len(s.events) > 0 {
+		windowBytes = 0
+		for _, record := range s.spool.records[:min(len(s.events), len(s.spool.records))] {
+			windowBytes += int64(record.size)
+		}
+	}
 	s.eventsMu.Unlock()
+	ch <- prometheus.MustNewConstMetric(c.queueBytes, prometheus.GaugeValue, float64(backlogBytes), agentID)
+	ch <- prometheus.MustNewConstMetric(c.windowBytes, prometheus.GaugeValue, float64(windowBytes), agentID)
+	ch <- prometheus.MustNewConstMetric(c.decoders, prometheus.GaugeValue, float64(s.telemetryDecoders.Load()), agentID)
+	ch <- prometheus.MustNewConstMetric(c.decoderRejected, prometheus.CounterValue, float64(s.telemetryDecodersRejected.Load()), agentID)
+	if s.docker != nil {
+		ch <- prometheus.MustNewConstMetric(c.waits, prometheus.GaugeValue, float64(s.docker.activeWaits.Load()), agentID)
+	}
 	for key, count := range counts {
 		ch <- prometheus.MustNewConstMetric(c.nodes, prometheus.GaugeValue, float64(count), agentID, key.state, key.runtime)
 	}

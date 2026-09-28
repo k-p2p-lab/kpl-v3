@@ -144,7 +144,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	dataDir := flags.String("data-dir", "data-agent", "agent data directory")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	labels := flags.String("labels", "", "comma-separated key=value labels")
-	dockerSocket := flags.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket for read-only KPL resource measurement")
+	dockerSocket := flags.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket for Peer exit waits and KPL resource measurement")
 	selfContainer := flags.String("self-container", os.Getenv("KPL_SWARM_TASK_NAME"), "Agent container name for Agent + Peer resource measurement")
 	dockerBinary := flags.String("docker-binary", "docker", "Docker CLI executable")
 	dockerImage := flags.String("docker-image", "", "peer image resolved from the running Swarm Agent task")

@@ -47,7 +47,11 @@ func TestTelemetrySplitsByEncodedBytesAndRetriesInOrder(t *testing.T) {
 		w.WriteHeader(204)
 	}))
 	defer controller.Close()
-	s := &Server{config: Config{ID: "agent", ControllerURL: controller.URL}, client: controller.Client(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	spool, _, err := openTelemetrySpool(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{spool: spool, config: Config{ID: "agent", ControllerURL: controller.URL}, client: controller.Client(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, id := range []string{"first", "second"} {
 		data, err := json.Marshal(model.EventBatch{Events: []model.TraceEvent{{EventID: id, Fields: map[string]any{"padding": strings.Repeat("x", 6<<20)}}}})
 		if err != nil {
@@ -62,7 +66,7 @@ func TestTelemetrySplitsByEncodedBytesAndRetriesInOrder(t *testing.T) {
 	for range 3 {
 		s.flushEvents(context.Background())
 	}
-	if len(s.events) != 0 || s.eventsInFlight != 0 || len(received) != 3 {
+	if len(spool.records) != 0 || len(s.events) != 0 || s.eventsInFlight != 0 || len(received) != 3 {
 		t.Fatalf("acknowledged events stuck behind oversized batch: queued=%d inFlight=%d requests=%d decoded=%d", len(s.events), s.eventsInFlight, attempts.Load(), len(received))
 	}
 	for _, want := range [][]string{{"first"}, {"first"}, {"second"}} {

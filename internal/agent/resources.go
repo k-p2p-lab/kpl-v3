@@ -44,6 +44,8 @@ type resourceSampler struct {
 	warmup                 time.Duration
 	cpuCapacity            int
 	cpuCapacityAt          time.Time
+	selfMemory             map[string]uint64
+	selfMemoryAt           time.Time
 }
 
 func newResourceSampler(config Config) *resourceSampler {
@@ -208,6 +210,7 @@ func (s *resourceSampler) hostCPUCapacity(ctx context.Context, current map[strin
 }
 
 func (s *resourceSampler) sample(ctx context.Context) *model.AgentResources {
+	s.selfMemory, s.selfMemoryAt = nil, time.Time{}
 	ctx, cancel := context.WithTimeout(ctx, resourceTimeout)
 	defer cancel()
 	result := &model.AgentResources{SampledAt: time.Now().UTC()}
@@ -286,6 +289,10 @@ func (s *resourceSampler) sample(ctx context.Context) *model.AgentResources {
 		total.working += working
 		result.MeasuredContainers++
 	}
+	if own, ok := current[selfID]; ok {
+		s.selfMemory = agentMemoryBreakdown(own)
+		s.selfMemoryAt = own.Read
+	}
 	s.previous = current // Bound retained state to the current inventory.
 	result.CPUCapacityCores = s.hostCPUCapacity(ctx, current)
 	result.Complete = result.MeasuredContainers == result.Containers && ctx.Err() == nil
@@ -321,6 +328,7 @@ func (s *Server) resourceLoop(ctx context.Context) {
 		sample := sampler.sample(ctx)
 		s.mu.Lock()
 		s.resources = sample
+		s.agentMemory, s.agentMemorySampleAt = sampler.selfMemory, sampler.selfMemoryAt
 		s.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -328,4 +336,37 @@ func (s *Server) resourceLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// Docker exposes cgroup v2 names and v1 total_* names. Do not report a missing
+// counter as zero, or add overlapping categories together (slab is part of kernel).
+func agentMemoryBreakdown(stats containerResourceStats) map[string]uint64 {
+	if stats.Memory.Usage == nil {
+		return nil
+	}
+	result := map[string]uint64{"usage": *stats.Memory.Usage}
+	fields := map[string][]string{
+		"anonymous":          {"anon", "total_rss", "rss"},
+		"file":               {"file", "total_cache", "cache"},
+		"inactive_file":      {"total_inactive_file", "inactive_file"},
+		"slab":               {"total_slab", "slab"},
+		"slab_reclaimable":   {"total_slab_reclaimable", "slab_reclaimable"},
+		"slab_unreclaimable": {"total_slab_unreclaimable", "slab_unreclaimable"},
+		"kernel":             {"kernel"}, "kernel_stack": {"total_kernel_stack", "kernel_stack"},
+		"page_tables": {"total_pagetables", "pagetables"}, "socket": {"total_sock", "sock"},
+	}
+	for kind, names := range fields {
+		for _, name := range names {
+			if value, ok := stats.Memory.Stats[name]; ok {
+				result[kind] = value
+				break
+			}
+		}
+	}
+	working := *stats.Memory.Usage
+	if cache, ok := result["inactive_file"]; ok && cache < working {
+		working -= cache
+	}
+	result["working_set"] = working
+	return result
 }

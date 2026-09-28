@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -136,5 +137,53 @@ func TestAgentMetricsRouteCanBeScrapedWithoutMutationAuthorization(t *testing.T)
 	}
 	if !strings.Contains(response.Body.String(), `kpl_local_capacity{agent_id="agent"} 4`) {
 		t.Fatalf("local metrics missing from route: %s", response.Body.String())
+	}
+}
+
+func TestAgentMemoryDiagnosticsSeparateContainerProcessAndBacklog(t *testing.T) {
+	spool, _, err := openTelemetrySpool(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := spool.append([]model.TraceEvent{{RunID: "run", EventID: "pending"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{config: Config{ID: "agent"}, spool: spool, docker: &dockerRuntime{}, agentMemory: map[string]uint64{"usage": 1000, "anonymous": 600, "file": 300}, agentMemorySampleAt: time.Unix(100, 0)}
+	s.docker.activeWaits.Store(7)
+	s.telemetryDecoders.Store(2)
+	registry := newAgentMetricsRegistry(s)
+	labels := map[string]string{"agent_id": "agent"}
+	for name, want := range map[string]float64{"kpl_local_telemetry_queue_events": 1, "kpl_local_telemetry_backlog_bytes": float64(spool.bytes), "kpl_local_telemetry_window_bytes": 0, "kpl_local_telemetry_decoders": 2, "kpl_local_peer_wait_connections": 7, "kpl_local_agent_memory_sample_timestamp_seconds": 100} {
+		if got := localMetricGauge(t, registry, name, labels); got != want {
+			t.Errorf("%s=%v want=%v", name, got, want)
+		}
+	}
+	if got := localMetricGauge(t, registry, "kpl_local_agent_memory_bytes", map[string]string{"agent_id": "agent", "kind": "anonymous"}); got != 600 {
+		t.Fatal("incorrect anonymous memory")
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"go_cpu_classes_gc_total_cpu_seconds_total", "go_gc_heap_live_bytes", "go_memstats_heap_alloc_bytes", "process_resident_memory_bytes"} {
+		found := false
+		for _, family := range families {
+			if family.GetName() == name {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing runtime metric %s", name)
+		}
+	}
+	s.agentMemory, s.agentMemorySampleAt = nil, time.Time{}
+	families, err = registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if strings.HasPrefix(family.GetName(), "kpl_local_agent_memory_") {
+			t.Fatal("failed sample reported stale or fabricated memory")
+		}
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -74,29 +75,35 @@ type Server struct {
 	historyErrors        uint64
 	fencingAll           bool
 
-	resources         *model.AgentResources
-	startupReconciled bool
-	spool             *telemetrySpool
-	spoolError        error
-	config            Config
-	logger            *slog.Logger
-	client            *http.Client
-	docker            *dockerRuntime
-	startedAt         time.Time
-	mu                sync.RWMutex
-	heartbeatMu       sync.Mutex
-	capacityLimit     int // protected by mu; zero uses the CLI default
-	capacityRevision  string
-	processes         map[string]*process
-	runFences         map[string]uint64
-	shuttingDown      bool
-	eventsMu          sync.Mutex
-	events            []model.TraceEvent
-	eventsInFlight    int
-	inFlightRuns      map[string]int
-	terminations      map[string]model.TraceEvent
-	telemetryClosed   bool
-	flushNow          chan struct{}
+	agentMemory               map[string]uint64
+	agentMemorySampleAt       time.Time
+	resources                 *model.AgentResources
+	startupReconciled         bool
+	spool                     *telemetrySpool
+	spoolError                error
+	config                    Config
+	logger                    *slog.Logger
+	client                    *http.Client
+	docker                    *dockerRuntime
+	startedAt                 time.Time
+	mu                        sync.RWMutex
+	heartbeatMu               sync.Mutex
+	capacityLimit             int // protected by mu; zero uses the CLI default
+	capacityRevision          string
+	processes                 map[string]*process
+	runFences                 map[string]uint64
+	shuttingDown              bool
+	eventsMu                  sync.Mutex
+	events                    []model.TraceEvent
+	eventsInFlight            int
+	telemetryDecoders         atomic.Int32
+	telemetryDecodersRejected atomic.Uint64
+	eventsBytes               int64
+	inFlightBytes             int64
+	inFlightRuns              map[string]int
+	terminations              map[string]model.TraceEvent
+	telemetryClosed           bool
+	flushNow                  chan struct{}
 }
 
 func New(config Config, logger *slog.Logger) (*Server, error) {
@@ -150,7 +157,7 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 		config:    config,
 		logger:    logger,
 		client:    &http.Client{Timeout: 10 * time.Second},
-		docker:    &dockerRuntime{binary: config.DockerBinary, image: config.DockerImage, network: config.DockerNetwork, commandContext: exec.CommandContext},
+		docker:    &dockerRuntime{binary: config.DockerBinary, image: config.DockerImage, network: config.DockerNetwork, commandContext: exec.CommandContext, waitClient: newDockerWaitClient(config.DockerSocket), waitURL: "http://docker"},
 		startedAt: time.Now().UTC(),
 		processes: make(map[string]*process),
 		runFences: make(map[string]uint64),
@@ -169,6 +176,7 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	defer s.docker.waitClient.CloseIdleConnections()
 	// Bind before reconciling: a duplicate Agent on the same host must not remove the
 	// running Agent's peers and only then discover that one of its ports is
 	// occupied.
@@ -530,6 +538,11 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 
 	// Disk stalls must not block heartbeats, lifetime stops or other admissions.
 	configPath, err := s.writePeerConfig(peerConfig)
+	if configPath != "" {
+		s.mu.Lock()
+		proc.configPath = configPath
+		s.mu.Unlock()
+	}
 	var data []byte
 	if err == nil {
 		data, err = json.Marshal(peerConfig)
@@ -542,9 +555,6 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		s.finishProcess(request.ID, proc, err, nil)
 		return model.Node{}, err
 	}
-	s.mu.Lock()
-	proc.configPath = configPath
-	s.mu.Unlock()
 	go s.runDockerProcess(processCtx, proc, data, request.Lifetime)
 	return node, nil
 }
@@ -865,12 +875,17 @@ func (s *Server) enqueueEvents(batch model.EventBatch) bool {
 	s.eventsMu.Lock()
 	// Reserve space for batches already being sent. A failed Controller request
 	// must be requeued without discarding events the Agent has acknowledged.
-	if s.telemetryClosed || len(s.events)+s.eventsInFlight+len(batch.Events) > 50000 {
+	if s.telemetryClosed || s.pendingEventsLocked()+len(batch.Events) > telemetryBacklogEvents {
 		s.eventsMu.Unlock()
 		return false
 	}
 	for i := range batch.Events {
 		batch.Events[i].AgentID = s.config.ID
+	}
+	size, err := telemetryEncodedSize(batch.Events)
+	if err != nil || s.pendingBytesLocked()+size > telemetryBacklogBytes {
+		s.eventsMu.Unlock()
+		return false
 	}
 	if err := s.spool.append(batch.Events); err != nil {
 		s.spoolError = err
@@ -878,8 +893,11 @@ func (s *Server) enqueueEvents(batch model.EventBatch) bool {
 		s.logger.Error("persist telemetry spool", "error", err)
 		return false
 	}
-	s.events = append(s.events, batch.Events...)
-	length := len(s.events)
+	if s.spool == nil {
+		s.events = append(s.events, batch.Events...)
+		s.eventsBytes += size
+	}
+	length := s.pendingEventsLocked()
 	s.eventsMu.Unlock()
 	if length >= 250 {
 		select {
@@ -905,6 +923,10 @@ func (s *Server) flushEvents(ctx context.Context) {
 		return
 	}
 	s.admitTerminationsLocked()
+	if s.spool != nil {
+		s.flushSpoolEventsLocked(ctx)
+		return
+	}
 	if len(s.events) == 0 {
 		s.eventsMu.Unlock()
 		return
@@ -916,6 +938,9 @@ func (s *Server) flushEvents(ctx context.Context) {
 		return
 	}
 	batchEvents := append([]model.TraceEvent(nil), s.events[:count]...)
+	batchBytes, _ := telemetryEncodedSize(batchEvents)
+	s.eventsBytes = max(0, s.eventsBytes-batchBytes)
+	s.inFlightBytes = batchBytes
 	s.eventsInFlight += count
 	s.inFlightRuns = map[string]int{}
 	for _, event := range batchEvents {
@@ -928,15 +953,14 @@ func (s *Server) flushEvents(ctx context.Context) {
 	err = s.postData(flushCtx, "/api/v1/events/batch", data, nil)
 	s.eventsMu.Lock()
 	s.eventsInFlight -= count
+	s.inFlightBytes = 0
 	s.inFlightRuns = nil
-	if err == nil {
-		err = s.spool.acknowledge(batchEvents)
-	}
 	if err == nil && len(s.events) == 0 && len(s.terminations) == 0 {
 		s.spoolError = nil
 	}
 	if err != nil {
 		s.events = append(batchEvents, s.events...)
+		s.eventsBytes += batchBytes
 		s.logger.Warn("telemetry flush failed", "events", len(batchEvents), "error", err)
 	}
 	s.eventsMu.Unlock()
@@ -945,7 +969,7 @@ func (s *Server) flushEvents(ctx context.Context) {
 func (s *Server) drainEvents(ctx context.Context) error {
 	for ctx.Err() == nil {
 		s.eventsMu.Lock()
-		remaining := len(s.events) + s.eventsInFlight + len(s.terminations)
+		remaining := s.pendingEventsLocked()
 		s.eventsMu.Unlock()
 		if remaining == 0 {
 			return nil
@@ -957,7 +981,7 @@ func (s *Server) drainEvents(ctx context.Context) error {
 		}
 	}
 	s.eventsMu.Lock()
-	remaining := len(s.events) + s.eventsInFlight + len(s.terminations)
+	remaining := s.pendingEventsLocked()
 	s.eventsMu.Unlock()
 	if remaining > 0 {
 		s.logger.Warn("telemetry drain incomplete", "events", remaining, "error", ctx.Err())
@@ -976,9 +1000,14 @@ func (s *Server) queueTermination(event model.TraceEvent) {
 		s.terminations = make(map[string]model.TraceEvent)
 	}
 	if existing, ok := s.terminations[event.NodeID]; !ok || event.Timestamp.Before(existing.Timestamp) {
-		if err := s.spool.append([]model.TraceEvent{event}); err != nil {
-			s.spoolError = err
-			s.logger.Error("persist termination evidence", "error", err)
+		if s.spool != nil {
+			if err := s.spool.append([]model.TraceEvent{event}); err == nil {
+				delete(s.terminations, event.NodeID)
+				return
+			} else {
+				s.spoolError = err
+				s.logger.Error("persist termination evidence", "error", err)
+			}
 		}
 		s.terminations[event.NodeID] = event
 	}
@@ -986,10 +1015,20 @@ func (s *Server) queueTermination(event model.TraceEvent) {
 
 func (s *Server) admitTerminationsLocked() {
 	for id, event := range s.terminations {
+		if s.spool != nil {
+			if err := s.spool.append([]model.TraceEvent{event}); err != nil {
+				s.spoolError = err
+				return
+			}
+			delete(s.terminations, id)
+			continue
+		}
 		if len(s.events)+s.eventsInFlight >= 50000 {
 			return
 		}
 		s.events = append(s.events, event)
+		size, _ := telemetryEncodedSize([]model.TraceEvent{event})
+		s.eventsBytes += size
 		delete(s.terminations, id)
 	}
 }

@@ -372,3 +372,61 @@ func TestRetiredHistoryCannotHideUndeliveredTerminationBacklog(t *testing.T) {
 		t.Fatalf("recovery blocked admission: %v", err)
 	}
 }
+
+func TestHistoryRemovesOnlyAcknowledgedFinishedPeerConfig(t *testing.T) {
+	s := historyTestServer(t)
+	for _, id := range []string{"done", "unacknowledged", "cleanup-failed"} {
+		proc := historyTerminal(id, "run", time.Now())
+		proc.heartbeatAcknowledged = id != "unacknowledged"
+		if id == "cleanup-failed" {
+			proc.cleanupErr = errors.New("Docker unavailable")
+		}
+		dir := filepath.Join(t.TempDir(), id)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		proc.configPath = filepath.Join(dir, "peer.json")
+		if err := os.WriteFile(proc.configPath, []byte(`{"token":"private"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("unrelated data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		s.processes[id] = proc
+	}
+	doneDir := filepath.Dir(s.processes["done"].configPath)
+	if err := s.reclaimHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(doneDir, "peer.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finished config retained: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(doneDir, "keep.txt")); err != nil {
+		t.Fatal("unrelated file removed")
+	}
+	for _, id := range []string{"unacknowledged", "cleanup-failed"} {
+		if _, err := os.Stat(s.processes[id].configPath); err != nil {
+			t.Fatalf("pending config removed for %s", id)
+		}
+	}
+	if len(s.processes) != 3 {
+		t.Fatal("config cleanup discarded recent lifecycle evidence")
+	}
+}
+
+func TestTelemetryBacklogPausesNewPeerAdmissionUntilRecovery(t *testing.T) {
+	s := historyTestServer(t)
+	s.spool = &telemetrySpool{records: make([]telemetryRecord, telemetryBacklogEvents)}
+	if err := historyAdmission(s, "new", "run", 1); !errors.Is(err, errTelemetryBacklogFull) {
+		t.Fatalf("unbounded terminal backlog allowed: %v", err)
+	}
+	s.spool.records = nil
+	s.spool.bytes = telemetryBacklogBytes
+	if err := historyAdmission(s, "new", "run", 1); !errors.Is(err, errTelemetryBacklogFull) {
+		t.Fatalf("byte backlog allowed: %v", err)
+	}
+	s.spool.bytes = 0
+	if err := historyAdmission(s, "new", "run", 1); err != nil {
+		t.Fatalf("recovered admission still blocked: %v", err)
+	}
+}

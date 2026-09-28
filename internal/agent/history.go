@@ -23,6 +23,8 @@ const peerHistoryLimit = 4096
 const runFenceCacheLimit = 128
 const historyPruneBatch = 128
 
+var errTelemetryBacklogFull = errors.New("Agent telemetry backlog is full; retry Peer admission after delivery recovers")
+
 var errPeerHistoryFull = errors.New("Agent terminal evidence is awaiting delivery or local storage; retry after recovery")
 
 // Compact terminal identities/fences live on local Agent storage, not in an
@@ -168,7 +170,12 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 		}
 		s.eventsMu.Lock()
 		pendingTerminations := len(s.terminations)
+		telemetryFull := s.spool != nil && (s.pendingEventsLocked() >= telemetryBacklogEvents || s.pendingBytesLocked() >= telemetryBacklogBytes)
 		s.eventsMu.Unlock()
+		if telemetryFull {
+			s.mu.Unlock()
+			return errTelemetryBacklogFull
+		}
 		if s.history != nil && (len(s.processes)-occupied >= peerHistoryLimit || pendingTerminations >= peerHistoryLimit) {
 			s.mu.Unlock()
 			return errPeerHistoryFull
@@ -197,6 +204,31 @@ func (s *Server) reclaimHistory() error {
 	}
 	s.mu.RUnlock()
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].node.LastSeen.Before(candidates[j].node.LastSeen) })
+	// Config was copied into the container at creation. Once removal and the
+	// final heartbeat are acknowledged, it is no longer needed. Delete only our
+	// generated file; never recursively remove user files or lifecycle evidence.
+	cleaned := 0
+	for _, proc := range candidates {
+		s.mu.RLock()
+		path := proc.configPath
+		s.mu.RUnlock()
+		if path == "" {
+			continue
+		}
+		if cleaned >= historyPruneBatch {
+			break
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		_ = os.Remove(filepath.Dir(path)) // Only succeeds for an empty directory.
+		s.mu.Lock()
+		if proc.configPath == path {
+			proc.configPath = ""
+		}
+		s.mu.Unlock()
+		cleaned++
+	}
 	count := min(historyPruneBatch, max(0, len(candidates)-peerHistoryRecent))
 	for _, proc := range candidates[:count] {
 		// Acknowledged, successfully removed processes cannot change state. Keep

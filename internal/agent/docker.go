@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -46,6 +48,9 @@ type dockerRuntime struct {
 	image          string
 	network        string
 	commandContext func(context.Context, string, ...string) *exec.Cmd
+	activeWaits    atomic.Int64
+	waitClient     *http.Client
+	waitURL        string
 }
 
 func (d *dockerRuntime) check(ctx context.Context) error {
@@ -232,14 +237,38 @@ func (d *dockerRuntime) wait(ctx context.Context, id string) error {
 	if !dockerContainerID.MatchString(id) {
 		return fmt.Errorf("invalid peer container ID")
 	}
-	output, err := d.run(ctx, nil, "wait", id)
+	d.activeWaits.Add(1)
+	defer d.activeWaits.Add(-1)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.waitURL+"/containers/"+id+"/wait?condition=not-running", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := d.waitClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("wait for peer container: %w", err)
 	}
-	code, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	if err != nil {
-		return fmt.Errorf("Docker wait returned an invalid exit code")
+		return fmt.Errorf("read Docker wait response: %w", err)
 	}
+	if len(data) > 64<<10 {
+		return errors.New("Docker wait response exceeds size limit")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Docker wait returned HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(data))
+	}
+	var result struct {
+		StatusCode *int64
+		Error      *struct{ Message string }
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.StatusCode == nil {
+		return errors.New("Docker wait returned an invalid exit code")
+	}
+	if result.Error != nil && result.Error.Message != "" {
+		return fmt.Errorf("Docker wait: %s", result.Error.Message)
+	}
+	code := *result.StatusCode
 	if code != 0 {
 		logCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -421,4 +450,19 @@ func (d *dockerRuntime) runWithOutput(ctx context.Context, input io.Reader, outp
 		return append(output.Bytes(), stderr.Bytes()...), nil
 	}
 	return output.Bytes(), nil
+}
+
+// Waiting uses one lightweight connection per Peer, not a long-lived Docker CLI
+// process. It has its own pool: waits must not occupy resource-sampling slots.
+// The daemon may hold response headers until exit, so only dialing is timed out.
+func newDockerWaitClient(socket string) *http.Client {
+	if socket == "" {
+		socket = "/var/run/docker.sock"
+	}
+	return &http.Client{Transport: &http.Transport{
+		MaxIdleConns: 8, MaxIdleConnsPerHost: 8, IdleConnTimeout: time.Minute,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
+		},
+	}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

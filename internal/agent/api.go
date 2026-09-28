@@ -142,7 +142,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		node, err := s.createNode(context.Background(), request)
-		if errors.Is(err, errPeerHistoryFull) {
+		if errors.Is(err, errPeerHistoryFull) || errors.Is(err, errTelemetryBacklogFull) {
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
@@ -257,6 +257,21 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	// Reserve before decoding: otherwise concurrent requests retain full decoded
+	// maps while waiting for disk fsync or the queue lock, outside any queue cap.
+	for {
+		active := s.telemetryDecoders.Load()
+		if active >= 2 {
+			s.telemetryDecodersRejected.Add(1)
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "telemetry decoder busy; retry this batch")
+			return
+		}
+		if s.telemetryDecoders.CompareAndSwap(active, active+1) {
+			break
+		}
+	}
+	defer s.telemetryDecoders.Add(-1)
 	var batch model.EventBatch
 	if err := decodeJSON(w, r, &batch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

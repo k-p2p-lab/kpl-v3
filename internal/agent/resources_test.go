@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +99,9 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 		*first.Agent.CPUCores != 0.5 || *first.Peers.CPUCores != 1 || *first.Agent.MemoryWorkingSetBytes != 800 || *first.Peers.MemoryWorkingSetBytes != 1600 || first.Agent.Containers != 1 || first.Peers.Containers != 2 {
 		t.Fatalf("incorrect component split: %+v %+v", first.Agent, first.Peers)
 	}
+	if len(sampler.selfMemory) == 0 || sampler.selfMemoryAt.IsZero() {
+		t.Fatal("missing self memory sample")
+	}
 	second := sampler.sample(context.Background())
 	if !second.Valid() || *second.CPUCores != 1.5 {
 		t.Fatalf("cached baseline: %+v", second)
@@ -143,6 +147,9 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 	missingAgent = true
 	mu.Unlock()
 	empty = sampler.sample(context.Background())
+	if sampler.selfMemory != nil || !sampler.selfMemoryAt.IsZero() {
+		t.Fatal("failed Agent sample retained stale memory counters")
+	}
 	if empty.Valid() || empty.ScopeValid("agent") || !empty.ScopeValid("peers") {
 		t.Fatal("failed Agent sample invalidated known-empty Peer inventory")
 	}
@@ -249,5 +256,31 @@ func TestResourceHostCPUCapacityUsesStatsAndBoundedFallback(t *testing.T) {
 	cancel()
 	if got := sampler.hostCPUCapacity(ctx, nil); got != 0 {
 		t.Fatal("fabricated capacity after expired cache and failed refresh")
+	}
+}
+
+func TestAgentMemoryBreakdownDistinguishesCacheAndAnonymousMemory(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stats map[string]uint64
+		want  map[string]uint64
+	}{
+		{"v2", map[string]uint64{"anon": 600, "file": 300, "inactive_file": 200, "kernel": 100, "slab": 80, "slab_reclaimable": 50, "slab_unreclaimable": 30}, map[string]uint64{"usage": 1000, "working_set": 800, "anonymous": 600, "file": 300, "inactive_file": 200, "kernel": 100, "slab": 80, "slab_reclaimable": 50, "slab_unreclaimable": 30}},
+		{"v1", map[string]uint64{"total_rss": 600, "rss": 1, "total_cache": 300, "cache": 2, "total_inactive_file": 200, "inactive_file": 3}, map[string]uint64{"usage": 1000, "working_set": 800, "anonymous": 600, "file": 300, "inactive_file": 200}},
+		{"absent", nil, map[string]uint64{"usage": 1000, "working_set": 1000}},
+		{"inconsistent_cache", map[string]uint64{"inactive_file": 2000}, map[string]uint64{"usage": 1000, "working_set": 1000, "inactive_file": 2000}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := containerResourceStats{}
+			usage := uint64(1000)
+			value.Memory.Usage = &usage
+			value.Memory.Stats = test.stats
+			if got := agentMemoryBreakdown(value); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("memory breakdown=%v want=%v", got, test.want)
+			}
+		})
+	}
+	if got := agentMemoryBreakdown(containerResourceStats{}); got != nil {
+		t.Fatal("unavailable memory reported as measured zero")
 	}
 }

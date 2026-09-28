@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -214,20 +215,30 @@ func TestDelayedDockerAdmissionDoesNotConsumeStartupBudget(t *testing.T) {
 	commandContext := server.docker.commandContext
 	server.docker.commandContext = func(ctx context.Context, binary string, args ...string) *exec.Cmd {
 		switch args[0] {
-		case "create", "cp", "start", "inspect", "wait":
+		case "create", "cp", "start", "inspect":
 			deadline, ok := ctx.Deadline()
 			observed <- observation{stage: args[0], at: time.Now(), deadline: deadline, hasDeadline: ok}
 		}
 		return commandContext(ctx, binary, args...)
 	}
+	transport := server.docker.waitClient.Transport
+	server.docker.waitClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		observed <- observation{stage: "wait", at: time.Now(), deadline: deadline, hasDeadline: ok}
+		return transport.RoundTrip(r)
+	})
 	if _, err := server.createNode(context.Background(), model.CreateNodeRequest{ID: "peer", RunID: "run", Group: "workers"}); err != nil {
 		t.Fatal(err)
 	}
 	waitDockerCall(t, path, "wait")
 	stages := make(map[string]observation)
 	for i := 0; i < 5; i++ {
-		item := <-observed
-		stages[item.stage] = item
+		select {
+		case item := <-observed:
+			stages[item.stage] = item
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing lifecycle observation")
+		}
 	}
 	admission, copyStage := stages["create"], stages["cp"]
 	if !admission.hasDeadline || !copyStage.hasDeadline || copyStage.deadline.Sub(admission.deadline) < delay {

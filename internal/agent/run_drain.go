@@ -17,6 +17,14 @@ func (s *Server) drainRunEvents(ctx context.Context, id string) error {
 				remaining++
 			}
 		}
+		if s.spool != nil {
+			remaining = 0
+			for _, record := range s.spool.records {
+				if record.runID == id {
+					remaining++
+				}
+			}
+		}
 		for _, event := range s.terminations {
 			if event.RunID == id {
 				remaining++

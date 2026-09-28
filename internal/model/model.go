@@ -14,6 +14,7 @@ const (
 )
 
 type Agent struct {
+	Disabled          bool              `json:"disabled,omitempty"`
 	Resources         *AgentResources   `json:"resources,omitempty"`
 	StartupReconciled bool              `json:"startupReconciled,omitempty"`
 	PeerImage         string            `json:"peerImage,omitempty"`
@@ -37,6 +38,7 @@ type Agent struct {
 }
 
 type Node struct {
+	ScoreSample       *PeerScoreSample    `json:"scoreSample,omitempty"`
 	ID                string              `json:"id"`
 	RunID             string              `json:"runId"`
 	Generation        uint64              `json:"generation,omitempty"`
@@ -61,6 +63,7 @@ type Node struct {
 }
 
 type TraceEvent struct {
+	ScoreSample  *PeerScoreSample `json:"scoreSample,omitempty"`
 	Group        string           `json:"group,omitempty"`
 	Bandwidth    *BandwidthSample `json:"bandwidth,omitempty"`
 	SessionID    string           `json:"sessionId,omitempty"`

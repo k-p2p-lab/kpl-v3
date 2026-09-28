@@ -283,7 +283,7 @@
           <div>
             <p class="eyebrow">FLEET</p>
             <h2>Agent status</h2>
-            <p class="panel-note">Refresh checks registered Agents, including offline ones. Configure capacity per Agent below.</p>
+            <p class="panel-note">Refresh checks registered Agents, including offline ones. Configure capacity and enable or disable each Agent below.</p>
           </div>
           <div class="agent-resource-actions"><button class="secondary-button" type="button" data-resource-export="current">Current CSV</button><button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button></div>
         </header>
@@ -306,6 +306,7 @@
               <select id="resourceMeasurementSelect" disabled><option value="">No completed measurements</option></select>
               <button class="secondary-button" type="button" data-resource-export="measurement-samples" disabled>Interval CSV</button>
               <button class="secondary-button" type="button" data-resource-export="measurement-summary" disabled>Interval summary CSV</button>
+              <button class="secondary-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
             </div>
             <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
             <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads use Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
@@ -442,11 +443,13 @@
   <dialog id="agentCapacityDialog" aria-labelledby="agentCapacityHeading" aria-describedby="agentCapacityHelp">
     <form class="dialog-shell" id="agentCapacityForm">
       <header>
-        <div><p class="eyebrow">AGENT SETTINGS</p><h2 id="agentCapacityHeading">Peer capacity</h2></div>
+        <div><p class="eyebrow">AGENT SETTINGS</p><h2 id="agentCapacityHeading">Agent settings</h2></div>
         <button class="icon-button" type="button" aria-label="Close Agent settings" data-agent-capacity-close><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
       </header>
       <p class="agent-capacity-identity" id="agentCapacityIdentity"></p>
       <p class="panel-note" id="agentCapacityCurrent"></p>
+      <div class="agent-availability-controls"><strong id="agentAvailabilityState">Enabled</strong><button class="secondary-button" type="button" id="toggleAgentEnabled">Disable Agent</button></div>
+      <p class="panel-note">Changes apply immediately. Disabled Agents stay connected but receive no new Peer placements and are excluded from hardware monitoring and the topology viewer. Existing Peers keep running.</p>
       <label for="agentCapacityMode">Capacity source</label>
       <select id="agentCapacityMode"><option value="default" id="agentCapacityDefault">CLI default</option><option value="custom">Custom for this Agent</option></select>
       <label for="agentCapacityValue">Maximum Peers</label>

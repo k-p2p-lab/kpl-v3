@@ -41,6 +41,8 @@ type Server struct {
 	subs              []*pubsub.Subscription
 	relays            []pubsub.RelayCancelFunc
 	scoreMu           sync.RWMutex
+	scoreObservedAt   time.Time
+	scoreSample       *model.PeerScoreSample
 	peerScores        map[string]float64
 	bandwidth         *bandwidthReporter
 	telemetry         *telemetry
@@ -308,7 +310,7 @@ func (s *Server) startPubSub(ctx context.Context) error {
 			return fmt.Errorf("parse score inspect interval: %w", parseErr)
 		}
 		if interval > 0 {
-			options = append(options, pubsub.WithPeerScoreInspect(pubsub.PeerScoreInspectFn(s.recordPeerScores), interval))
+			options = append(options, pubsub.WithPeerScoreInspect(pubsub.TimedPeerScoreInspectFn(s.recordDetailedPeerScores), interval))
 		}
 	}
 	var ps *pubsub.PubSub
@@ -610,6 +612,7 @@ func (s *Server) reportStatus(ctx context.Context, state, message string) error 
 			node.PeerScores[peerID] = score
 		}
 	}
+	node.ScoreSample = s.scoreSample.Clone()
 	s.scoreMu.RUnlock()
 	node.RoutingPeers, node.MeshPeers, node.OverlayObservedAt = s.overlaySnapshot()
 	return s.telemetry.reportNode(ctx, node)

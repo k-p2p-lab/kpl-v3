@@ -137,3 +137,32 @@ test('46/47 partial containers remain visible with host-normalized CPU and weigh
  partial.resources.measuredContainers=0;assert.equal(resources.describe(partial,now).memory,'N/A');
  partial.resources.measuredContainers=48;assert.equal(resources.valid(partial,now),false);
 });
+
+test('deleting a completed interval protects the active one and ignores an older poll',async()=>{
+ const active=intervalRecord('b'.repeat(32)),complete={...intervalRecord(),endedAt:'2026-09-28T00:01:00Z',endReason:'stopped'};
+ let resolveDelete,resolvePoll,pollDeferred=false;
+ const ui=measurementUI(intervalList([active,complete]),async(path,options,state)=>{
+  if(options.method==='GET'&&pollDeferred)return new Promise(resolve=>resolvePoll=resolve);
+  if(options.method==='DELETE'){
+   assert.equal(path,`/api/v1/agents/resources/measurements/${complete.id}`);
+   return new Promise(resolve=>resolveDelete=()=>{state.measurements=[active];resolve({...state})});
+  }
+  return {...state};
+ });
+ await flush();assert.equal(ui.element('#deleteResourceMeasurement').disabled,false);
+ pollDeferred=true;const poll=ui.element('#refreshResourceMeasurements').click();
+ const deletion=ui.element('#deleteResourceMeasurement').click();
+ await ui.element('#deleteResourceMeasurement').click();
+ assert.equal(ui.calls.filter(c=>c.method==='DELETE').length,1);
+ resolveDelete();await deletion;resolvePoll(intervalList([active,complete]));await poll;
+ assert.equal(ui.element('#resourceMeasurementSelect').value,'');
+ assert.equal(ui.element('#deleteResourceMeasurement').disabled,true);
+ assert.equal(ui.element('#stopResourceMeasurement').disabled,false);
+ assert.match(ui.element('#resourceMeasurementError').textContent,/Interval deleted/);
+});
+test('disabled Agents remain visible as excluded but do not enter hardware totals',()=>{
+ const active=agent('active',2),disabled={...agent('disabled',10),disabled:true};
+ const result=resources.aggregate([active,disabled],now);
+ assert.equal(result.total,1);assert.equal(result.measured,1);assert.equal(result.cpuCores,2);assert.equal(result.memoryWorkingSetBytes,3072);
+ assert.equal(resources.describe(disabled,now).cpu,'Excluded');assert.equal(resources.describe(disabled,now).memory,'Excluded');
+});

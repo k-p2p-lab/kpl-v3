@@ -10,7 +10,7 @@
   function valid(agent, now = Date.now()) {
     const r = agent.resources;
     const age = now - Date.parse(r?.sampledAt);
-    return agent.state === "online" && r?.containers > 0 && r.measuredContainers > 0 && r.measuredContainers <= r.containers &&
+    return !agent.disabled && agent.state === "online" && r?.containers > 0 && r.measuredContainers > 0 && r.measuredContainers <= r.containers &&
       (!r.complete || r.containers === r.measuredContainers) && age >= -5000 && age <= 30000 &&
       Number.isFinite(r.cpuCores) && r.cpuCores >= 0 && Number.isFinite(r.memoryUsageBytes) && r.memoryUsageBytes >= 0 &&
       Number.isFinite(r.memoryWorkingSetBytes) && r.memoryWorkingSetBytes >= 0 && r.memoryWorkingSetBytes <= r.memoryUsageBytes;
@@ -21,6 +21,7 @@
   }
   function describe(agent, now = Date.now()) {
     const r = agent.resources;
+    if (agent.disabled) return {cpu:"Excluded", memory:"Excluded", detail:"Agent disabled", memoryDetail:"Agent disabled", title:"Disabled Agents are excluded from hardware monitoring totals.", available:false};
     if (!valid(agent, now)) {
       const age = now - Date.parse(r?.sampledAt);
       const status = agent.state !== "online" ? "Offline" : !r ? "Awaiting sample" : age > 30000 || age < -5000 ? "Stale sample" : `Unavailable · ${r.measuredContainers || 0}/${r.containers || 0} containers`;
@@ -37,7 +38,7 @@
     return `<span class="agent-resource-value" title="${escape(d.title)}">${escape(d[metric])}</span><span class="agent-capacity-note${d.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? d.detail : d.memoryDetail)}</span>`;
   }
   function aggregate(agents, now = Date.now()) {
-    const result = {cpuPercent:null, cpuCores:0, cpuCapacityCores:0, cpuMeasured:0, memoryWorkingSetBytes:0, memoryUsageBytes:0, measured:0, total:agents.length, partial:0, containers:0, measuredContainers:0};
+    const result = {cpuPercent:null, cpuCores:0, cpuCapacityCores:0, cpuMeasured:0, memoryWorkingSetBytes:0, memoryUsageBytes:0, measured:0, total:agents.filter(a => !a.disabled).length, partial:0, containers:0, measuredContainers:0};
     let normalizedCores = 0;
     for (const a of agents) if (valid(a, now)) {
       const r = a.resources;
@@ -68,7 +69,7 @@
     const $ = id => root.document.querySelector(id);
     const buttons = [...root.document.querySelectorAll("[data-resource-export]")];
     const start = $("#startResourceMeasurement"), stop = $("#stopResourceMeasurement");
-    const select = $("#resourceMeasurementSelect"), refresh = $("#refreshResourceMeasurements");
+    const select = $("#resourceMeasurementSelect"), refresh = $("#refreshResourceMeasurements"), remove = $("#deleteResourceMeasurement");
     const endpoint = "/api/v1/agents/resources/measurements";
     const stamp = value => new Date(value).toLocaleString("en-US", {timeZone:"UTC", month:"short", day:"numeric", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false}) + " UTC";
     const elapsed = seconds => [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(v => String(v).padStart(2, "0")).join(":");
@@ -80,6 +81,7 @@
       if (start) start.disabled = !loaded || changing || !!active;
       if (stop) stop.disabled = changing || !active;
       if (refresh) refresh.disabled = changing || polling;
+      if (remove) remove.disabled = !loaded || changing || busy || !selected();
     }
     function renderClock() {
       if (!start) return;
@@ -152,9 +154,24 @@
         status.textContent = (error.name === "AbortError" ? "Request timed out; the operation may have completed." : error.message) + " Refresh measurement status before retrying.";
       } finally { changing = false; nextPoll = Date.now() + 10000; controls(); }
     }
+    async function deleteSelected() {
+      const m = selected();
+      if (!loaded || changing || busy || !m) return;
+      changing = true; ++revision; controls();
+      const status = $("#resourceMeasurementError"); status.hidden = true;
+      try {
+        accept(await request(`${endpoint}/${encodeURIComponent(m.id)}`, "DELETE"));
+        status.hidden = false;
+        status.textContent = "Interval deleted. Prometheus history is retained.";
+      } catch (error) {
+        loaded = false; status.hidden = false;
+        status.textContent = (error.name === "AbortError" ? "Delete request timed out; it may have completed." : error.message) + " Refresh measurement status before retrying.";
+      } finally { changing = false; nextPoll = Date.now() + 10000; controls(); }
+    }
     if (start) {
       start.addEventListener("click", () => change("start"));
       stop.addEventListener("click", () => change("stop"));
+      remove?.addEventListener("click", deleteSelected);
       refresh.addEventListener("click", sync);
       select.addEventListener("change", renderSelection);
       controls(); sync();

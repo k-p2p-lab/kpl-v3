@@ -80,3 +80,18 @@ test('invalid input never saves and server errors keep edits available for retry
  assert.equal(state.snapshot.agents[0].capacity,200);
  assert.match(element('#agentCapacityError').textContent,/Unable to save settings/);
 });
+test('availability toggle keeps capacity edits and blocks concurrent changes',async()=>{
+ const {api,state,element,requests,toasts}=fixture();
+ element('#agentCapacityMode').value='custom';element('#agentCapacityValue').value='75';
+ const pending=api.toggleAgentEnabled();await api.toggleAgentEnabled();await api.saveAgentCapacity();api.closeAgentCapacity();
+ assert.equal(requests.length,1);assert.equal(requests[0].url,'/api/v1/agents/agent%2Fa/enabled');
+ assert.deepEqual(JSON.parse(requests[0].options.body),{enabled:false});
+ assert.equal(element('#toggleAgentEnabled').disabled,true);
+ requests[0].resolve({...state.snapshot.agents[0],disabled:true});await pending;
+ assert.equal(element('#agentCapacityDialog').open,true);assert.equal(element('#agentCapacityValue').value,'75');
+ assert.equal(element('#toggleAgentEnabled').textContent,'Enable Agent');assert.match(toasts[0],/Existing Peers keep running/);
+ const enable=api.toggleAgentEnabled();assert.deepEqual(JSON.parse(requests[1].options.body),{enabled:true});
+ requests[1].reject(Error('Cannot save Agent availability'));await enable;
+ assert.equal(state.snapshot.agents[0].disabled,true);assert.equal(element('#toggleAgentEnabled').disabled,false);
+ assert.match(element('#agentCapacityError').textContent,/Cannot save/);
+});

@@ -803,3 +803,5 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 }
 
 .agent-resource-partial { color: var(--amber); }
+
+.agent-availability-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }

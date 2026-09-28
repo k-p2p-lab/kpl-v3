@@ -31,6 +31,7 @@ func dashboardSnapshot(snapshot model.Snapshot) model.Snapshot {
 				delete(node.Metadata, "networkSchedule")
 				delete(node.Metadata, "networkRequested")
 			}
+			node.ScoreSample = nil // Component summaries are for REST/analysis, not live topology.
 			nodes = append(nodes, node)
 		}
 	}

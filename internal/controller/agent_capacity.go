@@ -53,6 +53,8 @@ func (s *state) observeAgentCapacityLocked(agent *model.Agent) {
 }
 
 func (s *state) applyAgentCapacityLocked(agent *model.Agent) {
+	// Availability is Controller-owned and cannot be undone by an Agent report.
+	agent.Disabled = s.agentDisabled[agent.ID] || s.agentAvailabilityErr != nil
 	reported := s.agentReportedCapacities[agent.ID]
 	agent.CapacityOverride = s.agentCapacityOverrides[agent.ID]
 	desired := agent.DefaultCapacity
@@ -168,6 +170,21 @@ var errAgentCapacityReached = errors.New("Agent capacity reached")
 
 func (s *Server) createReservedNode(ctx context.Context, request model.CreateNodeRequest, agent model.Agent, targetAgentID string, rng *mathrand.Rand) error {
 	for {
+		// Recheck after reservation: a settings edit may have disabled this
+		// Agent before the create was dispatched. Already dispatched calls finish.
+		s.state.mu.RLock()
+		current, exists := s.state.agents[agent.ID]
+		disabled := !exists || current.Disabled
+		s.state.mu.RUnlock()
+		if disabled {
+			s.releaseReservation(request.ID)
+			var err error
+			agent, err = s.acquireAgentWithPlacement(ctx, request.ID, targetAgentID, rng)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.rememberRunAgent(request.RunID, agent); err != nil {
 			s.releaseReservation(request.ID)
 			return err

@@ -6,6 +6,7 @@ build:
 
 test:
 	go test ./...
+	go test github.com/libp2p/go-libp2p-pubsub -run '^Test(KPL|Score)' -timeout 120s
 
 test-linux:
 	docker build --target test -t kpl-v3:test .

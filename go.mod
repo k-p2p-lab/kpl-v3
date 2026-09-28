@@ -130,3 +130,6 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	lukechampine.com/blake3 v1.4.0 // indirect
 )
+
+// Preserve exact scoring internals in extended inspection snapshots.
+replace github.com/libp2p/go-libp2p-pubsub => ./third_party/go-libp2p-pubsub

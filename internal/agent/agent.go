@@ -747,6 +747,9 @@ func (s *Server) updateNode(update model.Node) error {
 	proc.node.ConnectedPeers = slices.Clone(update.ConnectedPeers)
 	proc.node.TopicPeers = maps.Clone(update.TopicPeers)
 	proc.node.PeerScores = maps.Clone(update.PeerScores)
+	if update.ScoreSample.Valid() && (proc.node.ScoreSample == nil || update.ScoreSample.ObservedAt.After(proc.node.ScoreSample.ObservedAt)) {
+		proc.node.ScoreSample = update.ScoreSample.Clone()
+	}
 	// Observation time makes an empty routing/mesh snapshot authoritative.
 	// Missing legacy fields cannot erase an already observed overlay, and a
 	// stale overlay cannot replace a newer snapshot in an otherwise new report.
@@ -799,6 +802,7 @@ func heartbeatNodeStatus(proc *process) model.Node {
 	node.MeshPeers = nil
 	node.TopicPeers = nil
 	node.PeerScores = nil
+	node.ScoreSample = nil
 	node.OverlayObservedAt = time.Time{}
 	node.Metadata = make(map[string]string)
 	// Preserve lifecycle evidence and topic labels used by Controller metrics.
@@ -819,6 +823,7 @@ func cloneNodeStatus(node model.Node) model.Node {
 	node.MeshPeers = cloneMeshPeers(node.MeshPeers)
 	node.TopicPeers = maps.Clone(node.TopicPeers)
 	node.PeerScores = maps.Clone(node.PeerScores)
+	node.ScoreSample = node.ScoreSample.Clone()
 	node.Metadata = maps.Clone(node.Metadata)
 	return node
 }

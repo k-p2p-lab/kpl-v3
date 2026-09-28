@@ -35,6 +35,8 @@ type state struct {
 	agentCapacityRevisions  map[string]string
 	agentReportedCapacities map[string]int
 	agentSettingsErr        error
+	agentDisabled           map[string]bool
+	agentAvailabilityErr    error
 	agents                  map[string]model.Agent
 	nodes                   map[string]model.Node
 	activeNodeIDs           map[string]struct{}
@@ -68,6 +70,7 @@ func newState(dataDir string) *state {
 	s.agentReportedCapacities = make(map[string]int)
 	s.agentCapacityRevisions = make(map[string]string)
 	s.agentCapacityOverrides, s.agentSettingsErr = loadAgentCapacities(dataDir)
+	s.agentDisabled, s.agentAvailabilityErr = loadDisabledAgents(dataDir)
 	s.metrics = newControllerMetrics(s)
 	return s
 }
@@ -433,7 +436,13 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 	for _, event := range accepted {
 		accumulator.observe(event)
 	}
-	s.events = append(s.events, accepted...)
+	// Periodic component measurements belong in saved logs and analysis. Keep
+	// them from displacing actual network events in the bounded live feed.
+	for _, event := range accepted {
+		if event.Type != "peer_score" {
+			s.events = append(s.events, event)
+		}
+	}
 	if len(s.events) > recentEventLimit {
 		s.events = append([]model.TraceEvent(nil), s.events[len(s.events)-recentEventLimit:]...)
 	}
@@ -554,7 +563,7 @@ func (s *state) inventoryForViewLocked(dashboard bool) model.Snapshot {
 	}
 	if dashboard {
 		for node := range s.activeNodesLocked() {
-			if node.State != model.NodeStopping {
+			if node.State != model.NodeStopping && !s.agents[node.AgentID].Disabled {
 				result.Nodes = append(result.Nodes, node)
 			}
 		}

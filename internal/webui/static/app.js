@@ -168,8 +168,9 @@ function peerPopulationLabel(counts) {
     + (counts.other ? ` · ${formatNumber(counts.other)} other` : "");
 }
 
-function topologyData(nodes, edges) {
-  const visibleNodes = nodes.filter(isTopologyPeer);
+function topologyData(nodes, edges, agents = []) {
+  const disabled = new Set(agents.filter(agent => agent.disabled).map(agent => agent.id));
+  const visibleNodes = nodes.filter(node => isTopologyPeer(node) && !disabled.has(node.agentId));
   const ids = new Set(visibleNodes.map((node) => node.id));
   return { nodes: visibleNodes, edges: edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
 }
@@ -543,8 +544,7 @@ function setupDashboardTabHandling() {
 
 function render(snapshot) {
   const agents = snapshot.agents || [];
-  const nodes = snapshot.nodes || [];
-  const edges = snapshot.edges || [];
+  const {nodes, edges} = topologyData(snapshot.nodes || [], snapshot.edges || [], agents);
   const metricRun = (snapshot.experiments || []).find((run) => run.id === snapshot.metrics?.runId);
   // Snapshots retain final summaries; the carousel shows only a running run.
   const metrics = metricRun?.state === "running" ? snapshot.metrics : {};
@@ -555,7 +555,7 @@ function render(snapshot) {
     : "Run metrics: No run selected");
   rememberAgents([...agents.map((agent) => agent.id), ...nodes.map((node) => node.agentId)]);
   const online = agents.filter((agent) => agent.state === "online").length;
-  const capacity = agents.filter((agent) => agent.state === "online").reduce((sum, agent) => sum + Math.max(0, agent.capacity - agent.activeNodes), 0);
+  const capacity = agents.filter((agent) => agent.state === "online" && !agent.disabled).reduce((sum, agent) => sum + Math.max(0, agent.capacity - agent.activeNodes), 0);
   const population = peerPopulation(nodes);
   setText($("#agentMetric"), `${online} / ${agents.length}`);
   setText($("#capacityMetric"), `Available slots: ${formatNumber(capacity)}`);
@@ -1612,7 +1612,7 @@ function renderAgents(agents) {
     return `<tr>
       <td class="agent-number">${agentNumber(agent.id)}</td>
       <td><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
-      <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span></td>
+      <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
       <td>${escapeHTML(agent.hostname || "—")}</td>
       <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
@@ -1622,7 +1622,7 @@ function renderAgents(agents) {
       <td class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "memory", resourceNow) || "N/A"}</td>
       <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td>${agentMetricsLink(agent)}</td>
-      <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure capacity for ${agent.name || agent.id}`)}" title="${escapeHTML(agent.defaultCapacity > 0 ? `Configure capacity for ${agent.name || agent.id}` : "Update this Agent to enable capacity settings.")}" ${agent.defaultCapacity > 0 ? "" : "disabled"}><span aria-hidden="true">⚙️</span></button></td>
+      <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
     </tr>`;
   }).join(""));
 }
@@ -1630,8 +1630,9 @@ function renderAgents(agents) {
 function openAgentCapacity(id) {
   if (state.agentSettingsSaving) return;
   const agent = (state.snapshot?.agents || []).find(agent => agent.id === id);
-  if (!agent || !(agent.defaultCapacity > 0)) return;
+  if (!agent) return;
   state.agentSettingsID = id;
+  renderAgentAvailability(agent);
   setText($("#agentCapacityIdentity"), `${agent.name || id} · ${id}${agent.hostname ? ` · ${agent.hostname}` : ""}`);
   setText($("#agentCapacityCurrent"), `${formatNumber(agent.activeNodes)} occupied · ${formatNumber(agent.capacity)} current capacity${agent.state !== "online" ? " · Offline" : ""}`);
   setText($("#agentCapacityDefault"), `CLI default (${formatNumber(agent.defaultCapacity)} Peers)`);
@@ -1643,7 +1644,37 @@ function openAgentCapacity(id) {
 }
 
 function updateAgentCapacityMode() {
-  $("#agentCapacityValue").disabled = state.agentSettingsSaving || $("#agentCapacityMode").value !== "custom";
+  const agent = (state.snapshot?.agents || []).find(a => a.id === state.agentSettingsID);
+  const unavailable = state.agentSettingsSaving || !(agent?.defaultCapacity > 0);
+  $("#agentCapacityMode").disabled = unavailable;
+  $("#saveAgentCapacity").disabled = unavailable;
+  $("#agentCapacityValue").disabled = unavailable || $("#agentCapacityMode").value !== "custom";
+  $("#toggleAgentEnabled").disabled = state.agentSettingsSaving;
+}
+
+function renderAgentAvailability(agent) {
+  setText($("#agentAvailabilityState"), agent.disabled ? "Disabled" : "Enabled");
+  setText($("#toggleAgentEnabled"), agent.disabled ? "Enable Agent" : "Disable Agent");
+}
+
+async function toggleAgentEnabled() {
+  if (state.agentSettingsSaving || !state.agentSettingsID) return;
+  const current = (state.snapshot?.agents || []).find(a => a.id === state.agentSettingsID);
+  if (!current) return;
+  state.agentSettingsSaving = true;
+  setText($("#agentCapacityError"), "");
+  updateAgentCapacityMode();
+  for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.disabled = true;
+  try {
+    const agent = await api(`/api/v1/agents/${encodeURIComponent(current.id)}/enabled`, {method:"PUT", body:JSON.stringify({enabled:!!current.disabled})});
+    state.snapshot = {...state.snapshot, agents:state.snapshot.agents.map(a => a.id === agent.id ? agent : a)};
+    render(state.snapshot); renderAgentAvailability(agent);
+    showToast(agent.disabled ? "Agent disabled. Existing Peers keep running." : "Agent enabled for placement and monitoring.");
+  } catch (error) { setText($("#agentCapacityError"), error.message); }
+  finally {
+    state.agentSettingsSaving = false; updateAgentCapacityMode();
+    for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.disabled = false;
+  }
 }
 
 function closeAgentCapacity() {
@@ -1749,7 +1780,7 @@ function svgElement(tag, attributes = {}, text) {
 }
 
 function renderTopology(nodes, edges) {
-  ({ nodes, edges } = topologyData(nodes, edges));
+  ({ nodes, edges } = topologyData(nodes, edges, state.snapshot?.agents || []));
   const populationLabel = peerPopulationLabel(peerPopulation(nodes));
   const topology = state.topology;
   stopTopologyMotion();
@@ -1775,7 +1806,7 @@ function renderTopology(nodes, edges) {
   }
   topicSelect.value = topology.filters.topic;
   const connections = filterTopologyEdges(nodes, edges, topology.filters);
-  const agents = [...(state.snapshot?.agents || [])].sort((a, b) => agentNumber(a.id) - agentNumber(b.id));
+  const agents = (state.snapshot?.agents || []).filter(agent => !agent.disabled).sort((a, b) => agentNumber(a.id) - agentNumber(b.id));
   const svg = $("#topology");
   const focusedNodeID = document.activeElement?.closest?.("[data-node-id]")?.dataset.nodeId;
   const width = svg.clientWidth || 1000, height = svg.clientHeight || 560;
@@ -2177,6 +2208,7 @@ window.addEventListener("pageshow", event => {
 });
 $("#agentCapacityForm").addEventListener("submit", event => { event.preventDefault(); void saveAgentCapacity(); });
 $("#agentCapacityMode").addEventListener("change", updateAgentCapacityMode);
+$("#toggleAgentEnabled").addEventListener("click", () => void toggleAgentEnabled());
 $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);

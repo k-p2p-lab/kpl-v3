@@ -63,6 +63,9 @@ func (c *agentResourceCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *agentResourceCollector) Collect(ch chan<- prometheus.Metric) {
 	now := time.Now()
 	for _, agent := range c.state.agentInventory() {
+		if agent.Disabled {
+			continue
+		}
 		r := agent.Resources
 		fresh := agentIsOnline(agent, now) && r.Fresh(now)
 		flag := 0.
@@ -110,9 +113,13 @@ type agentResourceTotals struct {
 }
 
 func sumAgentResources(agents []model.Agent, now time.Time) agentResourceTotals {
-	result := agentResourceTotals{TotalAgents: len(agents)}
+	result := agentResourceTotals{}
 	var normalizedCores float64
 	for _, a := range agents {
+		if a.Disabled {
+			continue
+		}
+		result.TotalAgents++
 		if !agentIsOnline(a, now) || !a.Resources.Fresh(now) {
 			continue
 		}
@@ -173,6 +180,13 @@ func (s *Server) handleAgentResources(w http.ResponseWriter, r *http.Request) {
 	_ = out.Write([]string{"agent_id", "agent_name", "scope", "status", "sampled_at_utc", "cpu_percent_host", "cpu_capacity_cores", "memory_working_set_bytes", "memory_usage_bytes", "containers", "measured_containers"})
 	for _, a := range agents {
 		row := []string{resourceCSVCell(a.ID), resourceCSVCell(a.Name), "agent_and_peers", "unavailable", "", "", "", "", "", "", ""}
+		if a.Disabled {
+			row[3] = "disabled"
+			if err := out.Write(row); err != nil {
+				return
+			}
+			continue
+		}
 		if a.Resources != nil {
 			x := a.Resources
 			row[4], row[9], row[10] = x.SampledAt.Format(time.RFC3339Nano), strconv.Itoa(x.Containers), strconv.Itoa(x.MeasuredContainers)

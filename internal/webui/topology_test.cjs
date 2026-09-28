@@ -817,3 +817,9 @@ test('Ready card and topology explain the same cluster population through churn 
   renderSnapshot(nodes);
   check(3, 2, 1);
 });
+test('disabled Agent topology hides its Peers and edges without removing source inventory',()=>{
+ const api=context(),nodes=[peer('one','a'),peer('two','b')],edges=[{source:'one',target:'two',protocol:'transport'}];
+ const hidden=api.topologyData(nodes,edges,[{id:'a',disabled:true},{id:'b'}]);
+ assert.deepEqual(plain(hidden.nodes),[nodes[1]]);assert.equal(hidden.edges.length,0);assert.equal(nodes.length,2);
+ const restored=api.topologyData(nodes,edges,[{id:'a'},{id:'b'}]);assert.equal(restored.nodes.length,2);assert.equal(restored.edges.length,1);
+});

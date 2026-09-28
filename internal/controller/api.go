@@ -159,8 +159,10 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/agents/resources/history", s.handleAgentResourceHistory)
 	mux.HandleFunc("/api/v1/agents/resources/measurements", s.handleResourceMeasurements)
 	mux.HandleFunc("POST /api/v1/agents/resources/measurements/{measurementID}/stop", s.handleStopResourceMeasurement)
+	mux.HandleFunc("DELETE /api/v1/agents/resources/measurements/{measurementID}", s.handleDeleteResourceMeasurement)
 	mux.HandleFunc("GET /api/v1/agents/resources/measurements/{measurementID}/export", s.handleExportResourceMeasurement)
 	mux.HandleFunc("PUT /api/v1/agents/{agentID}/capacity", s.handleAgentCapacity)
+	mux.HandleFunc("PUT /api/v1/agents/{agentID}/enabled", s.handleAgentEnabled)
 	mux.HandleFunc("/api/v1/agents/register", s.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", s.handleAgentHeartbeat)
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
@@ -229,7 +231,7 @@ func (s *Server) handlePrometheusAgentTargets(w http.ResponseWriter, r *http.Req
 	candidates := make([]candidate, 0)
 	s.state.mu.RLock()
 	for _, agent := range s.state.agents {
-		if !agentIsOnline(agent, now) {
+		if agent.Disabled || !agentIsOnline(agent, now) {
 			continue
 		}
 		candidates = append(candidates, candidate{

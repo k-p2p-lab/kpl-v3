@@ -777,7 +777,14 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 	defer s.state.mu.Unlock()
 	if agentID, exists := s.state.reservations[nodeID]; exists {
 		agent, ok := s.state.agents[agentID]
-		return agent, ok && agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
+		if ok && !agent.Disabled {
+			return agent, agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
+		}
+		delete(s.state.reservations, nodeID)
+		if ok {
+			agent.ActiveNodes = max(0, agent.ActiveNodes-1)
+			s.state.agents[agentID] = agent
+		}
 	}
 	var selected model.Agent
 	var candidates []model.Agent
@@ -787,7 +794,7 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
-		if !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
+		if agent.Disabled || !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
 			continue
 		}
 		if rng != nil {
@@ -825,7 +832,7 @@ func (s *Server) selectBatchAgent(ctx context.Context, rng *rand.Rand) (string, 
 		s.state.mu.RLock()
 		var candidates []string
 		for _, agent := range s.state.agents {
-			if agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
+			if !agent.Disabled && agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
 				candidates = append(candidates, agent.ID)
 			}
 		}

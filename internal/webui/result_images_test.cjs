@@ -553,3 +553,15 @@ test("hash verification may finish with the original saved job identity", async 
   assert.match(images.jobDescription(job("run", "running", { phase: "checking-sources" })), /Comparing source content hashes/);
   assert.match(images.jobDescription(job("run", "completed", { reused: true })), /Source unchanged/);
 });
+
+test("score component charts keep observer groups, negative penalties and missing gaps",()=>{
+ const a=sample();a.observations=[
+  {at:"2026-09-09T00:00:00Z",groups:[{group:"workers",layers:[],scoreComponents:{p1:{count:2,mean:4},p3b:{count:2,mean:-3}}},{group:"boot",layers:[],scoreComponents:{p1:{count:1,mean:2}}}]},
+  {at:"2026-09-09T00:00:05Z",groups:[{group:"workers",layers:[]},{group:"boot",layers:[],scoreComponents:{p1:{count:0,mean:0}}}]},
+ ];
+ const charts=images.buildCharts(a),p1=charts.find(c=>c.id==='peer-score-p1'),p3b=charts.find(c=>c.id==='peer-score-p3b');
+ assert.equal(p1.category,'gossipsub');assert.deepEqual(p1.series.map(s=>s.name),['boot','workers']);
+ assert.equal(p1.series[1].points[0].y,4);assert.equal(p1.series[1].points[1].y,null);
+ assert.equal(p3b.series[0].points[0].y,-3);
+ assert.ok(!charts.some(c=>c.id==='peer-score-p7'));
+});

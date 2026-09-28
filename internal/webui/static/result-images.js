@@ -512,6 +512,20 @@
         series: scores,
         note: "Mean of observer-to-peer scores reported by fresh peers in each group. Missing samples are gaps; observers can score the same peer differently.",
       });
+    for (const [key, label] of [
+      ["p1", "P1 · Time in mesh"], ["p2", "P2 · First message deliveries"],
+      ["p3", "P3 · Mesh delivery deficit"], ["p3b", "P3b · Mesh failure penalty"],
+      ["p4", "P4 · Invalid messages"], ["p5", "P5 · Application score"],
+      ["p6", "P6 · IP colocation"], ["p7", "P7 · Behaviour penalty"],
+      ["topicCap", "Topic score cap adjustment"], ["total", "Total · Component measurements"],
+    ]) {
+      const series = byGroup(g => g.scoreComponents?.[key]?.count > 0 ? g.scoreComponents[key].mean : null);
+      if (series.length) charts.push({
+        id: `peer-score-${key}`, title: label, category: "gossipsub",
+        xLabel: "Elapsed time (s)", yLabel: "Mean weighted contribution", series,
+        note: "Weighted score contribution across observer-to-peer pairs, grouped by observer. Topic weights are included; P3b and the topic cap adjustment are separate. Retained disconnected-peer scores are included. Missing measurements remain gaps. All components plus the cap adjustment sum to the corresponding total.",
+      });
+    }
     const degrees = byGroup(
       (g) => g.layers.find((l) => l.protocol === "gossipsub")?.averageDegree,
     );
@@ -718,7 +732,7 @@
     const id = chart.id;
     if (["graph-node_count", "peer-lifecycle", "observers-reporting"].includes(id)) return "population";
     if (/bandwidth|throughput/.test(id)) return "bandwidth";
-    if (id === "peer-scores" || id.startsWith("observers-")) return "scores";
+    if (id === "peer-scores" || id.startsWith("peer-score-") || id.startsWith("observers-")) return "scores";
     if (id.startsWith("control-") || ["gossipsub-control", "mesh-transitions"].includes(id)) return "control";
     if (id.startsWith("graph-") || id.startsWith("degree-") || id === "mesh-degree") return "topology";
     return chart.category || chart.protocol ? "delivery" : "comparison";

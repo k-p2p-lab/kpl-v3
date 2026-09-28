@@ -23,19 +23,20 @@ type analysisLayer struct {
 }
 
 type analysisGroup struct {
-	Group              string          `json:"group"`
-	Ready              int             `json:"ready"`
-	Starting           int             `json:"starting"`
-	Stopping           int             `json:"stopping"`
-	Failed             int             `json:"failed"`
-	Reporting          int             `json:"reporting"`
-	ScoreObservers     int             `json:"scoreObservers"`
-	ScoreCount         int             `json:"scoreCount"`
-	ScoreMean          *float64        `json:"scoreMean"`
-	ScoreMin           *float64        `json:"scoreMin"`
-	ScoreMax           *float64        `json:"scoreMax"`
-	NegativeScoreRatio *float64        `json:"negativeScoreRatio"`
-	Layers             []analysisLayer `json:"layers"`
+	ScoreComponents    map[string]model.ScoreStatistic `json:"scoreComponents,omitempty"`
+	Group              string                          `json:"group"`
+	Ready              int                             `json:"ready"`
+	Starting           int                             `json:"starting"`
+	Stopping           int                             `json:"stopping"`
+	Failed             int                             `json:"failed"`
+	Reporting          int                             `json:"reporting"`
+	ScoreObservers     int                             `json:"scoreObservers"`
+	ScoreCount         int                             `json:"scoreCount"`
+	ScoreMean          *float64                        `json:"scoreMean"`
+	ScoreMin           *float64                        `json:"scoreMin"`
+	ScoreMax           *float64                        `json:"scoreMax"`
+	NegativeScoreRatio *float64                        `json:"negativeScoreRatio"`
+	Layers             []analysisLayer                 `json:"layers"`
 }
 
 type analysisGraph struct {
@@ -228,6 +229,16 @@ func makeAnalysisObservation(runID string, now time.Time, nodes []model.Node, ag
 				continue
 			}
 			group.Reporting++
+			if node.ScoreSample.Fresh(now) {
+				if group.ScoreComponents == nil {
+					group.ScoreComponents = make(map[string]model.ScoreStatistic)
+				}
+				for key, value := range node.ScoreSample.Components {
+					stat := group.ScoreComponents[key]
+					stat.Merge(value)
+					group.ScoreComponents[key] = stat
+				}
+			}
 			observed := false
 			for _, score := range node.PeerScores {
 				if math.IsNaN(score) || math.IsInf(score, 0) {

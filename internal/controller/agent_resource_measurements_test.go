@@ -205,7 +205,7 @@ func TestResourceMeasurementExpiryRetentionAndStorageFailure(t *testing.T) {
 
 func TestResourceMeasurementAuthenticationAndUnavailableHistory(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir(), User: "admin", Password: "interval-test"}, nil)
-	for _, req := range [][2]string{{"GET", measurementsPath}, {"POST", measurementsPath}, {"POST", measurementsPath + "/abc/stop"}, {"GET", measurementsPath + "/abc/export"}} {
+	for _, req := range [][2]string{{"GET", measurementsPath}, {"POST", measurementsPath}, {"POST", measurementsPath + "/abc/stop"}, {"DELETE", measurementsPath + "/abc"}, {"GET", measurementsPath + "/abc/export"}} {
 		if r := resultRequest(s, req[0], req[1]); r.Code != 401 {
 			t.Fatalf("unauthorized %v: %d", req, r.Code)
 		}
@@ -231,5 +231,47 @@ func TestResourceMeasurementAuthenticationAndUnavailableHistory(t *testing.T) {
 	}
 	if got := measurementResponse(t, resultRequest(s, "GET", measurementsPath)).Measurements[0]; got != stopped {
 		t.Fatal("failed download lost interval")
+	}
+}
+
+func TestResourceMeasurementDeletePersistsAndProtectsActiveIntervals(t *testing.T) {
+	dir := t.TempDir()
+	s := New(ServerConfig{DataDir: dir}, nil)
+	m := measurementResponse(t, resultRequest(s, "POST", measurementsPath)).Measurements[0]
+	path := measurementsPath + "/" + m.ID
+	if r := resultRequest(s, "DELETE", path); r.Code != http.StatusConflict {
+		t.Fatalf("active delete: %d", r.Code)
+	}
+	measurementResponse(t, resultRequest(s, "POST", path+"/stop"))
+	newer := measurementResponse(t, resultRequest(s, "POST", measurementsPath)).Measurements[0]
+	deleted := measurementResponse(t, resultRequest(s, "DELETE", path))
+	if len(deleted.Measurements) != 1 || deleted.Measurements[0].ID != newer.ID || !deleted.Measurements[0].EndedAt.IsZero() {
+		t.Fatalf("deleted wrong interval: %+v", deleted)
+	}
+	restored := New(ServerConfig{DataDir: dir}, nil)
+	if got := measurementResponse(t, resultRequest(restored, "GET", measurementsPath)); len(got.Measurements) != 1 || got.Measurements[0].ID != newer.ID {
+		t.Fatal("deletion did not survive restart")
+	}
+	for _, method := range []string{"DELETE", "GET"} {
+		endpoint := path
+		if method == "GET" {
+			endpoint += "/export?format=csv"
+		}
+		if r := resultRequest(restored, method, endpoint); r.Code != http.StatusNotFound {
+			t.Fatalf("deleted record is still accessible: %s %d", method, r.Code)
+		}
+	}
+	measurementResponse(t, resultRequest(restored, "POST", measurementsPath+"/"+newer.ID+"/stop"))
+	if err := os.Remove(filepath.Join(dir, resourceMeasurementFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, resourceMeasurementFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if r := resultRequest(restored, "DELETE", measurementsPath+"/"+newer.ID); r.Code != http.StatusServiceUnavailable {
+		t.Fatalf("storage failure: %d", r.Code)
+	}
+	if got := measurementResponse(t, resultRequest(restored, "GET", measurementsPath)); len(got.Measurements) != 1 {
+		t.Fatal("failed deletion changed live state")
 	}
 }

@@ -135,6 +135,22 @@ func (s *Server) resourceMeasurementAction(action, id string) (resourceMeasureme
 			result.Measurements = items
 			return result, http.StatusCreated, ""
 		}
+	case "delete":
+		for i, m := range result.Measurements {
+			if m.ID != id {
+				continue
+			}
+			if m.EndedAt.IsZero() {
+				return result, http.StatusConflict, "Stop the measurement before deleting it"
+			}
+			items := append(result.Measurements[:i:i], result.Measurements[i+1:]...)
+			if err := s.saveResourceMeasurementsLocked(items); err != nil {
+				return result, http.StatusServiceUnavailable, "Cannot delete measurement; check local Controller storage"
+			}
+			result.Measurements = items
+			return result, http.StatusOK, ""
+		}
+		return result, http.StatusNotFound, "Resource measurement not found"
 	case "stop":
 		for i, m := range result.Measurements {
 			if m.ID != id {
@@ -180,6 +196,10 @@ func (s *Server) handleResourceMeasurements(w http.ResponseWriter, r *http.Reque
 		action = "start"
 	}
 	s.writeResourceMeasurementAction(w, action, "")
+}
+
+func (s *Server) handleDeleteResourceMeasurement(w http.ResponseWriter, r *http.Request) {
+	s.writeResourceMeasurementAction(w, "delete", r.PathValue("measurementID"))
 }
 
 func (s *Server) handleStopResourceMeasurement(w http.ResponseWriter, r *http.Request) {

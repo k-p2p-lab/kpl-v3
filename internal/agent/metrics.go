@@ -103,15 +103,19 @@ func newAgentMetricsRegistry(s *Server) *prometheus.Registry {
 type localCollector struct {
 	server                                          *Server
 	nodes, capacity, cleanupPending, telemetryQueue *prometheus.Desc
+	historyRecords, historyRetired, historyErrors   *prometheus.Desc
 }
 
 func newLocalCollector(s *Server) *localCollector {
 	return &localCollector{
 		server:         s,
+		historyRecords: prometheus.NewDesc("kpl_local_history_records", "Terminal Peer records and run fences currently retained in Agent memory.", []string{"agent_id", "kind"}, nil),
+		historyRetired: prometheus.NewDesc("kpl_local_history_retired_total", "Acknowledged terminal Peers and run fences moved from Agent memory to local storage.", []string{"agent_id", "kind"}, nil),
+		historyErrors:  prometheus.NewDesc("kpl_local_history_cleanup_errors_total", "Failed history maintenance passes. Evidence remains in memory until storage recovers.", []string{"agent_id"}, nil),
 		nodes:          prometheus.NewDesc("kpl_local_nodes", "Peer records held by this Agent, including retained stopped and failed records, by current state and peer runtime.", []string{"agent_id", "state", "runtime"}, nil),
 		capacity:       prometheus.NewDesc("kpl_local_capacity", "Configured peer admission capacity of this Agent; this is not a CPU or memory limit.", []string{"agent_id"}, nil),
 		cleanupPending: prometheus.NewDesc("kpl_local_cleanup_pending", "Docker peers awaiting cleanup or whose previous container cleanup failed.", []string{"agent_id"}, nil),
-		telemetryQueue: prometheus.NewDesc("kpl_local_telemetry_queue_events", "Telemetry events currently queued in this Agent for forwarding to the Controller.", []string{"agent_id"}, nil),
+		telemetryQueue: prometheus.NewDesc("kpl_local_telemetry_queue_events", "Queued, in-flight and pending termination events retained by this Agent for forwarding to the Controller.", []string{"agent_id"}, nil),
 	}
 }
 
@@ -120,6 +124,9 @@ func (c *localCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.capacity
 	ch <- c.cleanupPending
 	ch <- c.telemetryQueue
+	ch <- c.historyRecords
+	ch <- c.historyRetired
+	ch <- c.historyErrors
 }
 
 func (c *localCollector) Collect(ch chan<- prometheus.Metric) {
@@ -132,16 +139,25 @@ func (c *localCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, state := range []string{model.NodeStarting, model.NodeReady, model.NodeStopping, model.NodeStopped, model.NodeFailed} {
 		counts[nodeKey{state, defaultRuntime}] = 0
 	}
-	cleanupPending := 0
+	cleanupPending, historyPeers := 0, 0
 	for _, proc := range s.processes {
+		if processCleanupComplete(proc) {
+			historyPeers++
+		}
 		counts[nodeKey{metricsNodeState(proc.node.State), defaultRuntime}]++
 		if proc.cleanupErr != nil || !proc.exited && proc.node.State == model.NodeStopping {
 			cleanupPending++
 		}
 	}
+	historyFences, peersRetired, fencesRetired, historyErrors := len(s.runFences), s.historyPeersRetired, s.historyFencesRetired, s.historyErrors
 	s.mu.RUnlock()
+	ch <- prometheus.MustNewConstMetric(c.historyRecords, prometheus.GaugeValue, float64(historyPeers), agentID, "peers")
+	ch <- prometheus.MustNewConstMetric(c.historyRecords, prometheus.GaugeValue, float64(historyFences), agentID, "run_fences")
+	ch <- prometheus.MustNewConstMetric(c.historyRetired, prometheus.CounterValue, float64(peersRetired), agentID, "peers")
+	ch <- prometheus.MustNewConstMetric(c.historyRetired, prometheus.CounterValue, float64(fencesRetired), agentID, "run_fences")
+	ch <- prometheus.MustNewConstMetric(c.historyErrors, prometheus.CounterValue, float64(historyErrors), agentID)
 	s.eventsMu.Lock()
-	queued := len(s.events)
+	queued := len(s.events) + s.eventsInFlight + len(s.terminations)
 	s.eventsMu.Unlock()
 	for key, count := range counts {
 		ch <- prometheus.MustNewConstMetric(c.nodes, prometheus.GaugeValue, float64(count), agentID, key.state, key.runtime)

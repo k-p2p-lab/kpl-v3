@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -133,5 +134,70 @@ func TestConfigWriteFailureReleasesAdmission(t *testing.T) {
 	}
 	if calls := dockerCalls(t, dockerLog); len(calls) != 0 {
 		t.Fatalf("invalid configuration reached Docker: %+v", calls)
+	}
+}
+
+func TestRetirementRacingBlockedAdmissionCannotReusePeerID(t *testing.T) {
+	s := historyTestServer(t)
+	for i := range peerHistoryRecent + 1 {
+		id := fmt.Sprintf("retired-%03d", i)
+		proc := historyTerminal(id, "old-run", time.Unix(int64(i), 0))
+		proc.heartbeatAcknowledged = true
+		s.processes[id] = proc
+	}
+	fencePath := s.history.path("fences", "new-run")
+	if err := syscall.Mkfifo(fencePath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- historyAdmission(s, "retired-000", "new-run", 1) }()
+	var writer *os.File
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		writer, err = os.OpenFile(fencePath, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.ENXIO) {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if writer == nil {
+		t.Fatal("admission did not reach stored fence lookup")
+	}
+	defer writer.Close()
+	// The lookup is blocked after checking the retired-ID file, but it must
+	// neither hold the state lock nor admit that same ID after retirement.
+	responsive := make(chan struct{})
+	go func() { s.snapshot(); close(responsive) }()
+	select {
+	case <-responsive:
+	case <-time.After(time.Second):
+		t.Fatal("history I/O blocked status")
+	}
+	if err := s.reclaimHistory(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := s.processes["retired-000"]; exists {
+		t.Fatal("fixture did not retire the racing identity")
+	}
+	// Replace the FIFO before waking its existing reader, allowing the retry to
+	// read a regular fence file instead of blocking on a second pipe open.
+	if err := writeTelemetryFile(fencePath, []byte("0")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("0")); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "already exists") {
+			t.Fatalf("retirement race admitted duplicate: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("history lookup did not finish")
 	}
 }

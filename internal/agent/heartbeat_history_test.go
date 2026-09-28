@@ -157,7 +157,7 @@ func TestHeartbeatCompactsOnlyConfirmedSuccessfulExits(t *testing.T) {
 					}
 					expected := cloneNodeStatus(proc.node)
 					got := heartbeatNodeStatus(proc)
-					if exited && !cleanupFailed && state == model.NodeStopped {
+					if exited && !cleanupFailed && (state == model.NodeStopped || state == model.NodeFailed) {
 						if len(got.ConnectedPeers)+len(got.RoutingPeers)+len(got.MeshPeers)+len(got.PeerScores)+len(got.Addresses)+len(got.TopicPeers) != 0 || !got.OverlayObservedAt.IsZero() {
 							t.Fatalf("completed exit retained live overlay: %+v", got)
 						}

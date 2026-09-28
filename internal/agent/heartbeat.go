@@ -25,6 +25,7 @@ func (s *Server) register(ctx context.Context) error {
 		proc.heartbeatAcknowledged = false
 	}
 	s.mu.Unlock()
+	s.resetHistoryReplay()
 	return nil
 }
 
@@ -33,23 +34,27 @@ func (s *Server) heartbeat(ctx context.Context) error {
 	defer s.heartbeatMu.Unlock()
 	h := s.snapshotWithHistory(false)
 	h.Partial = true
-	return sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
+	err := sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
 		if err := s.postData(ctx, "/api/v1/agents/heartbeat", data, nil); err != nil {
 			return err
 		}
 		s.mu.Lock()
 		for _, node := range nodes {
-			if proc := s.processes[node.ID]; node.State == model.NodeStopped && proc != nil && processSuccessfullyStopped(proc) {
+			if proc := s.processes[node.ID]; proc != nil && node.State == proc.node.State && node.LastSeen.Equal(proc.node.LastSeen) && processCleanupComplete(proc) {
 				proc.heartbeatAcknowledged = true
 			}
 		}
 		s.mu.Unlock()
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return s.replayRetiredHistory(ctx, h.Agent)
 }
 
-func processSuccessfullyStopped(proc *process) bool {
-	return proc.exited && proc.cleanupErr == nil && proc.node.State == model.NodeStopped
+func processCleanupComplete(proc *process) bool {
+	return proc.exited && proc.cleanupErr == nil && (proc.node.State == model.NodeStopped || proc.node.State == model.NodeFailed)
 }
 
 // Encode each node once, splitting by actual JSON bytes rather than node count.

@@ -65,6 +65,15 @@ type process struct {
 }
 
 type Server struct {
+	historyReplay        *historyReplay
+	history              *agentHistory
+	historyRevision      uint64
+	historyMapPeak       int
+	historyPeersRetired  uint64
+	historyFencesRetired uint64
+	historyErrors        uint64
+	fencingAll           bool
+
 	resources         *model.AgentResources
 	startupReconciled bool
 	spool             *telemetrySpool
@@ -148,6 +157,10 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 		flushNow:  make(chan struct{}, 1),
 	}
 	var spoolErr error
+	s.history, spoolErr = openAgentHistory(config.DataDir)
+	if spoolErr != nil {
+		return nil, spoolErr
+	}
 	s.spool, s.events, spoolErr = openTelemetrySpool(config.DataDir)
 	if spoolErr != nil {
 		return nil, spoolErr
@@ -288,6 +301,9 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 }
 
 func (s *Server) controlLoop(ctx context.Context) {
+	// History writes run independently of leases and event forwarding.
+	// Shutdown does not wait for an uninterruptible filesystem syscall.
+	go s.historyLoop(ctx)
 	resourceDone := make(chan struct{})
 	go func() { defer close(resourceDone); s.resourceLoop(ctx) }()
 	defer func() { <-resourceDone }()
@@ -315,6 +331,15 @@ func (s *Server) controlLoop(ctx context.Context) {
 }
 
 func (s *Server) heartbeatLoop(ctx context.Context) {
+	defer func() {
+		s.heartbeatMu.Lock()
+		defer s.heartbeatMu.Unlock()
+		if s.historyReplay != nil && s.historyReplay.directory != nil {
+			s.historyReplay.directory.Close()
+		}
+		s.historyReplay = nil
+	}()
+
 	registered := false
 	heartbeat := time.NewTicker(2 * time.Second)
 	defer heartbeat.Stop()
@@ -403,7 +428,7 @@ func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartb
 		Nodes: make([]model.Node, 0, capacity),
 	}
 	for _, proc := range s.processes {
-		if !includeAcknowledged && proc.heartbeatAcknowledged && processSuccessfullyStopped(proc) {
+		if !includeAcknowledged && proc.heartbeatAcknowledged && processCleanupComplete(proc) {
 			continue
 		}
 		h.Nodes = append(h.Nodes, heartbeatNodeStatus(proc))
@@ -436,22 +461,8 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		return model.Node{}, fmt.Errorf("resolve peer network conditions: %w", err)
 	}
 	resolvedConfig.Network = networkConfig
-	s.mu.Lock()
-	if s.shuttingDown {
-		s.mu.Unlock()
-		return model.Node{}, fmt.Errorf("agent is shutting down")
-	}
-	if fence, exists := s.runFences[request.RunID]; exists && request.Generation <= fence {
-		s.mu.Unlock()
-		return model.Node{}, fmt.Errorf("run %q generation %d is fenced at generation %d", request.RunID, request.Generation, fence)
-	}
-	if _, exists := s.processes[request.ID]; exists {
-		s.mu.Unlock()
-		return model.Node{}, fmt.Errorf("node %q already exists", request.ID)
-	}
-	if s.capacityUsedLocked() >= s.capacityLocked() {
-		s.mu.Unlock()
-		return model.Node{}, errCapacityReached
+	if err := s.lockAdmission(ctx, request); err != nil {
+		return model.Node{}, err
 	}
 	now := time.Now().UTC()
 	profile := request.Profile
@@ -623,7 +634,8 @@ func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr 
 			current.node.Error = errors.Join(runErr, cleanupErr).Error()
 		}
 	}
-	if proc.exited && proc.cleanupErr == nil && proc.node.State == model.NodeStopped {
+	if processCleanupComplete(proc) {
+		setProcessMetadata(proc, "cleanupComplete", "true")
 		proc.node = heartbeatNodeStatus(proc)
 		proc.apiURL = ""
 	}
@@ -684,6 +696,7 @@ func (s *Server) stopRunGeneration(runID string, generation uint64) {
 	if !exists || generation > fence {
 		fence = generation
 		s.runFences[runID] = fence
+		s.historyRevision++
 	}
 	now := time.Now().UTC()
 	cancels := make([]context.CancelFunc, 0)
@@ -786,13 +799,12 @@ func cloneMeshPeers(peers map[string][]string) map[string][]string {
 	return cloned
 }
 
-// Keep every terminal ID in the full inventory so the Controller can reconcile
-// reservations even when it missed the entire lifetime. Successful exits no
-// longer have a live overlay; resending their last connections, scores and
-// resolved configuration makes churn history overflow the heartbeat body limit.
-// Successfully removed peers retain this compact record in memory as well.
+// Keep unacknowledged terminal evidence until the Controller receives it.
+// Removed containers have no live overlay, including failed Peer processes.
+// A bounded recent history remains in memory; older acknowledged identities
+// move to local storage so churn cannot grow the live inventory indefinitely.
 func heartbeatNodeStatus(proc *process) model.Node {
-	if !proc.exited || proc.cleanupErr != nil || proc.node.State != model.NodeStopped {
+	if !processCleanupComplete(proc) {
 		return cloneNodeStatus(proc.node)
 	}
 	node := proc.node
@@ -806,7 +818,7 @@ func heartbeatNodeStatus(proc *process) model.Node {
 	node.OverlayObservedAt = time.Time{}
 	node.Metadata = make(map[string]string)
 	// Preserve lifecycle evidence and topic labels used by Controller metrics.
-	for _, key := range []string{"runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode"} {
+	for _, key := range []string{"cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode"} {
 		if value, exists := proc.node.Metadata[key]; exists {
 			node.Metadata[key] = value
 		}
@@ -955,7 +967,8 @@ func (s *Server) drainEvents(ctx context.Context) error {
 }
 
 // Retain one pending exit marker per process instead of silently losing it
-// when the trace queue is full. The process inventory already bounds this map.
+// when the trace queue is full. Admission also checks this separate backlog,
+// because acknowledged process records may already have retired to disk.
 func (s *Server) queueTermination(event model.TraceEvent) {
 	s.eventsMu.Lock()
 	defer s.eventsMu.Unlock()

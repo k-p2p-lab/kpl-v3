@@ -223,7 +223,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		// reports. Never apply older active states or physical occupancy.
 		terminal := make([]model.Node, 0, len(h.Nodes))
 		for _, node := range h.Nodes {
-			if node.State == model.NodeStopped {
+			if node.State == model.NodeStopped || node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true" {
 				terminal = append(terminal, node)
 			}
 		}
@@ -270,7 +270,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		if old, found := s.nodes[node.ID]; found {
 			// Node IDs are never reused. Completed exits cannot be revived by
 			// a late report, including one carrying an old cleanup failure.
-			if old.State == model.NodeStopped && node.State != model.NodeStopped {
+			// A full inventory may infer an exit before disk history replay
+			// delivers its confirmed failure. Preserve that original outcome.
+			if old.State == model.NodeStopped && node.State != model.NodeStopped && !(old.Metadata["cleanupComplete"] != "true" && node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") {
 				node = old
 			} else if old.State == model.NodeFailed && node.State != model.NodeFailed && node.State != model.NodeStopping && node.State != model.NodeStopped {
 				// A failed process cannot restart under the same node ID. Keep
@@ -313,7 +315,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			if node.AgentID != h.Agent.ID {
 				continue
 			}
-			if _, found := seen[id]; !found && node.State != model.NodeStopped {
+			if _, found := seen[id]; !found && node.State != model.NodeStopped && !(node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") {
 				if s.reservations[id] == h.Agent.ID {
 					continue
 				}

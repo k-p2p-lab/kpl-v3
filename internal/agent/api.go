@@ -96,6 +96,16 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.nodes())
 	case http.MethodDelete:
+		s.mu.Lock()
+		if s.fencingAll {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, "Peer cleanup is already in progress")
+			return
+		}
+		s.fencingAll = true
+		s.historyRevision++
+		s.mu.Unlock()
+		defer func() { s.mu.Lock(); s.fencingAll = false; s.historyRevision++; s.mu.Unlock() }()
 		// Close old run generations without making this Agent permanently unusable
 		// after a Controller restart. Future runs get different IDs.
 		s.mu.Lock()
@@ -107,6 +117,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 		s.stopAll()
+		if err := s.fenceRetiredRuns(r.Context()); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		cleanupCtx, cancel := context.WithTimeout(r.Context(), containerStopTimeout)
 		err := s.waitStoppedContext(cleanupCtx)
 		cancel()
@@ -128,6 +142,11 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		node, err := s.createNode(context.Background(), request)
+		if errors.Is(err, errPeerHistoryFull) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		if errors.Is(err, errCapacityReached) {
 			writeError(w, http.StatusTooManyRequests, err.Error())
 			return

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -171,10 +172,11 @@ func (spool *telemetrySpool) acknowledge(events []model.TraceEvent) error {
 		}
 		for i := segment.ack; i < next; i++ {
 			key := segment.keys[i]
+			segment.keys[i] = ""
 			refs := spool.refs[key]
 			for j, ref := range refs {
 				if ref.segment == segment && ref.index == i {
-					refs = append(refs[:j], refs[j+1:]...)
+					refs = slices.Delete(refs, j, j+1)
 					break
 				}
 			}

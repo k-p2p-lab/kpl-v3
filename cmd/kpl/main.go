@@ -35,6 +35,8 @@ func main() {
 		err = runController(ctx, logger, os.Args[2:])
 	case "agent":
 		err = runAgent(ctx, logger, os.Args[2:])
+	case "resource-monitor":
+		err = runServiceMonitor(ctx, logger, os.Args[2:])
 	case "peer":
 		err = runPeer(ctx, logger, os.Args[2:])
 	case "validate":
@@ -53,6 +55,25 @@ func main() {
 		logger.Error("kpl stopped", "role", os.Args[1], "error", err)
 		os.Exit(1)
 	}
+}
+
+func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) error {
+	flags := flag.NewFlagSet("resource-monitor", flag.ContinueOnError)
+	socket := flags.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket")
+	controllerURL := flags.String("controller", os.Getenv("KPL_CONTROLLER_URL"), "Controller base URL")
+	stack := flags.String("stack", os.Getenv("KPL_STACK_NAME"), "Swarm stack to monitor")
+	nodeID := flags.String("node-id", os.Getenv("KPL_SWARM_NODE_ID"), "stable Swarm node ID")
+	controlNode := flags.String("control-node-id", os.Getenv("KPL_CONTROL_NODE_ID"), "node hosting the default control services")
+	nodeName := flags.String("node-name", os.Getenv("KPL_SWARM_NODE_HOSTNAME"), "Docker host name")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
+	if err := auth.Validate(user, password); err != nil {
+		return err
+	}
+	return agent.RunServiceMonitor(ctx, agent.ServiceMonitorConfig{DockerSocket: *socket, ControllerURL: *controllerURL,
+		Token: auth.InternalToken(user, password), Stack: *stack, NodeID: *nodeID, NodeName: *nodeName, ControlNodeID: *controlNode}, logger)
 }
 
 func runController(ctx context.Context, logger *slog.Logger, args []string) error {
@@ -198,10 +219,11 @@ func usage() {
 Usage:
   kpl controller [--listen :8080] [--data-dir data]
   kpl agent --id ID --advertise-url URL --controller-url URL --docker-image IMAGE --docker-network OVERLAY
+  kpl resource-monitor --stack STACK --node-id NODE --controller URL
   kpl peer --config FILE
   kpl validate --scenario FILE
   kpl version
 
 Deploy and manage the Swarm stack with sh scripts/swarm.sh.
-Controller, Agent and Peer commands are container entrypoints.`)
+Controller, Agent, resource-monitor and Peer commands are container entrypoints.`)
 }

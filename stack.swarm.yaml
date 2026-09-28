@@ -4,6 +4,8 @@ version: "3.8"
 # scripts/swarm.sh resolves a configured tag to one digest for this deployment.
 services:
   controller:
+    labels:
+      io.kpl.resource-monitor: 'true'
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     command: [controller, --listen, ':8080', --data-dir, /var/lib/kpl/data]
     environment:
@@ -68,7 +70,36 @@ services:
       rollback_config: {parallelism: 1, order: stop-first}
       restart_policy: {condition: any, delay: 5s}
 
+  # Independent of Agent eligibility; reports only opted-in services in this stack.
+  resource-monitor:
+    image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
+    user: '0:0'
+    command: [resource-monitor]
+    labels:
+      io.kpl.resource-monitor: 'true'
+    environment:
+      KPL_USER: "${KPL_USER:?Set KPL_USER}"
+      KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
+      KPL_STACK_NAME: "${KPL_STACK_NAME:-kpl}"
+      KPL_CONTROL_NODE_ID: "${KPL_CONTROL_NODE_ID:?Set the persistent control node ID}"
+      KPL_SWARM_NODE_ID: '{{.Node.ID}}'
+      KPL_SWARM_NODE_HOSTNAME: '{{.Node.Hostname}}'
+      KPL_CONTROLLER_URL: http://controller:8080
+    volumes: [/var/run/docker.sock:/var/run/docker.sock:ro]
+    networks: [monitoring]
+    read_only: true
+    deploy:
+      labels:
+        io.kpl.application: kp2plab-v3
+      mode: global
+      placement:
+        constraints: ['node.platform.os == linux']
+      update_config: {parallelism: 1, order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
   prometheus:
+    labels:
+      io.kpl.resource-monitor: 'true'
     image: prom/prometheus:v3.13.2
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -92,6 +123,8 @@ services:
       update_config: {parallelism: 1, order: stop-first}
 
   grafana:
+    labels:
+      io.kpl.resource-monitor: 'true'
     image: grafana/grafana:13.2.1
     entrypoint: [/bin/sh, -ec]
     command:
@@ -121,7 +154,7 @@ services:
     configs:
       - {source: grafana-datasource, target: /etc/grafana/provisioning/datasources/prometheus.yaml}
       - {source: grafana-provider, target: /etc/grafana/provisioning/dashboards/kpl.yaml}
-      - {source: grafana-dashboard-resources-v10, target: /var/lib/grafana/dashboards/kpl-experiments.json}
+      - {source: grafana-dashboard-resources-v11, target: /var/lib/grafana/dashboards/kpl-experiments.json}
     volumes: [grafana-data:/var/lib/grafana]
     networks: [monitoring]
     ports:
@@ -154,5 +187,5 @@ configs:
     file: ./monitoring/grafana/provisioning/datasources/prometheus.yaml
   grafana-provider:
     file: ./monitoring/grafana/provisioning/dashboards/kpl.yaml
-  grafana-dashboard-resources-v10:
+  grafana-dashboard-resources-v11:
     file: ./monitoring/grafana/dashboards/kpl-experiments.json

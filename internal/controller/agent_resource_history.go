@@ -23,14 +23,17 @@ type resourceHistoryPoint struct {
 	Value float64   `json:"value"`
 }
 type resourceHistorySeries struct {
-	Scope   string                 `json:"scope"`
-	AgentID string                 `json:"agentId"`
-	Metric  string                 `json:"metric"`
-	Unit    string                 `json:"unit"`
-	Samples []resourceHistoryPoint `json:"samples"`
-	Mean    float64                `json:"mean"`
-	Min     float64                `json:"min"`
-	Max     float64                `json:"max"`
+	EntityType string                 `json:"entityType"`
+	Service    string                 `json:"service,omitempty"`
+	NodeID     string                 `json:"nodeId,omitempty"`
+	Scope      string                 `json:"scope"`
+	AgentID    string                 `json:"agentId"`
+	Metric     string                 `json:"metric"`
+	Unit       string                 `json:"unit"`
+	Samples    []resourceHistoryPoint `json:"samples"`
+	Mean       float64                `json:"mean"`
+	Min        float64                `json:"min"`
+	Max        float64                `json:"max"`
 }
 type resourceHistory struct {
 	From   time.Time               `json:"from"`
@@ -48,7 +51,7 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		return result, errors.New("Configure a valid Controller Prometheus query URL")
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/api/v1/query"
-	query := `{job="kpl-controller",__name__=~"kpl_agent_cpu_usage_percent|kpl_agent_memory_working_set_bytes|kpl_agent_memory_usage_bytes|kpl_agent_resource_containers|kpl_agent_component_cpu_usage_percent|kpl_agent_component_memory_working_set_bytes|kpl_agent_component_memory_usage_bytes|kpl_agent_component_resource_containers"}[` + strconv.Itoa(max(1, int(math.Ceil(window.Seconds())))) + `s]`
+	query := `{job="kpl-controller",__name__=~"kpl_agent_cpu_usage_percent|kpl_agent_memory_working_set_bytes|kpl_agent_memory_usage_bytes|kpl_agent_resource_containers|kpl_agent_component_cpu_usage_percent|kpl_agent_component_memory_working_set_bytes|kpl_agent_component_memory_usage_bytes|kpl_agent_component_resource_containers|kpl_service_cpu_usage_percent|kpl_service_memory_working_set_bytes|kpl_service_memory_usage_bytes|kpl_service_resource_containers|kpl_service_running|kpl_service_resource_report_fresh"}[` + strconv.Itoa(max(1, int(math.Ceil(window.Seconds())))) + `s]`
 	params := url.Values{"query": {query}, "time": {fmt.Sprintf("%d.%09d", to.Unix(), to.Nanosecond())}, "timeout": {"12s"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String(), strings.NewReader(params.Encode()))
 	if err != nil {
@@ -94,10 +97,13 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 	byKey := map[string]*resourceHistorySeries{}
 	for _, entry := range raw.Data.Result {
 		id, metric := entry.Metric["agent_id"], entry.Metric["__name__"]
-		if id == "" {
+		entity, service, node, scope := resourceHistoryEntity(entry.Metric)
+		if entity == "" || entity == "agent" && id == "" {
 			continue
 		}
-		scope := model.ResourceScopeTotal
+		if entity == "service" {
+			metric = "kpl_agent_" + strings.TrimPrefix(metric, "kpl_service_")
+		}
 		if strings.HasPrefix(metric, "kpl_agent_component_") {
 			scope = entry.Metric["component"]
 			if scope != model.ResourceScopeAgent && scope != model.ResourceScopePeers {
@@ -107,6 +113,11 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		}
 		unit := "bytes"
 		switch metric {
+		case "kpl_agent_running", "kpl_agent_resource_report_fresh":
+			if entity != "service" {
+				continue
+			}
+			metric, unit = strings.TrimPrefix(metric, "kpl_agent_"), "boolean"
 		case "kpl_agent_cpu_usage_percent":
 			metric, unit = "cpu_percent", "percent_host"
 		case "kpl_agent_resource_containers":
@@ -122,10 +133,10 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		default:
 			continue
 		}
-		key := id + "\x00" + scope + "\x00" + metric
+		key := entity + "\x00" + service + "\x00" + node + "\x00" + id + "\x00" + scope + "\x00" + metric
 		series := byKey[key]
 		if series == nil {
-			series = &resourceHistorySeries{AgentID: id, Scope: scope, Metric: metric, Unit: unit, Samples: []resourceHistoryPoint{}}
+			series = &resourceHistorySeries{EntityType: entity, Service: service, NodeID: node, AgentID: id, Scope: scope, Metric: metric, Unit: unit, Samples: []resourceHistoryPoint{}}
 			byKey[key] = series
 		}
 		for _, pair := range entry.Values {
@@ -165,7 +176,7 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		for _, p := range series.Samples {
 			if len(clean) > 0 && clean[len(clean)-1].At.Equal(p.At) {
 				if clean[len(clean)-1].Value != p.Value {
-					return result, errors.New("Conflicting resource samples for one Agent; check duplicate Controller scrape targets")
+					return result, errors.New("Conflicting resource samples for one entity; check duplicate Controller scrape targets")
 				}
 				continue
 			}
@@ -184,6 +195,16 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		result.Series = append(result.Series, *series)
 	}
 	sort.Slice(result.Series, func(i, j int) bool {
+		a, b := result.Series[i], result.Series[j]
+		if a.EntityType != b.EntityType {
+			return a.EntityType < b.EntityType
+		}
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		if a.NodeID != b.NodeID {
+			return a.NodeID < b.NodeID
+		}
 		if result.Series[i].AgentID != result.Series[j].AgentID {
 			return result.Series[i].AgentID < result.Series[j].AgentID
 		}
@@ -235,7 +256,7 @@ func (s *Server) serveResourceHistory(w http.ResponseWriter, r *http.Request, fr
 		return
 	}
 	if len(data.Series) == 0 {
-		writeError(w, http.StatusNotFound, "No KPL resource samples in this period; verify Agent updates and the Controller scrape target")
+		writeError(w, http.StatusNotFound, "No KPL resource samples in this period; verify resource collectors and the Controller scrape target")
 		return
 	}
 	if kind == "summary" {
@@ -246,17 +267,17 @@ func (s *Server) serveResourceHistory(w http.ResponseWriter, r *http.Request, fr
 	out := csv.NewWriter(w)
 	defer out.Flush()
 	if kind == "summary" {
-		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "from_utc", "to_utc", "first_sample_utc", "last_sample_utc", "samples", "sample_mean", "min", "max"})
+		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "from_utc", "to_utc", "first_sample_utc", "last_sample_utc", "samples", "sample_mean", "min", "max", "entity_type", "service", "node_id", "node_name"})
 		for _, series := range data.Series {
-			if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, data.From.Format(time.RFC3339Nano), data.To.Format(time.RFC3339Nano), series.Samples[0].At.Format(time.RFC3339Nano), series.Samples[len(series.Samples)-1].At.Format(time.RFC3339Nano), strconv.Itoa(len(series.Samples)), csvFloat(series.Mean), csvFloat(series.Min), csvFloat(series.Max)}); err != nil {
+			if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, data.From.Format(time.RFC3339Nano), data.To.Format(time.RFC3339Nano), series.Samples[0].At.Format(time.RFC3339Nano), series.Samples[len(series.Samples)-1].At.Format(time.RFC3339Nano), strconv.Itoa(len(series.Samples)), csvFloat(series.Mean), csvFloat(series.Min), csvFloat(series.Max), series.EntityType, resourceCSVCell(series.Service), resourceCSVCell(series.NodeID), ""}); err != nil {
 				return
 			}
 		}
 	} else {
-		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "sampled_at_utc", "value"})
+		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "sampled_at_utc", "value", "entity_type", "service", "node_id", "node_name"})
 		for _, series := range data.Series {
 			for _, p := range series.Samples {
-				if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, p.At.Format(time.RFC3339Nano), csvFloat(p.Value)}); err != nil {
+				if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, p.At.Format(time.RFC3339Nano), csvFloat(p.Value), series.EntityType, resourceCSVCell(series.Service), resourceCSVCell(series.NodeID), ""}); err != nil {
 					return
 				}
 			}

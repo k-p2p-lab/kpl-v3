@@ -90,7 +90,7 @@ case "$1 ${2:-}" in
             *"name=${stack}_controller") printf 'svccontroller\n' ;;
             *"name=${stack}_agent") printf 'svcagent\n' ;;
             *name=*) die "$@" ;;
-            *) printf 'svccontroller\nsvcagent\nsvcprometheus\nsvcgrafana\n' ;;
+            *) printf 'svccontroller\nsvcagent\nsvcprometheus\nsvcgrafana\nsvcmonitor\n' ;;
         esac ;;
     'service inspect')
         if [ "${KPL_TEST_INSPECT_FAIL:-0}" = 1 ]; then printf 'mock service inspection failed\n' >&2; exit 2; fi
@@ -99,6 +99,7 @@ case "$1 ${2:-}" in
             svcagent|"${stack}_agent") name=${stack}_agent ;;
             svcprometheus) name=${stack}_prometheus ;;
             svcgrafana) name=${stack}_grafana ;;
+            svcmonitor) name=${stack}_resource-monitor ;;
             *) die "$@" ;;
         esac
         case "$4" in
@@ -134,7 +135,7 @@ case "$1 ${2:-}" in
         esac ;;
     'service logs')
         [ "$#" = 6 ] && [ "$3" = --tail ] && [ "$5" = --timestamps ] || die "$@"
-        case "$6" in "${stack}_controller"|"${stack}_agent"|"${stack}_prometheus"|"${stack}_grafana") ;; *) die "$@" ;; esac
+        case "$6" in "${stack}_controller"|"${stack}_agent"|"${stack}_prometheus"|"${stack}_grafana"|"${stack}_resource-monitor") ;; *) die "$@" ;; esac
         printf 'mock service log for %s\n' "$6" ;;
     'exec '*)
         [ "$#" = 8 ] && [ "$2 $3 $4 $6" = 'containerC sh -c kpl-web-log' ] || die "$@"
@@ -260,7 +261,7 @@ case "$1 ${2:-}" in
             *) die "$@" ;;
         esac ;;
     'service rm')
-        [ "$*" = 'service rm svccontroller svcagent svcprometheus svcgrafana' ] || die "$@"
+        [ "$*" = 'service rm svccontroller svcagent svcprometheus svcgrafana svcmonitor' ] || die "$@"
         if [ "${KPL_TEST_SERVICE_RM_FAIL:-0}" = 1 ]; then printf 'mock service removal failed\n' >&2; exit 2; fi
         shift 2
         for service do event "service-rm-$service"; done
@@ -355,6 +356,7 @@ service-rm-svccontroller
 service-rm-svcagent
 service-rm-svcprometheus
 service-rm-svcgrafana
+service-rm-svcmonitor
 stack-rm
 unlabel-worker1
 unlabel-worker2
@@ -833,7 +835,7 @@ no_mutation
 reset_case
 run logs
 grep -Fxq 'service logs --tail 100 --timestamps lab_controller' "$KPL_TEST_STATE/calls"
-for component in agent prometheus grafana; do
+for component in agent resource-monitor prometheus grafana; do
     run logs "$component"
     grep -Fxq "service logs --tail 100 --timestamps lab_$component" "$KPL_TEST_STATE/calls"
 done

@@ -288,6 +288,13 @@
           <div class="agent-resource-actions"><button class="secondary-button" type="button" data-resource-export="current">Current CSV</button><button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button></div>
         </header>
         <div class="panel-body" id="panel-agents-body">
+          <section class="service-resource-section" aria-labelledby="serviceResourceHeading">
+            <div><p class="eyebrow">CONTROL PLANE</p><h3 id="serviceResourceHeading">Controller &amp; services</h3></div>
+            <p class="panel-note">Controller, Prometheus, Grafana, and resource collectors, separate from Agent + Peer totals. CPU: 100% = all logical CPUs on each service host. Memory: working set.</p>
+            <div class="service-resource-cards" id="serviceResourceCards" role="region" aria-label="Controller and service resources" tabindex="0"><p class="panel-note">Loading service resources…</p></div>
+            <p class="panel-note" id="serviceResourceScrollHint" hidden>Scroll within the service list to see more hosts and services.</p>
+            <p class="panel-note" id="serviceResourceStatus" role="status">Service samples refresh about every 10 seconds.</p>
+          </section>
           <div class="agent-resource-overview">
           <div class="agent-resource-summaries">
             <p class="agent-resource-summary" id="agentResourceSummary" role="status">Agent + Peers · Awaiting samples</p>
@@ -313,13 +320,13 @@
               <button class="danger-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
             </div>
             <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
-            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads include Total, Agent, and Peers scopes from Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
+            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads include Controller and service resources alongside Total, Agent, and Peers scopes from Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
           </section>
           <div class="agent-resource-actions agent-resource-history">
             <label for="agentResourceRange">History period</label><select id="agentResourceRange"><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select>
             <button class="secondary-button" type="button" data-resource-export="samples">History CSV</button><button class="secondary-button" type="button" data-resource-export="summary">Summary CSV</button>
           </div>
-          <p class="panel-note">History uses Prometheus. Summary includes each Agent's sample mean, minimum, peak and container coverage. Partial samples are included; missing usage is not estimated.</p>
+          <p class="panel-note">History uses Prometheus. Summary includes each Agent and service's sample mean, minimum, peak and container coverage. Partial samples are included; missing usage is not estimated.</p>
           <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
           </div>
           <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
@@ -604,6 +611,7 @@
   <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
   <script src="/agent-resources.js" defer></script>
+  <script src="/service-resources.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

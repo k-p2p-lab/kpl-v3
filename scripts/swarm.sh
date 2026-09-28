@@ -37,7 +37,7 @@ KPL_IMAGE_BUILD_TIMEOUT and KPL_IMAGE_PUSH_TIMEOUT default to 1800 and 600 secon
 KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
 Bash completion: source scripts/activate-swarm.sh, then use swarm COMMAND.
-Log components: controller (default), agent, prometheus, grafana, access, auth.
+Log components: controller (default), agent, resource-monitor, prometheus, grafana, access, auth.
 Logs default to the last 100 lines; --tail all prints all available lines.
 Access/auth print JSONL from the running Controller (rotated backups excluded).
 For access/auth, --context selects its node's Docker daemon for file reads only;
@@ -86,7 +86,7 @@ case "$command_name" in
                 *) log_component=$1; shift ;;
             esac
         fi
-        case "$log_component" in controller|agent|prometheus|grafana|access|auth) ;; *) fail 'Unknown log component.' ;; esac
+        case "$log_component" in controller|agent|resource-monitor|prometheus|grafana|access|auth) ;; *) fail 'Unknown log component.' ;; esac
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 --tail)
@@ -298,7 +298,7 @@ agent_present=no
 for service in $services; do
     identity=$(dock service inspect --format '{{.Spec.Name}}|{{index .Spec.Labels "io.kpl.application"}}' "$service")
     case "$identity" in
-        "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application") ;;
+        "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application"|"$KPL_STACK_NAME"_resource-monitor\|"$application") ;;
         *) fail 'Existing stack contains an unrecognized service. See https://github.com/k-p2p-lab/kpl-v3/wiki/Swarm-Deployment for migration; no changes made.' ;;
     esac
     case "$identity" in

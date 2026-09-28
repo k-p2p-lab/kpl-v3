@@ -36,7 +36,7 @@ func TestAgentResourcesFreshnessAggregationAndCSV(t *testing.T) {
 	}
 	response := resultRequest(s, http.MethodGet, "/api/v1/agents/resources?format=csv")
 	rows, err := csv.NewReader(response.Body).ReadAll()
-	if err != nil || response.Code != 200 || len(rows) != 7 {
+	if err != nil || response.Code != 200 || len(rows) != 10 {
 		t.Fatalf("CSV: %d %v %v", response.Code, rows, err)
 	}
 	if rows[1][1] != "'=unsafe" || rows[1][5] != "18.750000" || rows[6][5] != "21.875000" {

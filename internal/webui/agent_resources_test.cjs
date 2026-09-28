@@ -45,7 +45,7 @@ test('Grafana keeps process-only metrics separate from Agent plus Peer measureme
   assert.ok(a.x+a.w<=b.x||b.x+b.w<=a.x||a.y+a.h<=b.y||b.y+b.h<=a.y,`overlap ${d.panels[i].title} / ${d.panels[j].title}`);
  }
  const stack=fs.readFileSync(path.join(__dirname,'../../stack.swarm.yaml'),'utf8');
- assert.match(stack,/KPL_PROMETHEUS_URL: http:\/\/prometheus:9090/);assert.equal((stack.match(/grafana-dashboard-resources-v10/g)||[]).length,2);
+ assert.match(stack,/KPL_PROMETHEUS_URL: http:\/\/prometheus:9090/);assert.equal((stack.match(/grafana-dashboard-resources-v11/g)||[]).length,2);
 });
 
 function measurementUI(initial, handler) {

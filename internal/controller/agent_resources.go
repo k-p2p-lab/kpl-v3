@@ -237,19 +237,20 @@ func (s *Server) handleAgentResources(w http.ResponseWriter, r *http.Request) {
 			Agents        []model.Agent                  `json:"agents"`
 			Totals        agentResourceTotals            `json:"totals"`
 			TotalsByScope map[string]agentResourceTotals `json:"totalsByScope"`
-		}{now, agents, byScope[model.ResourceScopeTotal], byScope})
+			Services      []serviceResourceView          `json:"services"`
+		}{now, agents, byScope[model.ResourceScopeTotal], byScope, s.serviceResourceSnapshot(now)})
 		return
 	}
 	resourceCSVHeaders(w, "kpl-agent-resources-current")
 	out := csv.NewWriter(w)
 	defer out.Flush()
-	_ = out.Write([]string{"agent_id", "agent_name", "scope", "status", "sampled_at_utc", "cpu_percent_host", "cpu_capacity_cores", "memory_working_set_bytes", "memory_usage_bytes", "containers", "measured_containers"})
+	_ = out.Write(append([]string{"agent_id", "agent_name", "scope", "status", "sampled_at_utc", "cpu_percent_host", "cpu_capacity_cores", "memory_working_set_bytes", "memory_usage_bytes", "containers", "measured_containers"}, resourceEntityHeaders...))
 	for _, a := range agents {
 		for _, scope := range model.ResourceScopes {
 			if scope != model.ResourceScopeTotal && a.Resources.Usage(scope) == nil {
 				continue
 			}
-			if err := out.Write(resourceCurrentCSVRow(a, scope, now)); err != nil {
+			if err := out.Write(append(resourceCurrentCSVRow(a, scope, now), "agent", "", "", "")); err != nil {
 				return
 			}
 		}
@@ -263,8 +264,9 @@ func (s *Server) handleAgentResources(w http.ResponseWriter, r *http.Request) {
 		if totals.CPUPercent != nil {
 			percent, capacity = csvFloat(*totals.CPUPercent), strconv.Itoa(totals.CPUCapacityCores)
 		}
-		if err := out.Write([]string{"TOTAL", "", scope, fmt.Sprintf("%d/%d agents; %d partial; CPU %d/%d agents", totals.MeasuredAgents, totals.TotalAgents, totals.PartialAgents, totals.CPUMeasuredAgents, totals.TotalAgents), now.Format(time.RFC3339Nano), percent, capacity, strconv.FormatUint(totals.MemoryWorkingSetBytes, 10), strconv.FormatUint(totals.MemoryUsageBytes, 10), strconv.Itoa(totals.Containers), strconv.Itoa(totals.MeasuredContainers)}); err != nil {
+		if err := out.Write([]string{"TOTAL", "", scope, fmt.Sprintf("%d/%d agents; %d partial; CPU %d/%d agents", totals.MeasuredAgents, totals.TotalAgents, totals.PartialAgents, totals.CPUMeasuredAgents, totals.TotalAgents), now.Format(time.RFC3339Nano), percent, capacity, strconv.FormatUint(totals.MemoryWorkingSetBytes, 10), strconv.FormatUint(totals.MemoryUsageBytes, 10), strconv.Itoa(totals.Containers), strconv.Itoa(totals.MeasuredContainers), "agent_total", "", "", ""}); err != nil {
 			return
 		}
 	}
+	s.writeServiceResourceCSV(out, now)
 }

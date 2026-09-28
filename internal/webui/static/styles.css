@@ -814,3 +814,19 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .agent-resource-partial { color: var(--amber); }
 
 .agent-availability-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+
+/* Controller and third-party resources stay separate from the Agent fleet. */
+.service-resource-section { display: grid; gap: .65rem; padding: 1rem 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); min-width: 0; }
+.service-resource-section h3, .service-resource-section p { margin: 0; }
+.service-resource-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .65rem; max-height: 28rem; overflow-y: auto; min-width: 0; }
+.service-resource-card { padding: .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); min-width: 0; }
+.service-resource-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .35rem .5rem; }
+.service-resource-heading h4 { font-size: .9rem; margin: 0; overflow-wrap: anywhere; }
+.service-resource-state { font-size: .7rem; color: var(--muted); }
+.service-resource-state[data-state="running"] { color: var(--green); }
+.service-resource-state[data-state="not_running"], .service-resource-state[data-state="stale"] { color: var(--red); }
+.service-resource-host { color: var(--muted); font-size: .72rem; overflow-wrap: anywhere; padding-top: .35rem; }
+.service-resource-values { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .65rem 0 .4rem; }
+.service-resource-values dt { color: var(--muted); font-size: .7rem; }
+.service-resource-values dd { margin: .15rem 0 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.service-resource-card .service-resource-coverage { font-size: .7rem; color: var(--muted); }

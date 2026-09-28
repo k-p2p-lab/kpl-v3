@@ -184,7 +184,7 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Published · Total",
+      "title": "Published \u00b7 Total",
       "description": "Sum of publish counters currently retained by the collector. This is not the increase over the selected time range, and it may reset when the collector restarts.",
       "datasource": {
         "type": "prometheus",
@@ -251,7 +251,7 @@
     {
       "id": 6,
       "type": "stat",
-      "title": "Published · Selected range",
+      "title": "Published \u00b7 Selected range",
       "description": "Estimated increase in published messages over the selected time range. Prometheus increase accounts for interval boundaries and counter resets, so the result may not be an integer.",
       "datasource": {
         "type": "prometheus",
@@ -318,7 +318,7 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Failures · Selected range",
+      "title": "Failures \u00b7 Selected range",
       "description": "Estimated increase in publish/leave failures handled with onError: continue over the selected time range. Failures that stop a run with onError: fail and join failures are not included. Also check for failed runs in the Run status and phase panel.",
       "datasource": {
         "type": "prometheus",
@@ -389,7 +389,7 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "Telemetry loss · Range",
+      "title": "Telemetry loss \u00b7 Range",
       "description": "Events reported as lost in the telemetry pipeline during the selected time range. This is separate from P2P packet loss and affects the completeness of the analysis.",
       "datasource": {
         "type": "prometheus",
@@ -460,7 +460,7 @@
     {
       "id": 28,
       "type": "stat",
-      "title": "Stable delivery · Bounds",
+      "title": "Stable delivery \u00b7 Bounds",
       "description": "session-window-v1: on-time successful pairs among instrumented receiver sessions proven subscribed throughout the fixed window. A pre-deadline departure is excluded even after early receipt. Lower=S/E; upper=(S+unknown)/E. These are missing-observation bounds, not confidence intervals or a claim about invisible sessions. Availability uncertainty is reported separately. Only the Run filter applies. Counts cover mature messages in the whole observed run unless stated otherwise; legacy publications are excluded.",
       "datasource": {
         "type": "prometheus",
@@ -541,7 +541,7 @@
     {
       "id": 31,
       "type": "stat",
-      "title": "Starting cohort · Bounds",
+      "title": "Starting cohort \u00b7 Bounds",
       "description": "On-time success among the known starting cohort: sessions proven present at actual publication time, including confirmed later departures and their early receipts. Pair-weighted across selected new runs. Bounds reflect unknown receipt evidence within that known cohort and remain available despite separately reported candidate-availability or measurement uncertainty. N/A only when there are no known starting pairs. This is not an estimate for unobserved candidates. Only the Run filter applies. Counts cover mature messages in the whole observed run unless stated otherwise; legacy publications are excluded.",
       "datasource": {
         "type": "prometheus",
@@ -1683,7 +1683,7 @@
         {
           "refId": "A",
           "expr": "sum by (encoding) (rate(kpl_message_bytes_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",topic=~\"${topic:regex}\",direction=\"publish\"}[$__rate_interval]))",
-          "legendFormat": "Published · {{encoding}}",
+          "legendFormat": "Published \u00b7 {{encoding}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -1696,7 +1696,7 @@
         {
           "refId": "B",
           "expr": "sum by (encoding) (rate(kpl_message_bytes_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",topic=~\"${topic:regex}\",direction=\"deliver\"}[$__rate_interval]))",
-          "legendFormat": "Delivered · {{encoding}}",
+          "legendFormat": "Delivered \u00b7 {{encoding}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -1778,7 +1778,7 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Stable on-time latency · Whole-run P50 / P95 / P99",
+      "title": "Stable on-time latency \u00b7 Whole-run P50 / P95 / P99",
       "description": "session-window-v1 first application delivery latency for mature, stable, on-time remote envelope pairs. Local/raw/late/departed/unknown/negative samples are excluded. Conditional on observed success, so read delivery bounds and coverage alongside it. Run, Agent and Topic filters apply. These cumulative bucket estimates describe the whole observed run, not the selected interval. Late batches can revise buckets: query directly, not with rate/increase. Synchronize clocks; positive offsets can remain undetected. Legacy histogram series are not included.",
       "datasource": {
         "type": "prometheus",
@@ -1918,7 +1918,7 @@
         {
           "refId": "A",
           "expr": "sum(rate(kpl_events_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",topic=~\"${topic:regex}\",event_type=\"graft\"}[$__rate_interval]))",
-          "legendFormat": "Mesh added · GRAFT",
+          "legendFormat": "Mesh added \u00b7 GRAFT",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -1931,7 +1931,7 @@
         {
           "refId": "B",
           "expr": "sum(rate(kpl_events_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",topic=~\"${topic:regex}\",event_type=\"prune\"}[$__rate_interval]))",
-          "legendFormat": "Mesh removed · PRUNE",
+          "legendFormat": "Mesh removed \u00b7 PRUNE",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2222,7 +2222,7 @@
     {
       "id": 17,
       "type": "stat",
-      "title": "PubSub bytes · Selected range",
+      "title": "PubSub bytes \u00b7 Selected range",
       "description": "Estimated increase in PubSub data bytes over the selected time range, grouped by direction and encoding. Interface framing and retransmissions are not included.",
       "datasource": {
         "type": "prometheus",
@@ -2238,7 +2238,7 @@
         {
           "refId": "A",
           "expr": "sum by (direction, encoding) (increase(kpl_message_bytes_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",topic=~\"${topic:regex}\"}[$__range]))",
-          "legendFormat": "{{direction}} · {{encoding}}",
+          "legendFormat": "{{direction}} \u00b7 {{encoding}}",
           "instant": true,
           "range": false,
           "format": "time_series",
@@ -2318,7 +2318,7 @@
         {
           "refId": "A",
           "expr": "sum by (direction, control_type) (rate(kpl_gossipsub_control_rpcs_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"}[$__rate_interval]))",
-          "legendFormat": "{{direction}} · {{control_type}}",
+          "legendFormat": "{{direction}} \u00b7 {{control_type}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2416,7 +2416,7 @@
         {
           "refId": "A",
           "expr": "sum by (direction, control_type) (rate(kpl_gossipsub_control_entries_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"}[$__rate_interval]))",
-          "legendFormat": "{{direction}} · {{control_type}}",
+          "legendFormat": "{{direction}} \u00b7 {{control_type}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2514,7 +2514,7 @@
         {
           "refId": "A",
           "expr": "sum by (direction, control_type) (rate(kpl_gossipsub_control_message_ids_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",control_type=~\"ihave|iwant|idontwant\"}[$__rate_interval]))",
-          "legendFormat": "{{direction}} · {{control_type}} IDs",
+          "legendFormat": "{{direction}} \u00b7 {{control_type}} IDs",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2527,7 +2527,7 @@
         {
           "refId": "B",
           "expr": "sum by (direction) (rate(kpl_gossipsub_control_peer_exchange_records_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\",control_type=\"prune\"}[$__rate_interval]))",
-          "legendFormat": "{{direction}} · prune PX",
+          "legendFormat": "{{direction}} \u00b7 prune PX",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2622,7 +2622,7 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "Configured base delay · Mean / min / max",
+      "title": "Configured base delay \u00b7 Mean / min / max",
       "description": "Mean, minimum, and maximum base delay configured for ready/starting Peers. These are not measured packet RTT or propagation latency. Scope identifies the traffic affected by the impairment.",
       "datasource": {
         "type": "prometheus",
@@ -2638,7 +2638,7 @@
         {
           "refId": "A",
           "expr": "kpl_network_configured_delay_seconds{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"}",
-          "legendFormat": "{{group}} · {{agent_id}} · {{stat}} · {{profile}} · {{scope}} · {{run_id}}",
+          "legendFormat": "{{group}} \u00b7 {{agent_id}} \u00b7 {{stat}} \u00b7 {{profile}} \u00b7 {{scope}} \u00b7 {{run_id}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2720,7 +2720,7 @@
     {
       "id": 20,
       "type": "timeseries",
-      "title": "Configured packet loss · Mean",
+      "title": "Configured packet loss \u00b7 Mean",
       "description": "Mean configured loss probability for ready/starting Peers. This is not measured packet loss or the proportion of undelivered messages.",
       "datasource": {
         "type": "prometheus",
@@ -2736,7 +2736,7 @@
         {
           "refId": "A",
           "expr": "kpl_network_configured_loss_ratio{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"}",
-          "legendFormat": "{{group}} · {{agent_id}} · {{profile}} · {{scope}} · {{run_id}}",
+          "legendFormat": "{{group}} \u00b7 {{agent_id}} \u00b7 {{profile}} \u00b7 {{scope}} \u00b7 {{run_id}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2819,7 +2819,7 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Configured jitter · Mean",
+      "title": "Configured jitter \u00b7 Mean",
       "description": "Mean configured jitter for ready/starting Peers. Actual packet delay varies with the configured distribution; this value is not measured jitter.",
       "datasource": {
         "type": "prometheus",
@@ -2835,7 +2835,7 @@
         {
           "refId": "A",
           "expr": "kpl_network_configured_jitter_seconds{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"}",
-          "legendFormat": "{{group}} · {{agent_id}} · {{profile}} · {{scope}} · {{run_id}}",
+          "legendFormat": "{{group}} \u00b7 {{agent_id}} \u00b7 {{profile}} \u00b7 {{scope}} \u00b7 {{run_id}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -2933,7 +2933,7 @@
         {
           "refId": "A",
           "expr": "sum by (group, profile, scope) (kpl_network_configured_peers{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"})",
-          "legendFormat": "{{group}}/{{profile}} · {{scope}}",
+          "legendFormat": "{{group}}/{{profile}} \u00b7 {{scope}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -3013,6 +3013,615 @@
       }
     },
     {
+      "id": 65,
+      "type": "row",
+      "title": "Controller and supporting services",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 89
+      },
+      "panels": []
+    },
+    {
+      "id": 66,
+      "type": "timeseries",
+      "title": "Service CPU by host",
+      "description": "Per service on each Docker host. 100% is the whole host; percentages across different hosts must not be summed. Independent of Agent selection and enablement.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 90
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_cpu_usage_percent{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 67,
+      "type": "timeseries",
+      "title": "Service memory by host",
+      "description": "Controller and opted-in supporting service containers. Inactive file cache excluded; partial samples include measured containers only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 90
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_memory_working_set_bytes{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 68,
+      "type": "timeseries",
+      "title": "Service container coverage",
+      "description": "Expected and measured containers. Missing/stale samples have no CPU or memory value; compare the inventory freshness panel.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 98
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_resource_containers{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}} \u00b7 {{kind}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 69,
+      "type": "timeseries",
+      "title": "Service memory including cache",
+      "description": "Raw cgroup memory including cache, per service and host.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 98
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_memory_usage_bytes{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 70,
+      "type": "timeseries",
+      "title": "Service running state",
+      "description": "1: one or more running service containers observed. 0: none observed on this host. Unknown or stale inventory is omitted; container running state is not application readiness.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 106
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_running{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 71,
+      "type": "timeseries",
+      "title": "Service inventory freshness",
+      "description": "1: successful inventory within 30 seconds. 0: stale or failed inventory. Hosts with no reports for 10 minutes expire from the live cache; history is retained.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kpl-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 106
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kpl_service_resource_report_fresh{job=\"kpl-controller\"}",
+          "legendFormat": "{{service}} \u00b7 {{node_id}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kpl-prometheus"
+          },
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "noValue": "No observations",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "id": 23,
       "type": "row",
       "title": "Agent resources and run status",
@@ -3021,7 +3630,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 89
+        "y": 114
       },
       "panels": []
     },
@@ -3038,7 +3647,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 90
+        "y": 115
       },
       "targets": [
         {
@@ -3136,7 +3745,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 90
+        "y": 115
       },
       "targets": [
         {
@@ -3234,7 +3843,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 98
+        "y": 123
       },
       "targets": [
         {
@@ -3333,7 +3942,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 98
+        "y": 123
       },
       "targets": [
         {
@@ -3432,7 +4041,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 106
+        "y": 131
       },
       "targets": [
         {
@@ -3531,7 +4140,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 106
+        "y": 131
       },
       "targets": [
         {
@@ -3630,7 +4239,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 114
+        "y": 139
       },
       "targets": [
         {
@@ -3730,7 +4339,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 114
+        "y": 139
       },
       "targets": [
         {
@@ -3829,7 +4438,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 122
+        "y": 147
       },
       "targets": [
         {
@@ -3928,7 +4537,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 122
+        "y": 147
       },
       "targets": [
         {
@@ -4027,7 +4636,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 130
+        "y": 155
       },
       "targets": [
         {
@@ -4126,7 +4735,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 130
+        "y": 155
       },
       "targets": [
         {
@@ -4225,7 +4834,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 138
+        "y": 163
       },
       "targets": [
         {
@@ -4324,7 +4933,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 138
+        "y": 163
       },
       "targets": [
         {
@@ -4423,13 +5032,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 146
+        "y": 171
       },
       "targets": [
         {
           "refId": "A",
           "expr": "kpl_agent_component_resource_containers{job=\"kpl-controller\",agent_id=~\"${agent:regex}\"}",
-          "legendFormat": "{{agent_id}} · {{component}} · {{kind}}",
+          "legendFormat": "{{agent_id}} \u00b7 {{component}} \u00b7 {{kind}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -4522,13 +5131,13 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 146
+        "y": 171
       },
       "targets": [
         {
           "refId": "A",
           "expr": "kpl_agent_component_memory_usage_bytes{job=\"kpl-controller\",agent_id=~\"${agent:regex}\"}",
-          "legendFormat": "{{agent_id}} · {{component}}",
+          "legendFormat": "{{agent_id}} \u00b7 {{component}}",
           "instant": false,
           "range": true,
           "format": "time_series",
@@ -4621,7 +5230,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 154
+        "y": 179
       },
       "targets": [
         {
@@ -4720,7 +5329,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 154
+        "y": 179
       },
       "targets": [
         {
@@ -4819,7 +5428,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 162
+        "y": 187
       },
       "targets": [
         {
@@ -4910,7 +5519,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 162
+        "y": 187
       },
       "targets": [
         {
@@ -5004,7 +5613,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 170
+        "y": 195
       },
       "panels": []
     },
@@ -5021,13 +5630,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 171
+        "y": 196
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (run_id, direction) (kpl_p2p_stream_bits_per_second{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"})",
-          "legendFormat": "{{run_id}} · {{direction}}",
+          "legendFormat": "{{run_id}} \u00b7 {{direction}}",
           "range": true,
           "instant": false,
           "datasource": {
@@ -5118,13 +5727,13 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 171
+        "y": 196
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (run_id, protocol, direction) (kpl_p2p_protocol_stream_bits_per_second{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"})",
-          "legendFormat": "{{run_id}} · {{protocol}} · {{direction}}",
+          "legendFormat": "{{run_id}} \u00b7 {{protocol}} \u00b7 {{direction}}",
           "range": true,
           "instant": false,
           "datasource": {
@@ -5215,13 +5824,13 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 179
+        "y": 204
       },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (run_id, direction) (kpl_p2p_stream_bytes_total{run_id=~\"${run_id:regex}\",agent_id=~\"${agent:regex}\"})",
-          "legendFormat": "{{run_id}} · {{direction}}",
+          "legendFormat": "{{run_id}} \u00b7 {{direction}}",
           "range": true,
           "instant": false,
           "datasource": {
@@ -5312,7 +5921,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 179
+        "y": 204
       },
       "targets": [
         {
@@ -5508,7 +6117,7 @@
       "24h"
     ]
   },
-  "version": 9,
+  "version": 10,
   "weekStart": "monday",
   "annotations": {
     "list": [

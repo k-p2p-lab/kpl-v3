@@ -210,7 +210,7 @@
         if (!response.ok) { const error = await response.json().catch(() => ({})); throw Error(error.error || "Resource export failed."); }
         if (!response.headers.get("Content-Type")?.startsWith("text/csv")) throw Error("Unexpected resource export response.");
         const url = root.URL.createObjectURL(await response.blob());
-        const a = root.document.createElement("a"); a.href = url; a.download = `kpl-agent-resources-${kind}${measurement ? "-" + measurement.id : ""}.csv`;
+        const a = root.document.createElement("a"); a.href = url; a.download = `kpl-resources-${kind}${measurement ? "-" + measurement.id : ""}.csv`;
         root.document.body.append(a); a.click(); a.remove(); setTimeout(() => root.URL.revokeObjectURL(url), 1000);
         status.textContent = kind === "current" ? "Current resource CSV downloaded." : `${measurement ? "Measurement" : kind === "summary" ? "Summary" : "History"} CSV downloaded. Gaps are excluded; averages use available Prometheus samples.`;
       } catch (error) { status.textContent = error.name === "AbortError" ? "Resource export timed out. Retry or select a shorter period." : error.message; }

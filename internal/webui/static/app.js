@@ -2214,6 +2214,7 @@ for (const button of document.querySelectorAll("[data-agent-capacity-close]")) b
 $("#refreshResults").addEventListener("click", refreshSavedResults);
 $("#refreshAgents").addEventListener("click", refreshAgents);
 globalThis.KPLAgentResources?.init({api});
+globalThis.KPLServiceResources?.init({api});
 $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
   renderSavedResults();

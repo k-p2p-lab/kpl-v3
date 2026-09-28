@@ -155,6 +155,8 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/snapshot", s.handleSnapshot)
 	mux.HandleFunc("/api/v1/agents", s.handleAgents)
 	mux.HandleFunc("/api/v1/agents/refresh", s.handleAgentRefresh)
+	mux.HandleFunc("GET /api/v1/services/resources", s.handleServiceResources)
+	mux.HandleFunc("POST /api/v1/services/resources/report", s.handleServiceResourceReport)
 	mux.HandleFunc("/api/v1/agents/resources", s.handleAgentResources)
 	mux.HandleFunc("/api/v1/agents/resources/history", s.handleAgentResourceHistory)
 	mux.HandleFunc("/api/v1/agents/resources/measurements", s.handleResourceMeasurements)

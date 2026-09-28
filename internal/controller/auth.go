@@ -111,7 +111,7 @@ func internalAuthPath(r *http.Request) bool {
 	}
 	if r.Method == http.MethodPost {
 		switch r.URL.Path {
-		case "/api/v1/agents/register", "/api/v1/agents/heartbeat", "/api/v1/events", "/api/v1/events/batch":
+		case "/api/v1/services/resources/report", "/api/v1/agents/register", "/api/v1/agents/heartbeat", "/api/v1/events", "/api/v1/events/batch":
 			return true
 		}
 	}

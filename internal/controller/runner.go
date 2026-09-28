@@ -39,6 +39,8 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	startedAt                  time.Time
+	serviceResources           *serviceResourceStore
 	resourceMeasurementsMu     sync.Mutex
 	resourceMeasurementsLoaded bool
 	resourceMeasurements       []resourceMeasurement
@@ -114,7 +116,9 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{
+	server := &Server{
+		startedAt:              time.Now().UTC(),
+		serviceResources:       &serviceResourceStore{nodes: make(map[string]serviceResourceEntry)},
 		resourceHistorySlots:   make(chan struct{}, 2),
 		webLogs:                newWebLogs(config.DataDir),
 		auth:                   newBrowserAuth(),
@@ -138,6 +142,8 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 			return err
 		},
 	}
+	server.state.metrics.registry.MustRegister(newServiceResourceCollector(server))
+	return server
 }
 
 func (s *Server) StartScenario(parent context.Context, raw []byte) (model.Experiment, error) {

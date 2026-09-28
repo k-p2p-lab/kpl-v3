@@ -166,6 +166,10 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 	if !reportedAt.IsZero() && reportedAt.After(s.agentSnapshots[agent.ID]) {
 		s.agentSnapshots[agent.ID] = reportedAt
 	}
+	agent.Resources = normalizeAgentResources(agent.Resources, reportedAt, now)
+	if exists && !restarted && !reportedAt.After(s.agentSnapshots[agent.ID]) && previous.Resources != nil && agent.Resources != nil && agent.Resources.SampledAt.Before(previous.Resources.SampledAt) {
+		agent.Resources = previous.Resources
+	}
 	agent.ActiveNodes = max(0, agent.ActiveNodes)
 	agent.LastSeen = now
 	agent.State = model.AgentOnline
@@ -239,6 +243,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	if h.Agent.StartedAt.IsZero() {
 		h.Agent.StartedAt = previous.StartedAt
 	}
+	h.Agent.Resources = normalizeAgentResources(h.Agent.Resources, reportedAt, now)
 	h.Agent.LastSeen = now
 	h.Agent.State = model.AgentOnline
 	reportedOccupied := max(0, h.Agent.ActiveNodes)

@@ -30,6 +30,8 @@ import (
 var errCapacityReached = errors.New("agent capacity reached")
 
 type Config struct {
+	DockerSocket  string
+	SelfContainer string
 	DockerBinary  string
 	DockerImage   string
 	DockerNetwork string
@@ -63,6 +65,7 @@ type process struct {
 }
 
 type Server struct {
+	resources         *model.AgentResources
 	startupReconciled bool
 	spool             *telemetrySpool
 	spoolError        error
@@ -285,6 +288,9 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 }
 
 func (s *Server) controlLoop(ctx context.Context) {
+	resourceDone := make(chan struct{})
+	go func() { defer close(resourceDone); s.resourceLoop(ctx) }()
+	defer func() { <-resourceDone }()
 	// A congested event sink must not prevent the Agent from renewing its
 	// lease. Otherwise healthy capacity disappears from placement while peers
 	// continue to expire, reducing the live population during churn.
@@ -366,6 +372,7 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 		image = s.docker.image
 	}
 	return model.Agent{
+		Resources:  s.resources,
 		ID:         s.config.ID,
 		Name:       s.config.Name,
 		URL:        strings.TrimRight(s.config.AdvertiseURL, "/"),

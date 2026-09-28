@@ -285,15 +285,44 @@
             <h2>Agent status</h2>
             <p class="panel-note">Refresh checks registered Agents, including offline ones. Configure capacity per Agent below.</p>
           </div>
-          <button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button>
+          <div class="agent-resource-actions"><button class="secondary-button" type="button" data-resource-export="current">Current CSV</button><button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button></div>
         </header>
         <div class="panel-body" id="panel-agents-body">
+          <div class="agent-resource-overview">
+          <p class="agent-resource-summary" id="agentResourceSummary" role="status">KPL total · Awaiting samples</p>
+          <p class="panel-note">CPU and memory include each Agent container and its running Peers. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Partial samples show measured containers only. Samples refresh about every 10 seconds.</p>
+          <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
+            <div class="resource-measurement-heading">
+              <div class="resource-measurement-title"><h3 id="resourceMeasurementHeading">Interval measurement</h3><button class="secondary-button" type="button" id="refreshResourceMeasurements" aria-label="Refresh measurement status" title="Refresh measurement status">↻</button></div>
+              <div class="agent-resource-actions">
+                <button class="primary-button" type="button" id="startResourceMeasurement" disabled>Start measurement</button>
+                <button class="secondary-button" type="button" id="stopResourceMeasurement" disabled>Stop measurement</button>
+              </div>
+            </div>
+            <p class="resource-measurement-status" id="resourceMeasurementStatus">Loading measurement status…</p>
+            <p class="agent-refresh-status" id="resourceMeasurementError" role="status" aria-live="polite" hidden></p>
+            <div class="agent-resource-actions resource-measurement-downloads">
+              <label for="resourceMeasurementSelect">Completed intervals</label>
+              <select id="resourceMeasurementSelect" disabled><option value="">No completed measurements</option></select>
+              <button class="secondary-button" type="button" data-resource-export="measurement-samples" disabled>Interval CSV</button>
+              <button class="secondary-button" type="button" data-resource-export="measurement-summary" disabled>Interval summary CSV</button>
+            </div>
+            <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
+            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads use Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
+          </section>
+          <div class="agent-resource-actions agent-resource-history">
+            <label for="agentResourceRange">History period</label><select id="agentResourceRange"><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select>
+            <button class="secondary-button" type="button" data-resource-export="samples">History CSV</button><button class="secondary-button" type="button" data-resource-export="summary">Summary CSV</button>
+          </div>
+          <p class="panel-note">History uses Prometheus. Summary includes each Agent's sample mean, minimum, peak and container coverage. Partial samples are included; missing usage is not estimated.</p>
+          <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
+          </div>
           <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
           <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
           <div class="table-wrap" tabindex="0" role="region" aria-label="Agent status table">
             <table>
-              <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>Last seen</th><th>Metrics</th><th class="agent-settings-cell" scope="col">Settings</th></tr></thead>
-              <tbody id="agentRows"><tr><td colspan="9" class="empty-cell">No Agents registered.</td></tr></tbody>
+              <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>KPL CPU</th><th>KPL Memory</th><th>Last seen</th><th>Metrics</th><th class="agent-settings-cell" scope="col">Settings</th></tr></thead>
+              <tbody id="agentRows"><tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -567,6 +596,7 @@
   <script src="/result-storage.js" defer></script>
   <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
+  <script src="/agent-resources.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

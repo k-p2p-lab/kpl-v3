@@ -11,6 +11,7 @@ services:
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_RUN_MIN_FREE_BYTES: "${KPL_RUN_MIN_FREE_BYTES:-1073741824}"
       KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with scripts/swarm.sh}"
+      KPL_PROMETHEUS_URL: http://prometheus:9090
       PROMETHEUS_PORT: "${PROMETHEUS_PORT:-9090}"
       GRAFANA_PORT: "${GRAFANA_PORT:-3000}"
     volumes: [controller-data:/var/lib/kpl/data]
@@ -120,7 +121,7 @@ services:
     configs:
       - {source: grafana-datasource, target: /etc/grafana/provisioning/datasources/prometheus.yaml}
       - {source: grafana-provider, target: /etc/grafana/provisioning/dashboards/kpl.yaml}
-      - {source: grafana-dashboard-bandwidth-v7, target: /var/lib/grafana/dashboards/kpl-experiments.json}
+      - {source: grafana-dashboard-resources-v9, target: /var/lib/grafana/dashboards/kpl-experiments.json}
     volumes: [grafana-data:/var/lib/grafana]
     networks: [monitoring]
     ports:
@@ -153,5 +154,5 @@ configs:
     file: ./monitoring/grafana/provisioning/datasources/prometheus.yaml
   grafana-provider:
     file: ./monitoring/grafana/provisioning/dashboards/kpl.yaml
-  grafana-dashboard-bandwidth-v7:
+  grafana-dashboard-resources-v9:
     file: ./monitoring/grafana/dashboards/kpl-experiments.json

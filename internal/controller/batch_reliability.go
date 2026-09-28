@@ -97,6 +97,7 @@ func (s *Server) batchReliability(ctx context.Context, id string, analyses []res
 		}
 		agents := append([]model.Agent{}, run.Agents...)
 		for i := range agents {
+			agents[i].Resources = nil // Live load is not execution-environment identity.
 			agents[i].LastSeen = agents[i].StartedAt
 			agents[i].ActiveNodes = 0
 			agents[i].State = ""

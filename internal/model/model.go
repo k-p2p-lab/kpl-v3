@@ -14,6 +14,7 @@ const (
 )
 
 type Agent struct {
+	Resources         *AgentResources   `json:"resources,omitempty"`
 	StartupReconciled bool              `json:"startupReconciled,omitempty"`
 	PeerImage         string            `json:"peerImage,omitempty"`
 	RunDrain          bool              `json:"runDrain,omitempty"`

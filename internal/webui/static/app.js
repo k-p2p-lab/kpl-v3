@@ -1600,9 +1600,11 @@ async function refreshAgents() {
 }
 
 function renderAgents(agents) {
+  const resourceNow = Date.parse(state.snapshot?.generatedAt) || Date.now();
+  globalThis.KPLAgentResources?.update(agents, resourceNow);
   rememberAgents(agents.map((agent) => agent.id));
   if (!agents.length) {
-    setHTML($("#agentRows"), '<tr><td colspan="9" class="empty-cell">No Agents registered.</td></tr>');
+    setHTML($("#agentRows"), '<tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr>');
     return;
   }
   setHTML($("#agentRows"), [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
@@ -1616,6 +1618,8 @@ function renderAgents(agents) {
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
       </td>
       <td><div class="usage"><div class="usage-track"><i style="width:${usage}%"></i></div><span>${usage}%</span></div></td>
+      <td class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "cpu", resourceNow) || "N/A"}</td>
+      <td class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "memory", resourceNow) || "N/A"}</td>
       <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td>${agentMetricsLink(agent)}</td>
       <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure capacity for ${agent.name || agent.id}`)}" title="${escapeHTML(agent.defaultCapacity > 0 ? `Configure capacity for ${agent.name || agent.id}` : "Update this Agent to enable capacity settings.")}" ${agent.defaultCapacity > 0 ? "" : "disabled"}><span aria-hidden="true">⚙️</span></button></td>
@@ -2177,6 +2181,7 @@ $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDef
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);
 $("#refreshAgents").addEventListener("click", refreshAgents);
+globalThis.KPLAgentResources?.init({api});
 $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
   renderSavedResults();

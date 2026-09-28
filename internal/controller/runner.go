@@ -26,6 +26,7 @@ import (
 )
 
 type ServerConfig struct {
+	PrometheusURL   string
 	RunMinFreeBytes uint64
 	User            string
 	Password        string
@@ -38,51 +39,55 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	agentRefreshMu         sync.Mutex
-	submissionMu           sync.Mutex
-	archiveQueueLoaded     bool
-	archiveLastScan        time.Time
-	archiveChecking        bool
-	archiveCheckStartedAt  time.Time
-	archivePhase           string
-	archiveLastProgressAt  time.Time
-	webLogs                *webLogs
-	auth                   *browserAuth
-	config                 ServerConfig
-	state                  *state
-	client                 *http.Client
-	logger                 *slog.Logger
-	cancelMu               sync.Mutex
-	cancels                map[string]context.CancelFunc
-	shuttingDown           bool
-	runs                   sync.WaitGroup
-	nodeSeq                atomic.Uint64
-	repeatBatches          map[string]*repeatBatch
-	resultDownloads        map[string]int
-	resultReadPins         map[string]int
-	archiveReadSlots       chan struct{}
-	archiveStatusMu        sync.RWMutex
-	archiveCheckedAt       time.Time
-	archiveError           string
-	archiveIOCheck         func()
-	resultArchiveMu        sync.Mutex
-	resultArchives         map[string]resultArchiveInfo
-	resultArchiveFlights   map[string]*resultArchiveFlight
-	resultArchiveSlots     chan struct{}
-	analysisSlots          chan struct{}
-	analysisJobMu          sync.Mutex
-	analysisJobs           map[string]*analysisJob
-	batchAnalysisJobs      map[string]*batchAnalysisJob
-	analysisWorkers        sync.WaitGroup
-	scenarioMu             sync.Mutex
-	scenarioCacheMu        sync.Mutex
-	scenarioSummaries      map[string][]scenarioSummaryCacheEntry
-	scenarioSummaryFlights map[string][]*scenarioSummaryFlight
-	scenarioRecordCheck    func([]byte) error
-	snapshotMu             sync.Mutex
-	dashboardFrame         *dashboardFrame
-	snapshotData           []byte
-	snapshotAt             time.Time
+	resourceMeasurementsMu     sync.Mutex
+	resourceMeasurementsLoaded bool
+	resourceMeasurements       []resourceMeasurement
+	resourceHistorySlots       chan struct{}
+	agentRefreshMu             sync.Mutex
+	submissionMu               sync.Mutex
+	archiveQueueLoaded         bool
+	archiveLastScan            time.Time
+	archiveChecking            bool
+	archiveCheckStartedAt      time.Time
+	archivePhase               string
+	archiveLastProgressAt      time.Time
+	webLogs                    *webLogs
+	auth                       *browserAuth
+	config                     ServerConfig
+	state                      *state
+	client                     *http.Client
+	logger                     *slog.Logger
+	cancelMu                   sync.Mutex
+	cancels                    map[string]context.CancelFunc
+	shuttingDown               bool
+	runs                       sync.WaitGroup
+	nodeSeq                    atomic.Uint64
+	repeatBatches              map[string]*repeatBatch
+	resultDownloads            map[string]int
+	resultReadPins             map[string]int
+	archiveReadSlots           chan struct{}
+	archiveStatusMu            sync.RWMutex
+	archiveCheckedAt           time.Time
+	archiveError               string
+	archiveIOCheck             func()
+	resultArchiveMu            sync.Mutex
+	resultArchives             map[string]resultArchiveInfo
+	resultArchiveFlights       map[string]*resultArchiveFlight
+	resultArchiveSlots         chan struct{}
+	analysisSlots              chan struct{}
+	analysisJobMu              sync.Mutex
+	analysisJobs               map[string]*analysisJob
+	batchAnalysisJobs          map[string]*batchAnalysisJob
+	analysisWorkers            sync.WaitGroup
+	scenarioMu                 sync.Mutex
+	scenarioCacheMu            sync.Mutex
+	scenarioSummaries          map[string][]scenarioSummaryCacheEntry
+	scenarioSummaryFlights     map[string][]*scenarioSummaryFlight
+	scenarioRecordCheck        func([]byte) error
+	snapshotMu                 sync.Mutex
+	dashboardFrame             *dashboardFrame
+	snapshotData               []byte
+	snapshotAt                 time.Time
 }
 
 func New(config ServerConfig, logger *slog.Logger) *Server {
@@ -97,6 +102,9 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	if config.DataDir == "" {
 		config.DataDir = "data"
 	}
+	if config.PrometheusURL == "" {
+		config.PrometheusURL = "http://127.0.0.1:9090"
+	}
 	if config.PrometheusPort == 0 {
 		config.PrometheusPort = 9090
 	}
@@ -107,6 +115,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	return &Server{
+		resourceHistorySlots:   make(chan struct{}, 2),
 		webLogs:                newWebLogs(config.DataDir),
 		auth:                   newBrowserAuth(),
 		config:                 config,

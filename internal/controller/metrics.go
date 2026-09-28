@@ -57,7 +57,7 @@ func newControllerMetrics(s *state) *controllerMetrics {
 		}, []string{"run_id", "agent_id"}),
 	}
 	m.registry.MustRegister(m.events, m.messageBytes, m.controlRPCs, m.controlEntries, m.controlMessageIDs, m.controlPXRecords, m.operationFailures, m.droppedEvents, newRunMetricsCollector(s),
-		newControllerStateCollector(s), newNetworkCollector(s), newBandwidthCollector(s), collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		newControllerStateCollector(s), newAgentResourceCollector(s), newNetworkCollector(s), newBandwidthCollector(s), collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
 

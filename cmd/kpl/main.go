@@ -70,6 +70,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	runMinFree := flags.Uint64("run-min-free-bytes", minimumFree, "minimum local free bytes before starting each run (0 disables admission guard)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
+	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
 	prometheusPort := flags.String("prometheus-port", os.Getenv("PROMETHEUS_PORT"), "public Prometheus port advertised to the Dashboard (default 9090)")
 	grafanaPort := flags.String("grafana-port", os.Getenv("GRAFANA_PORT"), "public Grafana port advertised to the Dashboard (default 3000)")
 	if err := flags.Parse(args); err != nil {
@@ -90,6 +91,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		User:            user,
 		Password:        password,
 		MetricsURL:      *metricsURL,
+		PrometheusURL:   *prometheusURL,
 		PrometheusPort:  parsedPrometheusPort,
 		GrafanaPort:     parsedGrafanaPort,
 	}, logger)
@@ -121,6 +123,8 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	dataDir := flags.String("data-dir", "data-agent", "agent data directory")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	labels := flags.String("labels", "", "comma-separated key=value labels")
+	dockerSocket := flags.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket for read-only KPL resource measurement")
+	selfContainer := flags.String("self-container", os.Getenv("KPL_SWARM_TASK_NAME"), "Agent container name for Agent + Peer resource measurement")
 	dockerBinary := flags.String("docker-binary", "docker", "Docker CLI executable")
 	dockerImage := flags.String("docker-image", "", "peer image resolved from the running Swarm Agent task")
 	dockerNetwork := flags.String("docker-network", "", "attachable Swarm peer overlay network")
@@ -135,6 +139,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 		MetricsListen: *metricsListen, MetricsURL: *metricsURL, SelfURL: *selfURL,
 		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir, Token: auth.InternalToken(user, password),
 		Labels:       parseLabels(*labels),
+		DockerSocket: *dockerSocket, SelfContainer: *selfContainer,
 		DockerBinary: *dockerBinary, DockerImage: *dockerImage, DockerNetwork: *dockerNetwork,
 	}, logger)
 	if err != nil {

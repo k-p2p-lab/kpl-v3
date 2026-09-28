@@ -17,6 +17,11 @@ const heartbeatBodyLimit = 10 << 20
 func (s *Server) register(ctx context.Context) error {
 	s.heartbeatMu.Lock()
 	defer s.heartbeatMu.Unlock()
+	return s.registerLocked(ctx)
+}
+
+// Caller holds heartbeatMu, including explicit discovery recovery requests.
+func (s *Server) registerLocked(ctx context.Context) error {
 	if err := s.postJSON(ctx, "/api/v1/agents/register", s.snapshotAgent(), nil); err != nil {
 		return err
 	}

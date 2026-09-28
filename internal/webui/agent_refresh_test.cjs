@@ -75,3 +75,33 @@ test('an empty Controller inventory explains that Agents must register', async (
   assert.match(element('#agentRefreshStatus').textContent,/No Agents are registered/);
   assert.equal(state.snapshot.agents.length,0);
 });
+
+test('Discover Agents adds missing Agents, disables both actions and reports discoveries', async () => {
+  const {api,state,element,requests} = fixture();
+  const refreshing = api.refreshAgents(true);
+  await api.refreshAgents();
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].url,'/api/v1/agents/refresh?discover=true');
+  assert.equal(element('#refreshAgents').disabled,true);
+  assert.equal(element('#discoverAgents').disabled,true);
+  assert.equal(element('#discoverAgents').textContent,'Discovering…');
+  requests[0].resolve({agents:[...state.snapshot.agents,{id:'b',state:'online'}],requested:2,refreshed:2,failures:[],discovery:{enabled:true,addresses:2,added:1}});
+  await refreshing;
+  assert.equal(state.snapshot.agents.length,2);
+  assert.match(element('#agentRefreshStatus').textContent,/Discovered 1 new Agents/);
+  assert.equal(element('#agentRefreshStatus').dataset.error,'false');
+  assert.equal(element('#refreshAgents').disabled,false);
+  assert.equal(element('#discoverAgents').disabled,false);
+  assert.equal(element('#discoverAgents').textContent,'Discover Agents');
+});
+
+test('discovery warnings and registration failures remain visible alongside successful refreshes', async () => {
+  const {api,state,element,requests} = fixture();
+  const refreshing = api.refreshAgents(true);
+  requests[0].resolve({agents:state.snapshot.agents,requested:2,refreshed:1,failures:[{id:'b',name:'Worker B',error:'Check Controller URL'}],discovery:{enabled:true,addresses:2,added:0,error:'DNS incomplete'}});
+  await refreshing;
+  assert.equal(element('#agentRefreshStatus').dataset.error,'true');
+  assert.match(element('#agentRefreshStatus').textContent,/DNS incomplete/);
+  assert.match(element('#agentRefreshStatus').textContent,/Worker B \(Check Controller URL\)/);
+  assert.equal(state.snapshot.nodes[0].id,'peer');
+});

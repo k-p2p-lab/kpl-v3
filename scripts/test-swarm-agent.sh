@@ -119,6 +119,10 @@ fi
 [ "$(wc -l < "$KPL_TEST_SLEEPS" | tr -d ' ')" = 4 ]
 grep -Fq 'Cannot resolve task Peer overlay address after 5 attempts' "$scratch/retry.log"
 
+# Controller discovery must use task addresses scoped to this stack.
+controller_stack=$(sed -n '/^  controller:/,/^  agent:/p' "$root/stack.swarm.yaml")
+printf '%s\n' "$controller_stack" | grep -Fq 'KPL_AGENT_DISCOVERY_DNS: tasks.${KPL_STACK_NAME:-kpl}_agent'
+
 agent_stack=$(sed -n '/^  agent:/,/^  prometheus:/p' "$root/stack.swarm.yaml")
 printf '%s\n' "$agent_stack" | grep -Fq 'KPL_AGENT_METRICS_PORT: "${KPL_AGENT_METRICS_PORT:-9091}"'
 printf '%s\n' "$agent_stack" | grep -Fq 'target: 9091'

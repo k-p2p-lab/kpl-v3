@@ -20,6 +20,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/metrics", s.metricsHandler())
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/status", s.handleStatus)
+	mux.HandleFunc("/api/v1/registration/refresh", s.handleRegistrationRefresh)
 	mux.HandleFunc("/api/v1/nodes", s.handleNodes)
 	mux.HandleFunc("/api/v1/nodes/", s.handleNodeAction)
 	mux.HandleFunc("/api/v1/runs/", s.handleRunAction)
@@ -86,6 +87,36 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.snapshot())
+}
+
+// The Controller discovers task addresses, but registration still travels over
+// the authenticated Agent -> configured Controller path. Never accept a new
+// Controller URL from the discovery request or alter Peer lifecycle state.
+func (s *Server) handleRegistrationRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	if !s.heartbeatMu.TryLock() {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusConflict, "Agent registration or heartbeat is in progress; retry discovery shortly")
+		return
+	}
+	defer s.heartbeatMu.Unlock()
+	s.mu.RLock()
+	ready := s.startupReconciled && !s.shuttingDown
+	s.mu.RUnlock()
+	if !ready {
+		writeError(w, http.StatusServiceUnavailable, "Agent is starting or shutting down")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	if err := s.registerLocked(ctx); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, s.snapshot())

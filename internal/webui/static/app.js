@@ -1556,21 +1556,22 @@ async function confirmResultDeletion() {
   }
 }
 
-async function refreshAgents() {
+async function refreshAgents(discover = false) {
   if (state.agentsRefreshing) return;
   state.agentsRefreshing = true;
-  const button = $("#refreshAgents"), status = $("#agentRefreshStatus");
+  const button = $(discover ? "#discoverAgents" : "#refreshAgents"), status = $("#agentRefreshStatus");
+  const buttons = [$("#refreshAgents"), $("#discoverAgents")];
   const initialIDs = new Set((state.snapshot?.agents || []).map(agent => agent.id));
-  button.disabled = true;
+  buttons.forEach(item => { item.disabled = true; });
   button.setAttribute("aria-busy", "true");
-  setText(button, "Refreshing…");
+  setText(button, discover ? "Discovering…" : "Refreshing…");
   status.hidden = false;
   status.dataset.error = "false";
-  setText(status, "Checking registered Agents, including offline Agents…");
+  setText(status, discover ? "Discovering Swarm Agents and checking registration…" : "Checking registered Agents, including offline Agents…");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
-    const result = await api("/api/v1/agents/refresh", { method: "POST", signal: controller.signal });
+    const result = await api(`/api/v1/agents/refresh${discover ? "?discover=true" : ""}`, { method: "POST", signal: controller.signal });
     if (!Array.isArray(result?.agents) || !Array.isArray(result?.failures)
       || !Number.isInteger(result.requested) || !Number.isInteger(result.refreshed)) throw new Error("Unexpected Agent refresh response.");
     // A heartbeat delivered over SSE while the request was in flight may be newer.
@@ -1582,20 +1583,23 @@ async function refreshAgents() {
     }
     state.snapshot = { ...(state.snapshot || {}), agents: [...agents.values()] };
     render(state.snapshot);
-    status.dataset.error = String(result.failures.length > 0);
-    const failed = result.failures.map(agent => agent.name || agent.id);
-    setText(status, result.requested === 0 ? "No Agents are registered. Waiting for Agents to connect."
-      : `Refreshed ${result.refreshed} of ${result.requested} Agents.`
-        + (failed.length ? ` Could not refresh: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}.` : ""));
+    status.dataset.error = String(result.failures.length > 0 || Boolean(result.discovery?.error));
+    const failed = result.failures.map(agent => `${agent.name || agent.id}${agent.error ? ` (${agent.error})` : ""}`);
+    const summary = result.requested === 0 ? "No Agents are registered. Waiting for Agents to connect."
+      : `Refreshed ${result.refreshed} of ${result.requested} Agents.`;
+    const discovery = result.discovery
+      ? ` Discovered ${result.discovery.added} new Agents.` + (result.discovery.error ? ` ${result.discovery.error}` : "") : "";
+    setText(status, summary + discovery
+      + (failed.length ? ` Could not refresh: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` and ${failed.length - 3} more` : ""}.` : ""));
   } catch (error) {
     status.dataset.error = "true";
     setText(status, `${error.name === "AbortError" ? "Agent refresh timed out." : `Could not refresh Agents: ${error.message}`} Showing the last known status.`);
   } finally {
     clearTimeout(timeout);
     state.agentsRefreshing = false;
-    button.disabled = false;
+    buttons.forEach(item => { item.disabled = false; });
     button.setAttribute("aria-busy", "false");
-    setText(button, "Refresh Agents");
+    setText(button, discover ? "Discover Agents" : "Refresh Agents");
   }
 }
 
@@ -2214,7 +2218,8 @@ $("#toggleAgentEnabled").addEventListener("click", () => void toggleAgentEnabled
 $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);
-$("#refreshAgents").addEventListener("click", refreshAgents);
+$("#refreshAgents").addEventListener("click", () => refreshAgents());
+$("#discoverAgents").addEventListener("click", () => refreshAgents(true));
 globalThis.KPLAgentResources?.init({api});
 globalThis.KPLServiceResources?.init({api});
 $("#resultSearch").addEventListener("input", (event) => {

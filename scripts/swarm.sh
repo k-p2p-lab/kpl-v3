@@ -578,7 +578,7 @@ case "$command_name" in
         for node in $nodes; do dock node update --label-add "$agent_label=true" "$node"; done
         timeout -s TERM -k 5 "$docker_timeout" sh "$root/scripts/check-swarm.sh"
         dock stack deploy --with-registry-auth --resolve-image always --detach=true --compose-file "$root/stack.swarm.yaml" "$KPL_STACK_NAME"
-        printf 'Deployment submitted. Use status, then check registered Agents in the Controller before running an experiment.\n'
+        printf 'Deployment submitted. Use status, then check Agent status in the Controller. Use Discover Agents to recover missing registrations before running an experiment.\n'
         ;;
     add-node)
         service_exists "${KPL_STACK_NAME}_agent" || fail 'Deploy the stack before adding nodes.'

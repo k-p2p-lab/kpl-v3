@@ -79,6 +79,7 @@ func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) 
 func runController(ctx context.Context, logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
 	listen := flags.String("listen", ":8080", "HTTP listen address")
+	agentDiscoveryDNS := flags.String("agent-discovery-dns", os.Getenv("KPL_AGENT_DISCOVERY_DNS"), "optional Swarm Agent task DNS name for Dashboard discovery (port 8090)")
 	dataDir := flags.String("data-dir", "data", "experiment data directory")
 	minimumFree := uint64(1 << 30)
 	if raw := os.Getenv("KPL_RUN_MIN_FREE_BYTES"); raw != "" {
@@ -106,15 +107,16 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
-		Listen:          *listen,
-		DataDir:         *dataDir,
-		RunMinFreeBytes: *runMinFree,
-		User:            user,
-		Password:        password,
-		MetricsURL:      *metricsURL,
-		PrometheusURL:   *prometheusURL,
-		PrometheusPort:  parsedPrometheusPort,
-		GrafanaPort:     parsedGrafanaPort,
+		AgentDiscoveryDNS: strings.TrimSpace(*agentDiscoveryDNS),
+		Listen:            *listen,
+		DataDir:           *dataDir,
+		RunMinFreeBytes:   *runMinFree,
+		User:              user,
+		Password:          password,
+		MetricsURL:        *metricsURL,
+		PrometheusURL:     *prometheusURL,
+		PrometheusPort:    parsedPrometheusPort,
+		GrafanaPort:       parsedGrafanaPort,
 	}, logger)
 	return server.Run(ctx)
 }

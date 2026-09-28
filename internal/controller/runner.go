@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,16 +27,17 @@ import (
 )
 
 type ServerConfig struct {
-	PrometheusURL   string
-	RunMinFreeBytes uint64
-	User            string
-	Password        string
-	Listen          string
-	DataDir         string
-	Token           string
-	MetricsURL      string
-	PrometheusPort  int
-	GrafanaPort     int
+	AgentDiscoveryDNS string
+	PrometheusURL     string
+	RunMinFreeBytes   uint64
+	User              string
+	Password          string
+	Listen            string
+	DataDir           string
+	Token             string
+	MetricsURL        string
+	PrometheusPort    int
+	GrafanaPort       int
 }
 
 type Server struct {
@@ -46,6 +48,7 @@ type Server struct {
 	resourceMeasurements       []resourceMeasurement
 	resourceHistorySlots       chan struct{}
 	agentRefreshMu             sync.Mutex
+	agentLookupIP              func(context.Context, string) ([]net.IPAddr, error)
 	submissionMu               sync.Mutex
 	archiveQueueLoaded         bool
 	archiveLastScan            time.Time
@@ -117,6 +120,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	server := &Server{
+		agentLookupIP:          net.DefaultResolver.LookupIPAddr,
 		startedAt:              time.Now().UTC(),
 		serviceResources:       &serviceResourceStore{nodes: make(map[string]serviceResourceEntry)},
 		resourceHistorySlots:   make(chan struct{}, 2),

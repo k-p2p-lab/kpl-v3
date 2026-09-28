@@ -14,6 +14,7 @@ services:
       KPL_RUN_MIN_FREE_BYTES: "${KPL_RUN_MIN_FREE_BYTES:-1073741824}"
       KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with scripts/swarm.sh}"
       KPL_PROMETHEUS_URL: http://prometheus:9090
+      KPL_AGENT_DISCOVERY_DNS: tasks.${KPL_STACK_NAME:-kpl}_agent
       PROMETHEUS_PORT: "${PROMETHEUS_PORT:-9090}"
       GRAFANA_PORT: "${GRAFANA_PORT:-3000}"
     volumes: [controller-data:/var/lib/kpl/data]

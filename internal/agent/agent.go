@@ -427,6 +427,9 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 	if err := resolvedConfig.Validate(); err != nil {
 		return model.Node{}, fmt.Errorf("invalid node config: %w", err)
 	}
+	if resolvedConfig.Network.Scheduled() && resolvedConfig.Network.Schedule.Clock() == "experiment-start" && request.ExperimentStartedAt.IsZero() {
+		return model.Node{}, fmt.Errorf("experimentStartedAt is required for an experiment-start network schedule")
+	}
 	requestedNetwork, _ := json.Marshal(resolvedConfig.Network)
 	networkConfig, err := resolvedConfig.Network.Resolve(rand.New(rand.NewSource(request.Seed)))
 	if err != nil {
@@ -483,23 +486,29 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		LastSeen:  now,
 	}
 	processCtx, cancel := context.WithCancel(ctx)
-	networkJSON, _ := json.Marshal(resolvedConfig.Network)
+	networkJSON, _ := json.Marshal(resolvedConfig.Network.Initial())
 	node.Metadata["network"] = string(networkJSON)
 	node.Metadata["networkRequested"] = string(requestedNetwork)
+	if resolvedConfig.Network.Scheduled() {
+		planJSON, _ := json.Marshal(resolvedConfig.Network.Schedule)
+		node.Metadata["networkSchedule"] = string(planJSON)
+		node.Metadata["networkPending"] = "true"
+	}
 	node.Metadata["seed"] = strconv.FormatInt(request.Seed, 10)
 	if request.Lifetime != "" {
 		node.Metadata["lifetime"] = request.Lifetime
 		node.Metadata["lifetimeBasis"] = "container-created"
 	}
 	peerConfig := model.PeerProcessConfig{
-		Node:          node,
-		NodeConfig:    resolvedConfig,
-		Seed:          request.Seed,
-		ControllerURL: strings.TrimRight(s.config.ControllerURL, "/"),
-		AgentURL:      strings.TrimRight(s.config.SelfURL, "/"),
-		APListen:      "0.0.0.0:18000",
-		P2PListen:     "/ip4/0.0.0.0/tcp/20000",
-		Token:         s.config.Token,
+		ExperimentStartedAt: request.ExperimentStartedAt,
+		Node:                node,
+		NodeConfig:          resolvedConfig,
+		Seed:                request.Seed,
+		ControllerURL:       strings.TrimRight(s.config.ControllerURL, "/"),
+		AgentURL:            strings.TrimRight(s.config.SelfURL, "/"),
+		APListen:            "0.0.0.0:18000",
+		P2PListen:           "/ip4/0.0.0.0/tcp/20000",
+		Token:               s.config.Token,
 	}
 	// Reserve capacity before preparing files so duplicate creates and run
 	// fences see the in-flight peer. Keep its mutable status separate from the
@@ -746,6 +755,7 @@ func (s *Server) updateNode(update model.Node) error {
 		proc.node.MeshPeers = cloneMeshPeers(update.MeshPeers)
 		proc.node.OverlayObservedAt = update.OverlayObservedAt
 	}
+	updateProcessNetwork(proc, update.Metadata)
 	proc.node.LastSeen = time.Now().UTC()
 	proc.node.Error = update.Error
 	return nil

@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -23,6 +24,13 @@ func dashboardSnapshot(snapshot model.Snapshot) model.Snapshot {
 	nodes := make([]model.Node, 0, len(snapshot.Nodes))
 	for _, node := range snapshot.Nodes {
 		if node.State != model.NodeStopping && node.State != model.NodeStopped && node.State != model.NodeFailed {
+			if node.Metadata["networkSchedule"] != "" || node.Metadata["networkRequested"] != "" {
+				// Topology displays only the applied state. Keep potentially long
+				// plans out of every heartbeat delta; full REST snapshots retain them.
+				node.Metadata = maps.Clone(node.Metadata)
+				delete(node.Metadata, "networkSchedule")
+				delete(node.Metadata, "networkRequested")
+			}
 			nodes = append(nodes, node)
 		}
 	}

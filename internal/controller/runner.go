@@ -453,6 +453,9 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 }
 
 func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand) error {
+	s.state.mu.RLock()
+	experimentStartedAt := s.state.experiments[runID].StartedAt
+	s.state.mu.RUnlock()
 	requests := make([]model.CreateNodeRequest, 0, phase.Count)
 	for i := 0; i < phase.Count; i++ {
 		seq := s.nodeSeq.Add(1)
@@ -462,16 +465,17 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 			lifetime = phase.Lifetime.Sample(rng).String()
 		}
 		requests = append(requests, model.CreateNodeRequest{
-			ID:         nodeID,
-			RunID:      runID,
-			Generation: generation,
-			Group:      phase.Group,
-			Role:       phase.Role,
-			Type:       phase.NodeType,
-			Profile:    phase.Profile,
-			Seed:       rng.Int63(),
-			Config:     phase.Node.WithDefaults(),
-			Lifetime:   lifetime,
+			ExperimentStartedAt: experimentStartedAt,
+			ID:                  nodeID,
+			RunID:               runID,
+			Generation:          generation,
+			Group:               phase.Group,
+			Role:                phase.Role,
+			Type:                phase.NodeType,
+			Profile:             phase.Profile,
+			Seed:                rng.Int63(),
+			Config:              phase.Node.WithDefaults(),
+			Lifetime:            lifetime,
 		})
 	}
 	delays := sampleDelays(rng, phase.Interval, phase.Count)

@@ -1,0 +1,84 @@
+version: 2
+name: scheduled-network-conditions
+seed: 42
+
+# Run on the Swarm stack with updated Controller, Agent and Peer images.
+# The experiment stays active for about 17 minutes. Network delay is one-way.
+profiles:
+  boot:
+    type: boot
+    gossipsub:
+      enabled: true
+      topics: [kpl/network-schedule]
+
+  experiment-clock:
+    type: full
+    gossipsub:
+      topics: [kpl/network-schedule]
+    network:
+      delay: 10ms
+      schedule:
+        reference: experiment-start
+        changes:
+          - after: 10m
+            set:
+              delay: 100ms
+          - after: 15m
+            set:
+              delay: 10ms
+
+  peer-clock:
+    type: full
+    gossipsub:
+      topics: [kpl/network-schedule]
+    network:
+      delay: 10ms
+      schedule:
+        reference: peer-join
+        changes:
+          - after: 3m
+            set:
+              delay: 100ms
+          - after: 8m
+            set:
+              delay: 0s
+
+phases:
+  - action: join
+    group: boot
+    role: boot
+    profile: boot
+    count: 1
+  - action: wait-ready
+    group: boot
+    timeout: 1m
+  - action: join
+    group: experiment-clock
+    profile: experiment-clock
+    count: 3
+  - action: join
+    group: peer-clock
+    profile: peer-clock
+    count: 3
+    interval:
+      model: fixed
+      value: 30s
+  - action: wait-ready
+    group: experiment-clock
+    timeout: 2m
+  - action: wait-ready
+    group: peer-clock
+    timeout: 2m
+  - action: publish
+    job: scheduled-network-traffic
+    await: false
+    group: experiment-clock
+    topic: kpl/network-schedule
+    count: 180
+    payloadSize: 1024
+    interval:
+      model: fixed
+      value: 5s
+  - action: wait
+    duration: 16m
+  - action: stop-all

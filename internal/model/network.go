@@ -15,6 +15,7 @@ import (
 // Pointer fields preserve explicit zero overrides when merging node profiles.
 // A delay of "0s" and percentages/rate of zero disable the respective setting.
 type NetworkConfig struct {
+	Schedule                  *NetworkSchedule           `json:"schedule,omitempty" yaml:"schedule,omitempty"`
 	Scope                     string                     `json:"scope,omitempty" yaml:"scope,omitempty"`
 	Delay                     string                     `json:"delay,omitempty" yaml:"delay,omitempty"`
 	DelayDistribution         *distribution.Distribution `json:"delayDistribution,omitempty" yaml:"delayDistribution,omitempty"`
@@ -120,7 +121,7 @@ func (c NetworkConfig) Validate() error {
 	if c.QueueLimit != nil && (*c.QueueLimit <= 0 || uint64(*c.QueueLimit) > math.MaxUint32) {
 		return fmt.Errorf("queueLimit must be between 1 and %d packets", uint64(math.MaxUint32))
 	}
-	return nil
+	return c.validateSchedule()
 }
 
 func networkPositiveFinite(value float64) bool {
@@ -134,6 +135,9 @@ func networkPositiveFinite(value float64) bool {
 func (c NetworkConfig) Resolve(rng *rand.Rand) (NetworkConfig, error) {
 	if err := c.Validate(); err != nil {
 		return c, err
+	}
+	if c.Schedule != nil {
+		return c.resolveSchedule(rng)
 	}
 	if c.DelayDistribution == nil {
 		return c, nil
@@ -149,6 +153,15 @@ func (c NetworkConfig) Resolve(rng *rand.Rand) (NetworkConfig, error) {
 // Enabled reports whether at least one impairment is configured. Call Validate
 // first when accepting user input: this method does not report invalid values.
 func (c NetworkConfig) Enabled() bool {
+	if c.Schedule != nil {
+		current := c.Initial()
+		for _, change := range c.Schedule.Changes {
+			current = current.Merge(change.Set.Initial())
+			if current.Enabled() {
+				return true
+			}
+		}
+	}
 	delay, _ := time.ParseDuration(c.Delay)
 	jitter, _ := time.ParseDuration(c.Jitter)
 	if delay != 0 || jitter != 0 || c.QueueLimit != nil || c.DelayDistribution != nil || c.TBF != nil {

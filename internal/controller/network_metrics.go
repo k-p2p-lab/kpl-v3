@@ -55,6 +55,9 @@ func (c *networkCollector) Collect(ch chan<- prometheus.Metric) {
 		if node.State != model.NodeReady && node.State != model.NodeStarting {
 			continue
 		}
+		if node.Metadata["networkPending"] == "true" {
+			continue
+		}
 		raw := node.Metadata["network"]
 		if strings.TrimSpace(raw) == "" {
 			continue
@@ -67,7 +70,7 @@ func (c *networkCollector) Collect(ch chan<- prometheus.Metric) {
 		var config *model.NetworkConfig
 		decoder := json.NewDecoder(strings.NewReader(record.configJSON))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&config); err != nil || config == nil || config.DelayDistribution != nil {
+		if err := decoder.Decode(&config); err != nil || config == nil || config.Schedule != nil || config.DelayDistribution != nil {
 			continue
 		}
 		if err := decoder.Decode(new(any)); err != io.EOF {

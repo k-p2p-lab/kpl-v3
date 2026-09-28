@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/netem"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -30,6 +31,8 @@ import (
 )
 
 type Server struct {
+	networkSchedule   *peerNetworkSchedule
+	networkApplied    atomic.Pointer[networkAppliedState]
 	config            model.PeerProcessConfig
 	host              host.Host
 	dht               *dht.IpfsDHT
@@ -78,7 +81,19 @@ func Run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return fmt.Errorf("decode peer config: %w", err)
 	}
-	config, err = preparePeerNetwork(ctx, config, agentRouteSourceIPv4, prepareNetwork)
+	var plan *peerNetworkSchedule
+	config, err = preparePeerNetwork(ctx, config, agentRouteSourceIPv4, func(ctx context.Context, resolved model.PeerProcessConfig) error {
+		var err error
+		plan, err = newPeerNetworkSchedule(ctx, resolved, time.Now(), estimateControllerClock)
+		if err != nil {
+			return err
+		}
+		resolved.NodeConfig.Network = resolved.NodeConfig.Network.Initial()
+		if plan != nil {
+			resolved.NodeConfig.Network = plan.initial
+		}
+		return prepareNetwork(ctx, resolved)
+	})
 	if err != nil {
 		return err
 	}
@@ -87,6 +102,18 @@ func Run(ctx context.Context, configPath string, logger *slog.Logger) error {
 	server, err := newServer(ctx, config, logger)
 	if err != nil {
 		return err
+	}
+	if plan != nil {
+		server.networkSchedule = plan
+		if plan.estimate != nil {
+			server.telemetry.acceptClockEstimate(*plan.estimate, plan.sampledAt)
+		}
+		deadline, after := plan.base, "0s"
+		if plan.next > 0 {
+			after = plan.steps[plan.next-1].after.String()
+			deadline = plan.base.Add(plan.steps[plan.next-1].after)
+		}
+		server.recordNetworkApplied(plan.initial, plan.next, deadline, after, true)
 	}
 	return server.Run(ctx)
 }
@@ -161,10 +188,16 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 	go func() { telemetryDone <- s.telemetry.run(telemetryCtx) }()
 	bandwidthCtx, stopBandwidth := context.WithCancel(context.Background())
 	var bandwidthDone chan struct{}
+	var networkDone chan error
 	defer func() {
 		stopParentWatch()
 		s.telemetry.stopMeasurement()
 		cancel()
+		if networkDone != nil {
+			if err := <-networkDone; err != nil && !errors.Is(err, context.Canceled) {
+				runErr = errors.Join(runErr, err)
+			}
+		}
 		s.Close()
 		stopBandwidth()
 		if bandwidthDone != nil {
@@ -174,11 +207,26 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 		stopTelemetry()
 		runErr = errors.Join(runErr, <-telemetryDone)
 	}()
-	if err := s.telemetry.synchronizeClock(ctx, s.config.ControllerURL); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	if s.networkSchedule != nil {
+		networkDone = make(chan error, 1)
+		go func() {
+			err := s.runNetworkSchedule(ctx, netem.Update)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				cancel()
+			}
+			networkDone <- err
+		}()
+	}
+	// Experiment-relative schedules already sampled the clock before shaping.
+	// Reuse that fresh estimate instead of doubling startup probes or waiting on
+	// control traffic deliberately impaired by the initial network conditions.
+	if _, _, synchronized := s.telemetry.clockSnapshot(); !synchronized {
+		if err := s.telemetry.synchronizeClock(ctx, s.config.ControllerURL); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.logger.Warn("start peer without synchronized clock", "error", err)
 		}
-		s.logger.Warn("start peer without synchronized clock", "error", err)
 	}
 	bandwidthDone = make(chan struct{})
 	go func() { defer close(bandwidthDone); s.bandwidthLoop(bandwidthCtx) }()
@@ -533,6 +581,7 @@ func (s *Server) statusLoop(ctx context.Context) {
 
 func (s *Server) reportStatus(ctx context.Context, state, message string) error {
 	node := s.config.Node
+	s.addNetworkStatus(&node)
 	node.PeerID = s.host.ID().String()
 	node.State = state
 	node.Error = message

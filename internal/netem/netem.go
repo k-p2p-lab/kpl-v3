@@ -39,6 +39,9 @@ func Apply(ctx context.Context, config model.NetworkConfig, p2pPort int) error {
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("network impairment: %w", err)
 	}
+	if config.Schedule != nil {
+		return fmt.Errorf("network impairment: schedule must be resolved to its current state before applying tc")
+	}
 	if config.DelayDistribution != nil {
 		return fmt.Errorf("network impairment: delayDistribution must be resolved to a per-peer delay before applying tc")
 	}
@@ -108,6 +111,9 @@ func activeIPv4Interfaces(interfaces []networkInterface) []string {
 func apply(ctx context.Context, config model.NetworkConfig, p2pPort int, interfaces []networkInterface, run commandRunner) error {
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("network impairment: %w", err)
+	}
+	if config.Schedule != nil {
+		return fmt.Errorf("network impairment: schedule must be resolved to its current state before applying tc")
 	}
 	if config.DelayDistribution != nil {
 		return fmt.Errorf("network impairment: delayDistribution must be resolved to a per-peer delay before applying tc")

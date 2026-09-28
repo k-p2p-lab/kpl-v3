@@ -92,16 +92,17 @@ type AgentHeartbeat struct {
 }
 
 type CreateNodeRequest struct {
-	ID         string     `json:"id"`
-	RunID      string     `json:"runId"`
-	Generation uint64     `json:"generation,omitempty"`
-	Group      string     `json:"group"`
-	Role       string     `json:"role"`
-	Type       string     `json:"type"`
-	Profile    string     `json:"profile,omitempty"`
-	Seed       int64      `json:"seed"`
-	Config     NodeConfig `json:"config"`
-	Lifetime   string     `json:"lifetime,omitempty"`
+	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
+	ID                  string     `json:"id"`
+	RunID               string     `json:"runId"`
+	Generation          uint64     `json:"generation,omitempty"`
+	Group               string     `json:"group"`
+	Role                string     `json:"role"`
+	Type                string     `json:"type"`
+	Profile             string     `json:"profile,omitempty"`
+	Seed                int64      `json:"seed"`
+	Config              NodeConfig `json:"config"`
+	Lifetime            string     `json:"lifetime,omitempty"`
 }
 
 // MaxPublishPayloadBytes is shared by scenario validation and Peer admission.
@@ -235,14 +236,15 @@ type Snapshot struct {
 }
 
 type PeerProcessConfig struct {
-	Node          Node       `json:"node"`
-	NodeConfig    NodeConfig `json:"nodeConfig"`
-	Seed          int64      `json:"seed"`
-	ControllerURL string     `json:"controllerUrl"`
-	AgentURL      string     `json:"agentUrl"`
-	APListen      string     `json:"apiListen"`
-	P2PListen     string     `json:"p2pListen"`
-	Token         string     `json:"token,omitempty"`
+	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
+	Node                Node       `json:"node"`
+	NodeConfig          NodeConfig `json:"nodeConfig"`
+	Seed                int64      `json:"seed"`
+	ControllerURL       string     `json:"controllerUrl"`
+	AgentURL            string     `json:"agentUrl"`
+	APListen            string     `json:"apiListen"`
+	P2PListen           string     `json:"p2pListen"`
+	Token               string     `json:"token,omitempty"`
 }
 
 // ExperimentTiming is a live projection, not a persisted completion promise.

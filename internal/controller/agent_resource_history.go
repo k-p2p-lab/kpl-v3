@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 type resourceHistoryPoint struct {
@@ -21,6 +23,7 @@ type resourceHistoryPoint struct {
 	Value float64   `json:"value"`
 }
 type resourceHistorySeries struct {
+	Scope   string                 `json:"scope"`
 	AgentID string                 `json:"agentId"`
 	Metric  string                 `json:"metric"`
 	Unit    string                 `json:"unit"`
@@ -39,13 +42,13 @@ type resourceHistory struct {
 // Read raw Prometheus range-vector samples so peaks and gaps are retained.
 // History stays in the existing TSDB, not SSE, Agent memory or the NAS runs tree.
 func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration, to time.Time) (resourceHistory, error) {
-	result := resourceHistory{From: to.Add(-window), To: to, Scope: "agent_and_peers", Series: []resourceHistorySeries{}}
+	result := resourceHistory{From: to.Add(-window), To: to, Scope: "all", Series: []resourceHistorySeries{}}
 	base, err := url.Parse(s.config.PrometheusURL)
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return result, errors.New("Configure a valid Controller Prometheus query URL")
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/api/v1/query"
-	query := `{job="kpl-controller",__name__=~"kpl_agent_cpu_usage_percent|kpl_agent_memory_working_set_bytes|kpl_agent_memory_usage_bytes|kpl_agent_resource_containers"}[` + strconv.Itoa(max(1, int(math.Ceil(window.Seconds())))) + `s]`
+	query := `{job="kpl-controller",__name__=~"kpl_agent_cpu_usage_percent|kpl_agent_memory_working_set_bytes|kpl_agent_memory_usage_bytes|kpl_agent_resource_containers|kpl_agent_component_cpu_usage_percent|kpl_agent_component_memory_working_set_bytes|kpl_agent_component_memory_usage_bytes|kpl_agent_component_resource_containers"}[` + strconv.Itoa(max(1, int(math.Ceil(window.Seconds())))) + `s]`
 	params := url.Values{"query": {query}, "time": {fmt.Sprintf("%d.%09d", to.Unix(), to.Nanosecond())}, "timeout": {"12s"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String(), strings.NewReader(params.Encode()))
 	if err != nil {
@@ -94,6 +97,14 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		if id == "" {
 			continue
 		}
+		scope := model.ResourceScopeTotal
+		if strings.HasPrefix(metric, "kpl_agent_component_") {
+			scope = entry.Metric["component"]
+			if scope != model.ResourceScopeAgent && scope != model.ResourceScopePeers {
+				continue
+			}
+			metric = "kpl_agent_" + strings.TrimPrefix(metric, "kpl_agent_component_")
+		}
 		unit := "bytes"
 		switch metric {
 		case "kpl_agent_cpu_usage_percent":
@@ -111,10 +122,10 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		default:
 			continue
 		}
-		key := id + "\x00" + metric
+		key := id + "\x00" + scope + "\x00" + metric
 		series := byKey[key]
 		if series == nil {
-			series = &resourceHistorySeries{AgentID: id, Metric: metric, Unit: unit, Samples: []resourceHistoryPoint{}}
+			series = &resourceHistorySeries{AgentID: id, Scope: scope, Metric: metric, Unit: unit, Samples: []resourceHistoryPoint{}}
 			byKey[key] = series
 		}
 		for _, pair := range entry.Values {
@@ -176,6 +187,9 @@ func (s *Server) agentResourceHistory(ctx context.Context, window time.Duration,
 		if result.Series[i].AgentID != result.Series[j].AgentID {
 			return result.Series[i].AgentID < result.Series[j].AgentID
 		}
+		if result.Series[i].Scope != result.Series[j].Scope {
+			return result.Series[i].Scope < result.Series[j].Scope
+		}
 		return result.Series[i].Metric < result.Series[j].Metric
 	})
 	return result, nil
@@ -234,7 +248,7 @@ func (s *Server) serveResourceHistory(w http.ResponseWriter, r *http.Request, fr
 	if kind == "summary" {
 		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "from_utc", "to_utc", "first_sample_utc", "last_sample_utc", "samples", "sample_mean", "min", "max"})
 		for _, series := range data.Series {
-			if err := out.Write([]string{resourceCSVCell(series.AgentID), data.Scope, series.Metric, series.Unit, data.From.Format(time.RFC3339Nano), data.To.Format(time.RFC3339Nano), series.Samples[0].At.Format(time.RFC3339Nano), series.Samples[len(series.Samples)-1].At.Format(time.RFC3339Nano), strconv.Itoa(len(series.Samples)), csvFloat(series.Mean), csvFloat(series.Min), csvFloat(series.Max)}); err != nil {
+			if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, data.From.Format(time.RFC3339Nano), data.To.Format(time.RFC3339Nano), series.Samples[0].At.Format(time.RFC3339Nano), series.Samples[len(series.Samples)-1].At.Format(time.RFC3339Nano), strconv.Itoa(len(series.Samples)), csvFloat(series.Mean), csvFloat(series.Min), csvFloat(series.Max)}); err != nil {
 				return
 			}
 		}
@@ -242,7 +256,7 @@ func (s *Server) serveResourceHistory(w http.ResponseWriter, r *http.Request, fr
 		_ = out.Write([]string{"agent_id", "scope", "metric", "unit", "sampled_at_utc", "value"})
 		for _, series := range data.Series {
 			for _, p := range series.Samples {
-				if err := out.Write([]string{resourceCSVCell(series.AgentID), data.Scope, series.Metric, series.Unit, p.At.Format(time.RFC3339Nano), csvFloat(p.Value)}); err != nil {
+				if err := out.Write([]string{resourceCSVCell(series.AgentID), series.Scope, series.Metric, series.Unit, p.At.Format(time.RFC3339Nano), csvFloat(p.Value)}); err != nil {
 					return
 				}
 			}

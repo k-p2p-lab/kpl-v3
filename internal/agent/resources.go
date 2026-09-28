@@ -85,9 +85,9 @@ func (s *resourceSampler) get(ctx context.Context, path string, target any) erro
 	return json.Unmarshal(data, target)
 }
 
-func (s *resourceSampler) inventory(ctx context.Context) ([]string, error) {
+func (s *resourceSampler) inventory(ctx context.Context) ([]string, string, error) {
 	if s.self == "" {
-		return nil, errors.New("Agent container identity is unavailable; configure --self-container")
+		return nil, "", errors.New("Agent container identity is unavailable; configure --self-container")
 	}
 	type container struct {
 		ID     string `json:"Id"`
@@ -97,23 +97,26 @@ func (s *resourceSampler) inventory(ctx context.Context) ([]string, error) {
 	var peers, own []container
 	filters, _ := json.Marshal(map[string][]string{"label": {"io.kpl.managed=true", "io.kpl.agent=" + s.agentID, "io.kpl.network=" + s.network}})
 	if err := s.get(ctx, "/containers/json?filters="+url.QueryEscape(string(filters)), &peers); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	filters, _ = json.Marshal(map[string][]string{"name": {s.self}})
 	if err := s.get(ctx, "/containers/json?filters="+url.QueryEscape(string(filters)), &own); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	ids := map[string]bool{}
-	foundSelf := false
+	selfID := ""
 	for _, c := range own {
 		for _, name := range c.Names {
 			if strings.TrimPrefix(name, "/") == s.self && dockerContainerID.MatchString(c.ID) {
-				ids[c.ID], foundSelf = true, true
+				if selfID != "" && selfID != c.ID {
+					return nil, "", errors.New("Agent container identity is ambiguous")
+				}
+				ids[c.ID], selfID = true, c.ID
 			}
 		}
 	}
-	if !foundSelf {
-		return nil, errors.New("Agent container was not found in the local Docker daemon")
+	if selfID == "" {
+		return nil, "", errors.New("Agent container was not found in the local Docker daemon")
 	}
 	for _, c := range peers {
 		// Recheck ownership even if a proxy/daemon ignores the requested filters.
@@ -126,7 +129,7 @@ func (s *resourceSampler) inventory(ctx context.Context) ([]string, error) {
 		result = append(result, id)
 	}
 	sort.Strings(result)
-	return result, nil
+	return result, selfID, nil
 }
 
 func (s *resourceSampler) readStats(ctx context.Context, ids []string) map[string]containerResourceStats {
@@ -208,13 +211,15 @@ func (s *resourceSampler) sample(ctx context.Context) *model.AgentResources {
 	ctx, cancel := context.WithTimeout(ctx, resourceTimeout)
 	defer cancel()
 	result := &model.AgentResources{SampledAt: time.Now().UTC()}
-	ids, err := s.inventory(ctx)
+	ids, selfID, err := s.inventory(ctx)
 	if err != nil {
 		result.Error = err.Error()
 		s.previous = map[string]containerResourceStats{}
 		return result
 	}
 	result.Containers = len(ids)
+	result.Agent = &model.ContainerResources{Containers: 1}
+	result.Peers = &model.ContainerResources{Containers: len(ids) - 1}
 	current := s.readStats(ctx, ids)
 	newIDs := []string{}
 	for _, id := range ids {
@@ -243,8 +248,11 @@ func (s *resourceSampler) sample(ctx context.Context) *model.AgentResources {
 			current[id] = value
 		}
 	}
-	var cpu float64
-	var usage, working uint64
+	type usageSum struct {
+		cpu            float64
+		usage, working uint64
+	}
+	var total, agentSum, peerSum usageSum
 	for _, id := range ids {
 		value, ok := current[id]
 		if !ok {
@@ -259,22 +267,37 @@ func (s *resourceSampler) sample(ctx context.Context) *model.AgentResources {
 			cache = value.Memory.Stats["inactive_file"]
 		}
 		used := *value.Memory.Usage
-		usage += used
+		working := used
 		// Match Docker CLI: inconsistent cache accounting must not
 		// turn an occupied container into zero memory usage.
 		if cache < used {
-			working += used - cache
-		} else {
-			working += used
+			working = used - cache
 		}
-		cpu += cores
+		u, sum := result.Peers, &peerSum
+		if id == selfID {
+			u, sum = result.Agent, &agentSum
+		}
+		sum.cpu += cores
+		sum.usage += used
+		sum.working += working
+		u.MeasuredContainers++
+		total.cpu += cores
+		total.usage += used
+		total.working += working
 		result.MeasuredContainers++
 	}
 	s.previous = current // Bound retained state to the current inventory.
 	result.CPUCapacityCores = s.hostCPUCapacity(ctx, current)
 	result.Complete = result.MeasuredContainers == result.Containers && ctx.Err() == nil
 	if result.MeasuredContainers > 0 {
-		result.CPUCores, result.MemoryUsageBytes, result.MemoryWorkingSetBytes = &cpu, &usage, &working
+		result.CPUCores, result.MemoryUsageBytes, result.MemoryWorkingSetBytes = &total.cpu, &total.usage, &total.working
+	}
+	for u, sum := range map[*model.ContainerResources]*usageSum{result.Agent: &agentSum, result.Peers: &peerSum} {
+		u.Complete = u.MeasuredContainers == u.Containers && ctx.Err() == nil
+		// An empty, successfully discovered Peer inventory is a measured zero.
+		if u.MeasuredContainers > 0 || u.Containers == 0 && u.Complete {
+			u.CPUCores, u.MemoryUsageBytes, u.MemoryWorkingSetBytes = &sum.cpu, &sum.usage, &sum.working
+		}
 	}
 	if !result.Complete {
 		result.Error = "Some containers could not be measured; showing available samples and retrying automatically"

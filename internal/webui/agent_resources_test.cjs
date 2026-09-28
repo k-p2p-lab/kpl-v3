@@ -45,7 +45,7 @@ test('Grafana keeps process-only metrics separate from Agent plus Peer measureme
   assert.ok(a.x+a.w<=b.x||b.x+b.w<=a.x||a.y+a.h<=b.y||b.y+b.h<=a.y,`overlap ${d.panels[i].title} / ${d.panels[j].title}`);
  }
  const stack=fs.readFileSync(path.join(__dirname,'../../stack.swarm.yaml'),'utf8');
- assert.match(stack,/KPL_PROMETHEUS_URL: http:\/\/prometheus:9090/);assert.equal((stack.match(/grafana-dashboard-resources-v9/g)||[]).length,2);
+ assert.match(stack,/KPL_PROMETHEUS_URL: http:\/\/prometheus:9090/);assert.equal((stack.match(/grafana-dashboard-resources-v10/g)||[]).length,2);
 });
 
 function measurementUI(initial, handler) {
@@ -165,4 +165,45 @@ test('disabled Agents remain visible as excluded but do not enter hardware total
  const result=resources.aggregate([active,disabled],now);
  assert.equal(result.total,1);assert.equal(result.measured,1);assert.equal(result.cpuCores,2);assert.equal(result.memoryWorkingSetBytes,3072);
  assert.equal(resources.describe(disabled,now).cpu,'Excluded');assert.equal(resources.describe(disabled,now).memory,'Excluded');
+});
+
+test('Agent and Peer scopes retain independent percentages, coverage, and measured zero',()=>{
+ const a=agent('a',2);
+ a.resources.agent={cpuCores:.5,memoryUsageBytes:1024,memoryWorkingSetBytes:768,containers:1,measuredContainers:1,complete:true};
+ a.resources.peers={cpuCores:1.5,memoryUsageBytes:3072,memoryWorkingSetBytes:2304,containers:3,measuredContainers:2,complete:false};
+ assert.equal(resources.describe(a,now,'agent').cpu,'6.3%');
+ assert.equal(resources.describe(a,now,'peers').cpu,'18.8%');
+ assert.match(resources.describe(a,now,'peers').detail,/Partial · 2\/3/);
+ const markup=resources.cell(a,'cpu',now);
+ assert.match(markup,/Total/);assert.match(markup,/Agent/);assert.match(markup,/Peers/);assert.match(markup,/6.3%/);assert.match(markup,/18.8%/);
+ const empty=agent('empty',1);empty.resources.cpuCapacityCores=4;
+ empty.resources.agent={...a.resources.agent,cpuCores:1};
+ empty.resources.peers={cpuCores:0,memoryUsageBytes:0,memoryWorkingSetBytes:0,containers:0,measuredContainers:0,complete:true};
+ assert.equal(resources.describe(empty,now,'peers').cpu,'0%');assert.equal(resources.describe(empty,now,'peers').memory,'0 B');
+ const scopes=['agent_and_peers','agent','peers'];
+ for(const scope of scopes) assert.equal(resources.aggregate([a,empty,{...a,id:'disabled',disabled:true}],now,scope).measured,2);
+ assert.equal(resources.aggregate([a,empty],now,'agent').cpuPercent,12.5);
+ assert.equal(resources.aggregate([a,empty],now,'peers').cpuPercent,12.5);
+ empty.resources.peers.complete=false;
+ assert.equal(resources.describe(empty,now,'peers').cpu,'N/A');
+ a.resources.agent={containers:1,measuredContainers:0,complete:false};
+ assert.equal(resources.describe(a,now,'agent').cpu,'N/A');
+ assert.equal(resources.aggregate([a],now,'agent').cpuCapacityCores,0);
+ assert.equal(resources.describe(a,now,'peers').cpu,'18.8%');
+ for(const scope of ['agent','peers']) assert.equal(resources.valid(agent('legacy'),now,scope),false);
+});
+
+test('Grafana adds component CPU, memory, fleet totals and coverage without process metric substitution',()=>{
+ const d=JSON.parse(fs.readFileSync(path.join(__dirname,'../../monitoring/grafana/dashboards/kpl-experiments.json')));
+ for(const [title,scope] of [['Agent container','agent'],['Peer containers','peers']]) {
+  for(const [metric,unit] of [['CPU','percent'],['memory','bytes']]) {
+   const panel=d.panels.find(p=>p.title===`${title} ${metric} by Agent`);
+   assert.ok(panel);assert.equal(panel.fieldConfig.defaults.unit,unit);
+   assert.ok(panel.targets[0].expr.includes(`component="${scope}"`));
+   assert.match(panel.targets[0].expr,/kpl_agent_component_/);
+   assert.doesNotMatch(panel.targets[0].expr,/process_/);
+  }
+ }
+ assert.match(d.panels.find(p=>p.title==='Component total CPU').targets[0].expr,/sum by \(component\).*cpu_capacity_cores/);
+ assert.equal(d.panels.find(p=>p.title==='Component container coverage').fieldConfig.defaults.unit,'short');
 });

@@ -289,8 +289,12 @@
         </header>
         <div class="panel-body" id="panel-agents-body">
           <div class="agent-resource-overview">
-          <p class="agent-resource-summary" id="agentResourceSummary" role="status">KPL total · Awaiting samples</p>
-          <p class="panel-note">CPU and memory include each Agent container and its running Peers. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Partial samples show measured containers only. Samples refresh about every 10 seconds.</p>
+          <div class="agent-resource-summaries">
+            <p class="agent-resource-summary" id="agentResourceSummary" role="status">Agent + Peers · Awaiting samples</p>
+            <p class="agent-resource-summary" id="agentOnlyResourceSummary" role="status">Agent only · Awaiting samples</p>
+            <p class="agent-resource-summary" id="peersOnlyResourceSummary" role="status">Peers only · Awaiting samples</p>
+          </div>
+          <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Samples refresh about every 10 seconds.</p>
           <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
             <div class="resource-measurement-heading">
               <div class="resource-measurement-title"><h3 id="resourceMeasurementHeading">Interval measurement</h3><button class="secondary-button" type="button" id="refreshResourceMeasurements" aria-label="Refresh measurement status" title="Refresh measurement status">↻</button></div>
@@ -309,7 +313,7 @@
               <button class="danger-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
             </div>
             <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
-            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads use Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
+            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads include Total, Agent, and Peers scopes from Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
           </section>
           <div class="agent-resource-actions agent-resource-history">
             <label for="agentResourceRange">History period</label><select id="agentResourceRange"><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select>

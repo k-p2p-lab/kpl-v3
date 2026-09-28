@@ -7,11 +7,18 @@
     return `${number(value / 1024 ** unit)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
   };
   const escape = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
-  function valid(agent, now = Date.now()) {
+  const scopeLabels = {agent_and_peers:"Agent + Peers", agent:"Agent only", peers:"Peers only"};
+  function sample(agent, scope) {
     const r = agent.resources;
-    const age = now - Date.parse(r?.sampledAt);
-    return !agent.disabled && agent.state === "online" && r?.containers > 0 && r.measuredContainers > 0 && r.measuredContainers <= r.containers &&
-      (!r.complete || r.containers === r.measuredContainers) && age >= -5000 && age <= 30000 &&
+    if (scope === "agent_and_peers") return r;
+    return r?.[scope] ? {...r[scope], sampledAt:r.sampledAt, cpuCapacityCores:r.cpuCapacityCores, error:r.error} : null;
+  }
+  function valid(agent, now = Date.now(), scope = "agent_and_peers") {
+    const r = sample(agent, scope), age = now - Date.parse(r?.sampledAt);
+    const empty = scope === "peers" && r?.containers === 0 && r.measuredContainers === 0 && r.complete && r.cpuCores === 0 && r.memoryUsageBytes === 0 && r.memoryWorkingSetBytes === 0;
+    return !agent.disabled && agent.state === "online" && !!r && (empty || r.containers > 0 && r.measuredContainers > 0) &&
+      Number.isInteger(r.containers) && Number.isInteger(r.measuredContainers) && r.measuredContainers <= r.containers &&
+      (scope !== "agent" || r.containers === 1) && (!r.complete || r.containers === r.measuredContainers) && age >= -5000 && age <= 30000 &&
       Number.isFinite(r.cpuCores) && r.cpuCores >= 0 && Number.isFinite(r.memoryUsageBytes) && r.memoryUsageBytes >= 0 &&
       Number.isFinite(r.memoryWorkingSetBytes) && r.memoryWorkingSetBytes >= 0 && r.memoryWorkingSetBytes <= r.memoryUsageBytes;
   }
@@ -19,29 +26,35 @@
     const percent = Number.isInteger(r.cpuCapacityCores) && r.cpuCapacityCores > 0 ? r.cpuCores / r.cpuCapacityCores * 100 : null;
     return Number.isFinite(percent) ? percent : null;
   }
-  function describe(agent, now = Date.now()) {
-    const r = agent.resources;
+  function describe(agent, now = Date.now(), scope = "agent_and_peers") {
+    const r = sample(agent, scope);
     if (agent.disabled) return {cpu:"Excluded", memory:"Excluded", detail:"Agent disabled", memoryDetail:"Agent disabled", title:"Disabled Agents are excluded from hardware monitoring totals.", available:false};
-    if (!valid(agent, now)) {
+    if (!valid(agent, now, scope)) {
       const age = now - Date.parse(r?.sampledAt);
-      const status = agent.state !== "online" ? "Offline" : !r ? "Awaiting sample" : age > 30000 || age < -5000 ? "Stale sample" : `Unavailable · ${r.measuredContainers || 0}/${r.containers || 0} containers`;
+      const status = agent.state !== "online" ? "Offline" : !r ? (scope === "agent_and_peers" ? "Awaiting sample" : "Breakdown unavailable") : age > 30000 || age < -5000 ? "Stale sample" : `Unavailable · ${r.measuredContainers || 0}/${r.containers || 0} containers`;
       return {cpu:"N/A", memory:"N/A", detail:status, memoryDetail:status, title:r?.error || status, available:false};
     }
     const percent = cpuPercent(r), partial = !r.complete;
     const coverage = `${partial ? "Partial · " : ""}${r.measuredContainers}/${r.containers} containers`;
     return {cpu:percent === null ? "N/A" : `${number(percent)}%`, memory:bytes(r.memoryWorkingSetBytes), detail:percent === null ? `Host CPU count unavailable · ${coverage}` : coverage,
       memoryDetail:partial ? `Working set · ${coverage}` : "Working set", partial,
-      title:`Agent + owned Peers; ${r.measuredContainers}/${r.containers} containers measured. ${percent === null ? "Host CPU count unavailable." : "CPU: 100% is the whole Docker host."} ${partial ? "Only measured containers are included; missing usage is not estimated. " : ""}Total memory including cache: ${bytes(r.memoryUsageBytes)}. Sampled ${new Date(r.sampledAt).toISOString()}.${r.error ? " " + r.error : ""}`, available:true};
+      title:`${scopeLabels[scope]}; ${r.measuredContainers}/${r.containers} containers measured. ${percent === null ? "Host CPU count unavailable." : "CPU: 100% is the whole Docker host."} ${partial ? "Only measured containers are included; missing usage is not estimated. " : ""}Total memory including cache: ${bytes(r.memoryUsageBytes)}. Sampled ${new Date(r.sampledAt).toISOString()}.${r.error ? " " + r.error : ""}`, available:true};
   }
   function cell(agent, metric, now) {
     const d = describe(agent, now);
-    return `<span class="agent-resource-value" title="${escape(d.title)}">${escape(d[metric])}</span><span class="agent-capacity-note${d.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? d.detail : d.memoryDetail)}</span>`;
+    if (agent.disabled || (!agent.resources?.agent && !agent.resources?.peers)) {
+      return `<span class="agent-resource-value" title="${escape(d.title)}">${escape(d[metric])}</span><span class="agent-capacity-note${d.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? d.detail : d.memoryDetail)}</span>`;
+    }
+    return [["agent_and_peers", "Total"], ["agent", "Agent"], ["peers", "Peers"]].map(([scope, label]) => {
+      const value = describe(agent, now, scope);
+      return `<div class="agent-resource-scope" title="${escape(value.title)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${escape(value[metric])}</span>${value.partial || !value.available ? `<span class="agent-capacity-note${value.partial ? " agent-resource-partial" : ""}">${escape(metric === "cpu" ? value.detail : value.memoryDetail)}</span>` : ""}</div>`;
+    }).join("");
   }
-  function aggregate(agents, now = Date.now()) {
+  function aggregate(agents, now = Date.now(), scope = "agent_and_peers") {
     const result = {cpuPercent:null, cpuCores:0, cpuCapacityCores:0, cpuMeasured:0, memoryWorkingSetBytes:0, memoryUsageBytes:0, measured:0, total:agents.filter(a => !a.disabled).length, partial:0, containers:0, measuredContainers:0};
     let normalizedCores = 0;
-    for (const a of agents) if (valid(a, now)) {
-      const r = a.resources;
+    for (const a of agents) if (valid(a, now, scope)) {
+      const r = sample(a, scope);
       result.cpuCores += r.cpuCores;
       result.memoryWorkingSetBytes += r.memoryWorkingSetBytes;
       result.memoryUsageBytes += r.memoryUsageBytes;
@@ -59,11 +72,13 @@
     return result;
   }
   function update(agents, now = Date.now()) {
-    const element = root.document?.querySelector("#agentResourceSummary");
-    if (!element) return;
-    const a = aggregate(agents, now);
-    const cpu = a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`;
-    element.textContent = a.measured ? `KPL total · CPU ${cpu} · Memory ${bytes(a.memoryWorkingSetBytes)} · ${a.measured}/${a.total} Agents measured${a.cpuMeasured !== a.measured ? ` · CPU ${a.cpuMeasured}/${a.total} Agents` : ""}${a.partial ? ` · Partial: ${a.measuredContainers}/${a.containers} containers` : ""}` : `KPL total · Awaiting samples · 0/${a.total} Agents measured`;
+    for (const [scope, id] of [["agent_and_peers","agentResourceSummary"],["agent","agentOnlyResourceSummary"],["peers","peersOnlyResourceSummary"]]) {
+      const element = root.document?.querySelector("#" + id);
+      if (!element) continue;
+      const a = aggregate(agents, now, scope);
+      const cpu = a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`;
+      element.textContent = `${scopeLabels[scope]} · CPU ${cpu} · Memory ${a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A"} · ${a.measured}/${a.total} Agents measured${a.cpuMeasured !== a.measured ? ` · CPU ${a.cpuMeasured}/${a.total} Agents` : ""}${a.partial ? ` · Partial: ${a.measuredContainers}/${a.containers} containers` : ""}`;
+    }
   }
   function init({api}) {
     const $ = id => root.document.querySelector(id);

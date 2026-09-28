@@ -18,7 +18,7 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 	id := func(i int) string { return fmt.Sprintf("%064x", i) }
 	var mu sync.Mutex
 	reads := map[string]int{}
-	missing, omit := false, false
+	missing, omit, missingAgent, emptyPeers := false, false, false, false
 	var active, maxActive atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -42,7 +42,7 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 			defer mu.Unlock()
 			peers := []any{}
 			for i := 2; i <= 5; i++ {
-				if omit && i == 3 {
+				if emptyPeers || omit && i == 3 {
 					continue
 				}
 				owner, network := "worker", "network"
@@ -73,7 +73,7 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 		mu.Lock()
 		reads[container]++
 		count := reads[container]
-		failed := missing && container == id(3)
+		failed := missing && container == id(3) || missingAgent && container == id(1)
 		mu.Unlock()
 		if failed {
 			w.WriteHeader(404)
@@ -94,6 +94,10 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 	if percent, ok := first.CPUPercent(); !ok || percent != 18.75 {
 		t.Fatalf("host CPU percent: %v %v", percent, ok)
 	}
+	if first.Agent == nil || first.Peers == nil || !first.ScopeValid("agent") || !first.ScopeValid("peers") ||
+		*first.Agent.CPUCores != 0.5 || *first.Peers.CPUCores != 1 || *first.Agent.MemoryWorkingSetBytes != 800 || *first.Peers.MemoryWorkingSetBytes != 1600 || first.Agent.Containers != 1 || first.Peers.Containers != 2 {
+		t.Fatalf("incorrect component split: %+v %+v", first.Agent, first.Peers)
+	}
 	second := sampler.sample(context.Background())
 	if !second.Valid() || *second.CPUCores != 1.5 {
 		t.Fatalf("cached baseline: %+v", second)
@@ -110,6 +114,9 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 	if failed.Complete || !failed.Valid() || *failed.CPUCores != 1 || *failed.MemoryWorkingSetBytes != 1600 || failed.MeasuredContainers != 2 || failed.CPUCapacityCores != 8 {
 		t.Fatalf("partial sum lost: %+v", failed)
 	}
+	if !failed.Agent.Complete || failed.Peers.Complete || failed.Peers.MeasuredContainers != 1 || *failed.Peers.CPUCores != 0.5 {
+		t.Fatalf("partial Peer sample affected Agent sample: %+v", failed)
+	}
 	mu.Lock()
 	missing = false
 	omit = true
@@ -117,6 +124,27 @@ func TestResourcesSumOnlySelfAndOwnedPeers(t *testing.T) {
 	third := sampler.sample(context.Background())
 	if !third.Valid() || third.Containers != 2 || len(sampler.previous) != 2 {
 		t.Fatalf("departed container cache retained: %+v", third)
+	}
+	mu.Lock()
+	missingAgent = true
+	mu.Unlock()
+	withoutAgent := sampler.sample(context.Background())
+	if withoutAgent.ScopeValid("agent") || withoutAgent.Agent.CPUCores != nil || !withoutAgent.ScopeValid("peers") || !withoutAgent.Peers.Complete || *withoutAgent.CPUCores != *withoutAgent.Peers.CPUCores {
+		t.Fatal("unavailable Agent hid measured Peers or became zero")
+	}
+	mu.Lock()
+	emptyPeers, missingAgent = true, false
+	mu.Unlock()
+	empty := sampler.sample(context.Background())
+	if !empty.ScopeValid("peers") || *empty.Peers.CPUCores != 0 || *empty.Peers.MemoryUsageBytes != 0 || empty.Peers.Containers != 0 || !empty.Peers.Complete || *empty.Agent.CPUCores != *empty.CPUCores {
+		t.Fatalf("empty Peer inventory was not measured zero: %+v", empty)
+	}
+	mu.Lock()
+	missingAgent = true
+	mu.Unlock()
+	empty = sampler.sample(context.Background())
+	if empty.Valid() || empty.ScopeValid("agent") || !empty.ScopeValid("peers") {
+		t.Fatal("failed Agent sample invalidated known-empty Peer inventory")
 	}
 	if maxActive.Load() > resourceWorkers {
 		t.Fatalf("unbounded requests: %d", maxActive.Load())

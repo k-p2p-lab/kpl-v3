@@ -290,18 +290,24 @@
         <div class="panel-body" id="panel-agents-body">
           <section class="service-resource-section" aria-labelledby="serviceResourceHeading">
             <div><p class="eyebrow">CONTROL PLANE</p><h3 id="serviceResourceHeading">Controller &amp; services</h3></div>
-            <p class="panel-note">Controller, Prometheus, Grafana, and resource collectors, separate from Agent + Peer totals. CPU: 100% = all logical CPUs on each service host. Memory: working set.</p>
-            <div class="service-resource-cards" id="serviceResourceCards" role="region" aria-label="Controller and service resources" tabindex="0"><p class="panel-note">Loading service resources…</p></div>
-            <p class="panel-note" id="serviceResourceScrollHint" hidden>Scroll within the service list to see more hosts and services.</p>
+            <p class="panel-note">Controller, Prometheus, Grafana, and resource collectors. CPU: 100% = all logical CPUs on each service host; Total counts each measured host's capacity once. Memory: working set. Totals include available samples only.</p>
+            <div class="table-wrap service-resource-table" id="serviceResourceTable" role="region" aria-label="Controller and service resources" tabindex="0">
+              <table>
+                <thead><tr><th scope="col">Service</th><th scope="col">State</th><th scope="col">Host</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Coverage</th></tr></thead>
+                <tbody id="serviceResourceRows"><tr><td colspan="6" class="empty-cell">Loading service resources…</td></tr></tbody>
+              </table>
+            </div>
+            <p class="panel-note" id="serviceResourceScrollHint" hidden>Swipe or scroll within the table to see all service details.</p>
             <p class="panel-note" id="serviceResourceStatus" role="status">Service samples refresh about every 10 seconds.</p>
           </section>
           <div class="agent-resource-overview">
+          <div class="agent-resource-heading"><p class="eyebrow">AGENT FLEET</p><h3 id="agentResourceHeading">Agents &amp; Peers</h3></div>
           <div class="agent-resource-summaries">
             <p class="agent-resource-summary" id="agentResourceSummary" role="status">Agent + Peers · Awaiting samples</p>
             <p class="agent-resource-summary" id="agentOnlyResourceSummary" role="status">Agent only · Awaiting samples</p>
             <p class="agent-resource-summary" id="peersOnlyResourceSummary" role="status">Peers only · Awaiting samples</p>
           </div>
-          <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Samples refresh about every 10 seconds.</p>
+          <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Total excludes disabled Agents; Peer counts and capacity include online Agents only. Samples refresh about every 10 seconds.</p>
           <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
             <div class="resource-measurement-heading">
               <div class="resource-measurement-title"><h3 id="resourceMeasurementHeading">Interval measurement</h3><button class="secondary-button" type="button" id="refreshResourceMeasurements" aria-label="Refresh measurement status" title="Refresh measurement status">↻</button></div>

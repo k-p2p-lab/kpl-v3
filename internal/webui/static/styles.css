@@ -768,6 +768,12 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 
 
 .agent-resource-overview { padding: 14px 18px 8px; }
+.agent-resource-heading { margin-bottom: .9rem; }
+.agent-resource-heading h3, .agent-resource-heading p { margin: 0; }
+.resource-total-row > :is(th, td) { background: var(--surface-raised); border-bottom: 1px solid var(--line); }
+.resource-total-label { display: block; color: var(--text); font-weight: 750; }
+.resource-total-row .agent-capacity-note { font-weight: 400; }
+.resource-total-row .agent-resource-cell .agent-capacity-note { white-space: normal; max-width: 16rem; }
 .agent-resource-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .agent-resource-history { margin: 12px 0 8px; }
 .agent-resource-history label { color: var(--muted); font-size: 12px; }
@@ -818,15 +824,11 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 /* Controller and third-party resources stay separate from the Agent fleet. */
 .service-resource-section { display: grid; gap: .65rem; padding: 1rem 1.1rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); min-width: 0; }
 .service-resource-section h3, .service-resource-section p { margin: 0; }
-.service-resource-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .65rem; max-height: 28rem; overflow-y: auto; min-width: 0; }
-.service-resource-card { padding: .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); min-width: 0; }
-.service-resource-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .35rem .5rem; }
-.service-resource-heading h4 { font-size: .9rem; margin: 0; overflow-wrap: anywhere; }
-.service-resource-state { font-size: .7rem; color: var(--muted); }
+.service-resource-table { min-width: 0; max-height: 28rem; overflow: auto; border: 1px solid var(--line); border-radius: .65rem; }
+.service-resource-table th, .service-resource-table td { padding: .7rem .9rem; }
+.service-resource-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.service-resource-name { color: var(--text); font-weight: 650; }
+.service-resource-state { color: var(--muted); }
 .service-resource-state[data-state="running"] { color: var(--green); }
 .service-resource-state[data-state="not_running"], .service-resource-state[data-state="stale"] { color: var(--red); }
-.service-resource-host { color: var(--muted); font-size: .72rem; overflow-wrap: anywhere; padding-top: .35rem; }
-.service-resource-values { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin: .65rem 0 .4rem; }
-.service-resource-values dt { color: var(--muted); font-size: .7rem; }
-.service-resource-values dd { margin: .15rem 0 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; }
-.service-resource-card .service-resource-coverage { font-size: .7rem; color: var(--muted); }
+.service-resource-host { min-width: 8rem; max-width: 18rem; white-space: normal; overflow-wrap: anywhere; }

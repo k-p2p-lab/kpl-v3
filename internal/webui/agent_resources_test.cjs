@@ -207,3 +207,25 @@ test('Grafana adds component CPU, memory, fleet totals and coverage without proc
  assert.match(d.panels.find(p=>p.title==='Component total CPU').targets[0].expr,/sum by \(component\).*cpu_capacity_cores/);
  assert.equal(d.panels.find(p=>p.title==='Component container coverage').fieldConfig.defaults.unit,'short');
 });
+
+
+test('Agent Total row keeps scope breakdowns and excludes disabled/offline capacity',()=>{
+ const a={...agent('a',2),hostname:'worker-a',capacity:100,activeNodes:50};
+ a.resources.agent={cpuCores:.5,memoryUsageBytes:1024,memoryWorkingSetBytes:768,containers:1,measuredContainers:1,complete:true};
+ a.resources.peers={cpuCores:1.5,memoryUsageBytes:3072,memoryWorkingSetBytes:2304,containers:3,measuredContainers:2,complete:false};
+ const disabled={...agent('disabled',99),capacity:900,activeNodes:900,disabled:true};
+ const offline={...agent('offline',99),capacity:800,activeNodes:800,state:'offline'};
+ const html=resources.totalRow([a,disabled,offline],now);
+ assert.match(html,/data-resource-total="agents"/);assert.match(html,/2 enabled · 1 disabled/);
+ assert.match(html,/1 \/ 2 online/);assert.match(html,/50 \/ 100/);assert.match(html,/>50%</);
+ assert.match(html,/>25%</);assert.match(html,/>6.3%</);assert.match(html,/>18.8%</);
+ assert.match(html,/1\/2 Agents measured · 2\/3 containers/);
+ assert.equal((html.match(/class="agent-resource-scope"/g)||[]).length,6);
+ assert.doesNotMatch(html,/data-agent-capacity=/);
+ for(const list of [[],[disabled],[offline]]) {
+  const empty=resources.totalRow(list,now);assert.match(empty,/N\/A/);
+  assert.doesNotMatch(empty,/>0%<|>0 B</);
+ }
+ a.resources.peers={cpuCores:0,memoryUsageBytes:0,memoryWorkingSetBytes:0,containers:0,measuredContainers:0,complete:true};
+ assert.match(resources.totalRow([a],now),/>0%</);assert.match(resources.totalRow([a],now),/>0 B</);
+});

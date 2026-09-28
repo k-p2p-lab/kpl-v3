@@ -71,6 +71,33 @@
     if (result.cpuCapacityCores > 0) result.cpuPercent = normalizedCores / result.cpuCapacityCores * 100;
     return result;
   }
+  function totalRow(agents, now = Date.now()) {
+    const enabled = agents.filter(a => !a.disabled), online = enabled.filter(a => a.state === "online");
+    const hosts = new Set(online.map(a => a.hostname).filter(Boolean));
+    const sum = key => online.reduce((value, a) => value + (Number.isFinite(a[key]) && a[key] > 0 ? a[key] : 0), 0);
+    const peers = sum("activeNodes"), capacity = sum("capacity"), usage = capacity > 0 ? peers / capacity * 100 : null;
+    const scopes = [["agent_and_peers", "Total"], ["agent", "Agent"], ["peers", "Peers"]].map(([scope, label]) => ({scope, label, value:aggregate(agents, now, scope)}));
+    function totalCell(metric) {
+      return scopes.map(({scope, label, value:a}) => {
+        const measured = metric === "cpu" ? a.cpuMeasured : a.measured;
+        const value = metric === "cpu" ? (a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`) : (a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A");
+        const partial = a.partial || measured < a.total;
+        const coverage = `${number(measured)}/${number(a.total)} Agents measured${a.partial ? ` · ${number(a.measuredContainers)}/${number(a.containers)} containers` : ""}`;
+        return `<div class="agent-resource-scope" title="${escape(`${scopeLabels[scope]}; ${coverage}. Disabled Agents and unavailable samples are excluded.`)}"><span class="agent-resource-scope-label">${label}</span><span class="agent-resource-value">${value}</span>${partial || !measured ? `<span class="agent-capacity-note${partial ? " agent-resource-partial" : ""}">${coverage}</span>` : ""}</div>`;
+      }).join("");
+    }
+    return `<tr class="resource-total-row" data-resource-total="agents">
+      <td class="agent-number">—</td>
+      <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(enabled.length)} enabled${agents.length > enabled.length ? ` · ${number(agents.length - enabled.length)} disabled` : ""}</span></th>
+      <td>${number(online.length)} / ${number(enabled.length)} online</td>
+      <td title="Reported hostnames of enabled, online Agents.">${hosts.size ? `${number(hosts.size)} hosts` : "—"}</td>
+      <td>${number(peers)} / ${number(capacity)}<span class="agent-capacity-note">Online Agents</span></td>
+      <td>${usage === null ? "N/A" : `<div class="usage"><div class="usage-track"><i style="width:${Math.min(100, usage)}%"></i></div><span>${number(usage)}%</span></div>`}</td>
+      <td class="agent-resource-cell">${totalCell("cpu")}</td>
+      <td class="agent-resource-cell">${totalCell("memory")}</td>
+      <td>—</td><td>—</td><td class="agent-settings-cell">—</td>
+    </tr>`;
+  }
   function update(agents, now = Date.now()) {
     for (const [scope, id] of [["agent_and_peers","agentResourceSummary"],["agent","agentOnlyResourceSummary"],["peers","peersOnlyResourceSummary"]]) {
       const element = root.document?.querySelector("#" + id);
@@ -217,7 +244,7 @@
       finally { clearTimeout(timer); busy = false; controls(); }
     });
   }
-  const exports = {valid, describe, cell, aggregate, update, init};
+  const exports = {valid, describe, cell, aggregate, totalRow, update, init};
   if (typeof module !== "undefined" && module.exports) module.exports = exports;
   else root.KPLAgentResources = exports;
 })(globalThis);

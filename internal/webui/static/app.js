@@ -1603,11 +1603,12 @@ function renderAgents(agents) {
   const resourceNow = Date.parse(state.snapshot?.generatedAt) || Date.now();
   globalThis.KPLAgentResources?.update(agents, resourceNow);
   rememberAgents(agents.map((agent) => agent.id));
+  const totalRow = globalThis.KPLAgentResources?.totalRow(agents, resourceNow) || "";
   if (!agents.length) {
-    setHTML($("#agentRows"), '<tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr>');
+    setHTML($("#agentRows"), totalRow + '<tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr>');
     return;
   }
-  setHTML($("#agentRows"), [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
+  setHTML($("#agentRows"), totalRow + [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
     const usage = agent.capacity ? Math.min(100, Math.round((agent.activeNodes / agent.capacity) * 100)) : 0;
     return `<tr>
       <td class="agent-number">${agentNumber(agent.id)}</td>

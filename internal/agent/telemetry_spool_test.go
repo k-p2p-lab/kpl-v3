@@ -89,3 +89,14 @@ func TestRunDrainWaitsForOnlyMatchingInFlightEvidence(t *testing.T) {
 		t.Fatalf("in-flight evidence considered delivered: %v", err)
 	}
 }
+
+// Tests may inspect a decoded window. Production recovery/forwarding keeps
+// serialized payloads and does not reconstruct TraceEvent.Fields maps.
+func openTelemetrySpool(dataDir string) (*telemetrySpool, []model.TraceEvent, error) {
+	spool, err := readTelemetrySpool(dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := spool.loadPrefix()
+	return spool, events, err
+}

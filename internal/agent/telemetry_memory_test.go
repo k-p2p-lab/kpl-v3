@@ -129,6 +129,7 @@ func TestTelemetryPartialAckFailureCannotAcknowledgeUnsentEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"one", "two", "unsent"} {
+		spool.active = nil
 		if err := spool.append([]model.TraceEvent{{EventID: id}}); err != nil {
 			t.Fatal(err)
 		}
@@ -233,6 +234,7 @@ func TestTelemetryAcknowledgedSegmentCleanupRetriesWithoutRedelivery(t *testing.
 	if err := spool.append([]model.TraceEvent{{EventID: "delivered"}}); err != nil {
 		t.Fatal(err)
 	}
+	spool.active = nil // A sealed segment is removed after acknowledgment.
 	path := filepath.Join(spool.directory, spool.records[0].segment.name)
 	// Make unlink fail after a durable acknowledgment, without relying on UID.
 	if err := os.Rename(path, path+".saved"); err != nil {

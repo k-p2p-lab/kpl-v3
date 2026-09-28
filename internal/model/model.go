@@ -94,6 +94,10 @@ type AgentHeartbeat struct {
 	Partial bool `json:"partial,omitempty"`
 }
 
+// AgentAdmissionRetryHeader marks a refusal before any Peer was reserved or
+// created. Only this explicit contract makes re-placement safe after a 503.
+const AgentAdmissionRetryHeader = "X-KPL-Admission-Retry"
+
 type CreateNodeRequest struct {
 	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
 	ID                  string     `json:"id"`

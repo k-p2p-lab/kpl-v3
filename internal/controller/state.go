@@ -41,6 +41,7 @@ type state struct {
 	nodes                   map[string]model.Node
 	activeNodeIDs           map[string]struct{}
 	reservations            map[string]string
+	agentAdmissionUntil     map[string]time.Time
 	agentSnapshots          map[string]time.Time
 	nodeReportTimes         map[string]time.Time
 	experiments             map[string]model.Experiment
@@ -54,16 +55,17 @@ type state struct {
 
 func newState(dataDir string) *state {
 	s := &state{
-		agents:          make(map[string]model.Agent),
-		nodes:           make(map[string]model.Node),
-		reservations:    make(map[string]string),
-		agentSnapshots:  make(map[string]time.Time),
-		nodeReportTimes: make(map[string]time.Time),
-		experiments:     make(map[string]model.Experiment),
-		runTimings:      make(map[string]*runTiming),
-		watchers:        make(map[chan struct{}]struct{}),
-		dataDir:         dataDir,
-		runMetrics:      make(map[string]*runMetricAccumulator),
+		agents:              make(map[string]model.Agent),
+		nodes:               make(map[string]model.Node),
+		reservations:        make(map[string]string),
+		agentAdmissionUntil: make(map[string]time.Time),
+		agentSnapshots:      make(map[string]time.Time),
+		nodeReportTimes:     make(map[string]time.Time),
+		experiments:         make(map[string]model.Experiment),
+		runTimings:          make(map[string]*runTiming),
+		watchers:            make(map[chan struct{}]struct{}),
+		dataDir:             dataDir,
+		runMetrics:          make(map[string]*runMetricAccumulator),
 	}
 	// Distinguish storage changes across Controller restarts as well as in-process updates.
 	s.resultsRevision.Store(uint64(time.Now().UnixNano()))
@@ -139,6 +141,7 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 		return model.Agent{}, fmt.Errorf("agent %q is already registered by another live or newer instance", agent.ID)
 	}
 	if restarted {
+		delete(s.agentAdmissionUntil, agent.ID)
 		for nodeID, agentID := range s.reservations {
 			if agentID == agent.ID {
 				delete(s.reservations, nodeID)

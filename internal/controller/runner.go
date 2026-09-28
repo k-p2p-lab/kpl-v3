@@ -783,7 +783,7 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 	defer s.state.mu.Unlock()
 	if agentID, exists := s.state.reservations[nodeID]; exists {
 		agent, ok := s.state.agents[agentID]
-		if ok && !agent.Disabled {
+		if ok && !agent.Disabled && !time.Now().Before(s.state.agentAdmissionUntil[agent.ID]) {
 			return agent, agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
 		}
 		delete(s.state.reservations, nodeID)
@@ -800,7 +800,7 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
-		if agent.Disabled || !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
+		if agent.Disabled || now.Before(s.state.agentAdmissionUntil[agent.ID]) || !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
 			continue
 		}
 		if rng != nil {
@@ -838,7 +838,7 @@ func (s *Server) selectBatchAgent(ctx context.Context, rng *rand.Rand) (string, 
 		s.state.mu.RLock()
 		var candidates []string
 		for _, agent := range s.state.agents {
-			if !agent.Disabled && agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
+			if !agent.Disabled && !time.Now().Before(s.state.agentAdmissionUntil[agent.ID]) && agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
 				candidates = append(candidates, agent.ID)
 			}
 		}
@@ -1376,6 +1376,9 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if method == http.MethodPost && path == "/api/v1/nodes" && resp.StatusCode == http.StatusTooManyRequests {
 			return errAgentCapacityReached
+		}
+		if method == http.MethodPost && path == "/api/v1/nodes" && retryableAdmissionResponse(resp, message) {
+			return &agentAdmissionDeferredError{after: admissionRetryDelay(resp.Header.Get("Retry-After"), time.Now()), reason: strings.TrimSpace(string(message))}
 		}
 		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 	}

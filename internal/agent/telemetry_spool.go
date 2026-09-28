@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,14 +10,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 const (
 	telemetryWindowBytes   = 1 << 20
-	telemetryWindowEvents  = 250
+	telemetryWindowEvents  = model.MaxEventBatchEvents
 	telemetryBacklogBytes  = 256 << 20
 	telemetryBacklogEvents = 50000
 )
@@ -26,8 +24,9 @@ const (
 // Only offsets and run identities stay in memory. Payloads are read in a bounded
 // window; even recovery never decodes the entire backlog into TraceEvent maps.
 type telemetrySegment struct {
-	name       string
-	count, ack int
+	name           string
+	count, ack     int
+	size, ackBytes int64
 }
 type telemetryRecord struct {
 	segment *telemetrySegment
@@ -36,11 +35,13 @@ type telemetryRecord struct {
 	runID   string
 }
 type telemetrySpool struct {
-	directory string
-	records   []telemetryRecord
-	bytes     int64
-	lastStamp int64
-	cleanup   *telemetrySegment
+	directory   string
+	records     []telemetryRecord
+	bytes       int64
+	lastStamp   int64
+	cleanup     *telemetrySegment
+	active      *telemetrySegment
+	formatReady bool
 }
 
 func syncTelemetryDirectory(path string) error {
@@ -68,45 +69,53 @@ func writeTelemetryFile(path string, data []byte) error {
 	}
 	return syncTelemetryDirectory(filepath.Dir(path))
 }
-func openTelemetrySpool(dataDir string) (*telemetrySpool, []model.TraceEvent, error) {
+func readTelemetrySpool(dataDir string) (*telemetrySpool, error) {
 	directory := filepath.Join(dataDir, "telemetry-spool")
 	if err := os.MkdirAll(directory, 0700); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := syncTelemetryDirectory(dataDir); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	spool := &telemetrySpool{directory: directory}
 	// Retain names only, not FileInfo or event payloads. Existing segments are
 	// compatible with previous versions, including partially acknowledged arrays.
 	dir, err := os.Open(directory)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var names []string
 	for {
 		entries, readErr := dir.ReadDir(128)
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".json") || strings.HasSuffix(entry.Name(), ".jsonl")) {
 				names = append(names, entry.Name())
 			}
 		}
 		if readErr != nil {
 			_ = dir.Close()
 			if readErr != io.EOF {
-				return nil, nil, readErr
+				return nil, readErr
 			}
 			break
 		}
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if name == telemetryFormatMarker {
+			if err := spool.ensureLogFormat(); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if err := spool.recoverSegment(name); err != nil {
-			return nil, nil, fmt.Errorf("read telemetry spool %s: %w", name, err)
+			return nil, fmt.Errorf("read telemetry spool %s: %w", name, err)
 		}
 	}
-	events, err := spool.loadPrefix()
-	return spool, events, err
+	if err := spool.releaseIdleLog(); err != nil {
+		return nil, err
+	}
+	return spool, nil
 }
 
 func (spool *telemetrySpool) recoverSegment(name string) error {
@@ -122,6 +131,9 @@ func (spool *telemetrySpool) recoverSegment(name string) error {
 		return errors.New("invalid telemetry spool segment")
 	}
 	segment := &telemetrySegment{name: name}
+	if strings.HasSuffix(name, ".jsonl") {
+		return spool.recoverLog(segment)
+	}
 	data, err := os.ReadFile(path + ".ack")
 	if err == nil {
 		segment.ack, err = strconv.Atoi(string(data))
@@ -184,37 +196,7 @@ func (spool *telemetrySpool) append(events []model.TraceEvent) error {
 	if spool == nil || len(events) == 0 {
 		return nil
 	}
-	stamp := max(time.Now().UnixNano(), spool.lastStamp+1)
-	segment := &telemetrySegment{name: fmt.Sprintf("%020d-%s.json", stamp, rand.Text()), count: len(events)}
-	records := make([]telemetryRecord, 0, len(events))
-	data := []byte{'['}
-	var size int64
-	for i, event := range events {
-		encoded, err := json.Marshal(event)
-		if err != nil {
-			return err
-		}
-		if len(encoded) > model.MaxEventBatchBytes {
-			return errors.New("telemetry event exceeds size limit")
-		}
-		if i > 0 {
-			data = append(data, ',')
-		}
-		records = append(records, telemetryRecord{segment: segment, offset: int64(len(data)), size: len(encoded), runID: event.RunID})
-		data = append(data, encoded...)
-		size += int64(len(encoded))
-	}
-	data = append(data, ']')
-	if len(data) > 64<<20 {
-		return errors.New("telemetry segment exceeds size limit")
-	}
-	if err := writeTelemetryFile(filepath.Join(spool.directory, segment.name), data); err != nil {
-		return err
-	}
-	spool.lastStamp = stamp
-	spool.records = append(spool.records, records...)
-	spool.bytes += size
-	return nil
+	return spool.appendLog(events)
 }
 
 func (spool *telemetrySpool) loadPrefix() ([]model.TraceEvent, error) {
@@ -270,7 +252,13 @@ func (spool *telemetrySpool) acknowledge(count int) (int, error) {
 		segment := spool.records[0].segment
 		n := min(count-committed, segment.count-segment.ack)
 		next := segment.ack + n
-		if err := writeTelemetryFile(filepath.Join(spool.directory, segment.name)+".ack", []byte(strconv.Itoa(next))); err != nil {
+		var err error
+		if strings.HasSuffix(segment.name, ".jsonl") {
+			err = spool.acknowledgeLog(segment, next)
+		} else {
+			err = writeTelemetryFile(filepath.Join(spool.directory, segment.name)+".ack", []byte(strconv.Itoa(next)))
+		}
+		if err != nil {
 			return committed, err
 		}
 		for _, record := range spool.records[:n] {
@@ -283,7 +271,7 @@ func (spool *telemetrySpool) acknowledge(count int) (int, error) {
 		}
 		segment.ack = next
 		committed += n
-		if next == segment.count {
+		if next == segment.count && segment != spool.active {
 			if err := spool.removeSegment(segment); err != nil {
 				spool.cleanup = segment
 				return committed, err

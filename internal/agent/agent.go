@@ -98,6 +98,9 @@ type Server struct {
 	eventsInFlight            int
 	telemetryDecoders         atomic.Int32
 	telemetryDecodersRejected atomic.Uint64
+	telemetryGateOnce         sync.Once
+	telemetrySlots            chan struct{}
+	telemetryWaiters          atomic.Int32
 	eventsBytes               int64
 	inFlightBytes             int64
 	inFlightRuns              map[string]int
@@ -168,7 +171,7 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	if spoolErr != nil {
 		return nil, spoolErr
 	}
-	s.spool, s.events, spoolErr = openTelemetrySpool(config.DataDir)
+	s.spool, spoolErr = readTelemetrySpool(config.DataDir)
 	if spoolErr != nil {
 		return nil, spoolErr
 	}
@@ -261,6 +264,11 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 		drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer drainCancel()
 		resultErr = errors.Join(resultErr, s.drainEvents(drainCtx))
+		s.eventsMu.Lock()
+		if s.pendingEventsLocked() == 0 {
+			resultErr = errors.Join(resultErr, s.spool.releaseIdleLog())
+		}
+		s.eventsMu.Unlock()
 	}()
 	go func() {
 		defer close(controlDone)

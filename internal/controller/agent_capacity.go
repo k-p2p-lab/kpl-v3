@@ -174,9 +174,9 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 		// Agent before the create was dispatched. Already dispatched calls finish.
 		s.state.mu.RLock()
 		current, exists := s.state.agents[agent.ID]
-		disabled := !exists || current.Disabled
+		blocked := !exists || current.Disabled || time.Now().Before(s.state.agentAdmissionUntil[agent.ID])
 		s.state.mu.RUnlock()
-		if disabled {
+		if blocked {
 			s.releaseReservation(request.ID)
 			var err error
 			agent, err = s.acquireAgentWithPlacement(ctx, request.ID, targetAgentID, rng)
@@ -191,6 +191,16 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 		}
 		var node model.Node
 		err := s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node)
+		var deferred *agentAdmissionDeferredError
+		if errors.As(err, &deferred) {
+			s.deferAgentAdmission(agent, deferred, request.RunID)
+			s.releaseReservation(request.ID)
+			agent, err = s.acquireAgentWithPlacement(ctx, request.ID, targetAgentID, rng)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if errors.Is(err, errAgentCapacityReached) {
 			s.releaseReservation(request.ID)
 			timer := time.NewTimer(250 * time.Millisecond)
@@ -216,4 +226,63 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 		}
 		return nil
 	}
+}
+
+// A busy Agent is skipped fleet-wide until Retry-After expires. Pinned jobs wait
+// for that same Agent; unpinned jobs can immediately reserve another candidate.
+func (s *Server) deferAgentAdmission(agent model.Agent, err *agentAdmissionDeferredError, runID string) {
+	now := time.Now()
+	s.state.mu.Lock()
+	current, exists := s.state.agents[agent.ID]
+	report := false
+	if exists && current.StartedAt.Equal(agent.StartedAt) {
+		if s.state.agentAdmissionUntil == nil {
+			s.state.agentAdmissionUntil = make(map[string]time.Time)
+		}
+		previous := s.state.agentAdmissionUntil[agent.ID]
+		report = !now.Before(previous)
+		until := now.Add(err.after)
+		if until.After(previous) {
+			s.state.agentAdmissionUntil[agent.ID] = until
+		}
+	}
+	s.state.mu.Unlock()
+	if report {
+		s.logger.Warn("Agent deferred Peer admission; retrying after recovery", "runId", runID, "agentId", agent.ID, "retryAfter", err.after, "reason", err.reason)
+	}
+}
+
+type agentAdmissionDeferredError struct {
+	after  time.Duration
+	reason string
+}
+
+func (e *agentAdmissionDeferredError) Error() string { return "Agent admission deferred: " + e.reason }
+
+func admissionRetryDelay(value string, now time.Time) time.Duration {
+	delay := time.Second
+	if seconds, err := strconv.ParseInt(value, 10, 32); err == nil && seconds >= 0 {
+		delay = time.Duration(seconds) * time.Second
+	} else if at, err := http.ParseTime(value); err == nil {
+		delay = at.Sub(now)
+	}
+	return min(30*time.Second, max(250*time.Millisecond, delay))
+}
+
+func retryableAdmissionResponse(resp *http.Response, message []byte) bool {
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	if resp.Header.Get(model.AgentAdmissionRetryHeader) == "not-created" {
+		return true
+	}
+	// Rolling upgrades: earlier Agents used these two exact pre-admission errors
+	// with Retry-After. Arbitrary 503s/timeouts may follow a create; never re-place.
+	var body struct {
+		Error string `json:"error"`
+	}
+	if resp.Header.Get("Retry-After") == "" || json.Unmarshal(message, &body) != nil {
+		return false
+	}
+	return body.Error == "Agent telemetry backlog is full; retry Peer admission after delivery recovers" || body.Error == "Agent terminal evidence is awaiting delivery or local storage; retry after recovery"
 }

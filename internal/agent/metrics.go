@@ -102,15 +102,16 @@ func newAgentMetricsRegistry(s *Server) *prometheus.Registry {
 }
 
 type localCollector struct {
-	memory, memoryAt, waits                            *prometheus.Desc
-	queueBytes, windowBytes, decoders, decoderRejected *prometheus.Desc
-	server                                             *Server
-	nodes, capacity, cleanupPending, telemetryQueue    *prometheus.Desc
-	historyRecords, historyRetired, historyErrors      *prometheus.Desc
+	memory, memoryAt, waits                                            *prometheus.Desc
+	queueBytes, windowBytes, decoders, decoderRejected, decoderWaiters *prometheus.Desc
+	server                                                             *Server
+	nodes, capacity, cleanupPending, telemetryQueue                    *prometheus.Desc
+	historyRecords, historyRetired, historyErrors                      *prometheus.Desc
 }
 
 func newLocalCollector(s *Server) *localCollector {
 	return &localCollector{
+		decoderWaiters:  prometheus.NewDesc("kpl_local_telemetry_decoder_waiters", "Requests waiting without decoding for a telemetry admission slot; capped at 64 for at most one second.", []string{"agent_id"}, nil),
 		memory:          prometheus.NewDesc("kpl_local_agent_memory_bytes", "Agent container memory accounting from Docker, including subprocesses and cgroup cache/kernel charges. Categories overlap; do not sum them.", []string{"agent_id", "kind"}, nil),
 		memoryAt:        prometheus.NewDesc("kpl_local_agent_memory_sample_timestamp_seconds", "Timestamp of the available Agent container memory sample.", []string{"agent_id"}, nil),
 		waits:           prometheus.NewDesc("kpl_local_peer_wait_connections", "Active Docker Engine Peer exit waits; these do not start Docker CLI subprocesses.", []string{"agent_id"}, nil),
@@ -130,7 +131,7 @@ func newLocalCollector(s *Server) *localCollector {
 }
 
 func (c *localCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, desc := range []*prometheus.Desc{c.memory, c.memoryAt, c.waits, c.queueBytes, c.windowBytes, c.decoders, c.decoderRejected} {
+	for _, desc := range []*prometheus.Desc{c.memory, c.memoryAt, c.waits, c.queueBytes, c.windowBytes, c.decoders, c.decoderRejected, c.decoderWaiters} {
 		ch <- desc
 	}
 	ch <- c.nodes
@@ -189,6 +190,7 @@ func (c *localCollector) Collect(ch chan<- prometheus.Metric) {
 	s.eventsMu.Unlock()
 	ch <- prometheus.MustNewConstMetric(c.queueBytes, prometheus.GaugeValue, float64(backlogBytes), agentID)
 	ch <- prometheus.MustNewConstMetric(c.windowBytes, prometheus.GaugeValue, float64(windowBytes), agentID)
+	ch <- prometheus.MustNewConstMetric(c.decoderWaiters, prometheus.GaugeValue, float64(s.telemetryWaiters.Load()), agentID)
 	ch <- prometheus.MustNewConstMetric(c.decoders, prometheus.GaugeValue, float64(s.telemetryDecoders.Load()), agentID)
 	ch <- prometheus.MustNewConstMetric(c.decoderRejected, prometheus.CounterValue, float64(s.telemetryDecodersRejected.Load()), agentID)
 	if s.docker != nil {

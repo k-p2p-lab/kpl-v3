@@ -143,6 +143,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		node, err := s.createNode(context.Background(), request)
 		if errors.Is(err, errPeerHistoryFull) || errors.Is(err, errTelemetryBacklogFull) {
+			w.Header().Set(model.AgentAdmissionRetryHeader, "not-created")
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
@@ -257,21 +258,15 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	// Reserve before decoding: otherwise concurrent requests retain full decoded
-	// maps while waiting for disk fsync or the queue lock, outside any queue cap.
-	for {
-		active := s.telemetryDecoders.Load()
-		if active >= 2 {
-			s.telemetryDecodersRejected.Add(1)
-			w.Header().Set("Retry-After", "1")
-			writeError(w, http.StatusServiceUnavailable, "telemetry decoder busy; retry this batch")
-			return
-		}
-		if s.telemetryDecoders.CompareAndSwap(active, active+1) {
-			break
-		}
+	// Wait briefly without decoding a body. A small bounded queue absorbs Peer
+	// bursts instead of forcing hundreds of synchronized retries into the Agent.
+	if !s.acquireTelemetryDecoder(r.Context()) {
+		s.telemetryDecodersRejected.Add(1)
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "telemetry decoder busy; retry this batch")
+		return
 	}
-	defer s.telemetryDecoders.Add(-1)
+	defer s.releaseTelemetryDecoder()
 	var batch model.EventBatch
 	if err := decodeJSON(w, r, &batch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

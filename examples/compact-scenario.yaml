@@ -1,0 +1,365 @@
+# Compact CPU / memory scaling load test
+# Expected steady state: 10 boot + 370 persistent + ~120 churn ~= 500 peers
+# Churn: 3 producers, Exp(mean=2.5s), fixed lifetime=100s => ~120 churn peers
+# Run the exact same YAML while changing only the available host count.
+
+version: 2
+name: prysm-loadtest-n500-compact
+seed: 260304
+onExit: cancel
+jobShutdownTimeout: 2m
+profiles:
+  stable-boot:
+    type: boot
+  delay-low:
+    type: full
+    gossipsub:
+      topics:
+      - kpl/prysm/beacon_block
+      params:
+        d: 6
+        dLow: 5
+        dHigh: 12
+        dScore: 3
+        dOut: 2
+      scoreInspectInterval: 1s
+      score:
+        enabled: true
+        topicScoreCap: 32.72
+        appSpecificWeight: 1
+        appSpecificScore:
+          default: 0
+        ipColocationFactorWeight: -35.11
+        ipColocationFactorThreshold: 10
+        behaviourPenaltyWeight: -15.92
+        behaviourPenaltyThreshold: 6
+        behaviourPenaltyDecay: 0.9857119009006162
+        decayInterval: 12s
+        decayToZero: 0.01
+        retainScore: 10h40m
+        thresholds:
+          gossipThreshold: -4000
+          publishThreshold: -8000
+          graylistThreshold: -16000
+          acceptPXThreshold: 100
+          opportunisticGraftThreshold: 5
+        topics:
+          kpl/prysm/beacon_block:
+            topicWeight: 0.8
+            timeInMeshWeight: 0.03333333333333333
+            timeInMeshQuantum: 12s
+            timeInMeshCap: 300
+            firstMessageDeliveriesWeight: 1
+            firstMessageDeliveriesDecay: 0.9928302477768374
+            firstMessageDeliveriesCap: 23
+            meshMessageDeliveriesWeight: 0
+            meshMessageDeliveriesDecay: 0.9716279515771061
+            meshMessageDeliveriesThreshold: 16
+            meshMessageDeliveriesCap: 160
+            meshMessageDeliveriesActivation: 25m36s
+            meshMessageDeliveriesWindow: 2s
+            meshFailurePenaltyWeight: 0
+            meshFailurePenaltyDecay: 0.9716279515771061
+            invalidMessageDeliveriesWeight: -140.4475
+            invalidMessageDeliveriesDecay: 0.9971259067705325
+    network:
+      scope: p2p
+      delay: 25ms
+      jitter: 2ms
+      lossPercent: 0.5
+  delay-medium:
+    type: full
+    gossipsub:
+      topics:
+      - kpl/prysm/beacon_block
+      params:
+        d: 6
+        dLow: 5
+        dHigh: 12
+        dScore: 3
+        dOut: 2
+      scoreInspectInterval: 1s
+      score:
+        enabled: true
+        topicScoreCap: 32.72
+        appSpecificWeight: 1
+        appSpecificScore:
+          default: 0
+        ipColocationFactorWeight: -35.11
+        ipColocationFactorThreshold: 10
+        behaviourPenaltyWeight: -15.92
+        behaviourPenaltyThreshold: 6
+        behaviourPenaltyDecay: 0.9857119009006162
+        decayInterval: 12s
+        decayToZero: 0.01
+        retainScore: 10h40m
+        thresholds:
+          gossipThreshold: -4000
+          publishThreshold: -8000
+          graylistThreshold: -16000
+          acceptPXThreshold: 100
+          opportunisticGraftThreshold: 5
+        topics:
+          kpl/prysm/beacon_block:
+            topicWeight: 0.8
+            timeInMeshWeight: 0.03333333333333333
+            timeInMeshQuantum: 12s
+            timeInMeshCap: 300
+            firstMessageDeliveriesWeight: 1
+            firstMessageDeliveriesDecay: 0.9928302477768374
+            firstMessageDeliveriesCap: 23
+            meshMessageDeliveriesWeight: 0
+            meshMessageDeliveriesDecay: 0.9716279515771061
+            meshMessageDeliveriesThreshold: 16
+            meshMessageDeliveriesCap: 160
+            meshMessageDeliveriesActivation: 25m36s
+            meshMessageDeliveriesWindow: 2s
+            meshFailurePenaltyWeight: 0
+            meshFailurePenaltyDecay: 0.9716279515771061
+            invalidMessageDeliveriesWeight: -140.4475
+            invalidMessageDeliveriesDecay: 0.9971259067705325
+    network:
+      scope: p2p
+      delay: 100ms
+      jitter: 2ms
+      lossPercent: 0.5
+  delay-high:
+    type: full
+    gossipsub:
+      topics:
+      - kpl/prysm/beacon_block
+      params:
+        d: 6
+        dLow: 5
+        dHigh: 12
+        dScore: 3
+        dOut: 2
+      scoreInspectInterval: 1s
+      score:
+        enabled: true
+        topicScoreCap: 32.72
+        appSpecificWeight: 1
+        appSpecificScore:
+          default: 0
+        ipColocationFactorWeight: -35.11
+        ipColocationFactorThreshold: 10
+        behaviourPenaltyWeight: -15.92
+        behaviourPenaltyThreshold: 6
+        behaviourPenaltyDecay: 0.9857119009006162
+        decayInterval: 12s
+        decayToZero: 0.01
+        retainScore: 10h40m
+        thresholds:
+          gossipThreshold: -4000
+          publishThreshold: -8000
+          graylistThreshold: -16000
+          acceptPXThreshold: 100
+          opportunisticGraftThreshold: 5
+        topics:
+          kpl/prysm/beacon_block:
+            topicWeight: 0.8
+            timeInMeshWeight: 0.03333333333333333
+            timeInMeshQuantum: 12s
+            timeInMeshCap: 300
+            firstMessageDeliveriesWeight: 1
+            firstMessageDeliveriesDecay: 0.9928302477768374
+            firstMessageDeliveriesCap: 23
+            meshMessageDeliveriesWeight: 0
+            meshMessageDeliveriesDecay: 0.9716279515771061
+            meshMessageDeliveriesThreshold: 16
+            meshMessageDeliveriesCap: 160
+            meshMessageDeliveriesActivation: 25m36s
+            meshMessageDeliveriesWindow: 2s
+            meshFailurePenaltyWeight: 0
+            meshFailurePenaltyDecay: 0.9716279515771061
+            invalidMessageDeliveriesWeight: -140.4475
+            invalidMessageDeliveriesDecay: 0.9971259067705325
+    network:
+      scope: p2p
+      delay: 250ms
+      jitter: 2ms
+      lossPercent: 0.5
+phases:
+- name: start bootstrap peers
+  action: join
+  group: boot
+  role: boot
+  profile: stable-boot
+  count: 10
+  placement: balanced
+  parallel: false
+  interval:
+    model: exponential
+    mean: 100ms
+- name: wait for bootstrap readiness
+  action: wait-ready
+  group: boot
+  readyRatio: 1
+  timeout: 2m
+- name: fill static-low
+  action: join
+  job: fill-low
+  group: static-low
+  role: worker
+  profile: delay-low
+  count: 123
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 100ms
+- name: fill static-medium
+  action: join
+  job: fill-medium
+  group: static-medium
+  role: worker
+  profile: delay-medium
+  count: 123
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 100ms
+- name: fill static-high
+  action: join
+  job: fill-high
+  group: static-high
+  role: worker
+  profile: delay-high
+  count: 124
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 100ms
+- name: wait for static-low readiness
+  action: wait-ready
+  group: static-low
+  minCount: 123
+  readyRatio: 0.95
+  timeout: 3m
+- name: wait for static-medium readiness
+  action: wait-ready
+  group: static-medium
+  minCount: 123
+  readyRatio: 0.95
+  timeout: 3m
+- name: wait for static-high readiness
+  action: wait-ready
+  group: static-high
+  minCount: 124
+  readyRatio: 0.95
+  timeout: 3m
+- name: start churn-low
+  action: join
+  job: churn-low
+  group: churn-low
+  role: worker
+  profile: delay-low
+  count: 1000
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 2500ms
+  lifetime:
+    model: fixed
+    value: 100s
+- name: start churn-medium
+  action: join
+  job: churn-medium
+  group: churn-medium
+  role: worker
+  profile: delay-medium
+  count: 1000
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 2500ms
+  lifetime:
+    model: fixed
+    value: 100s
+- name: start churn-high
+  action: join
+  job: churn-high
+  group: churn-high
+  role: worker
+  profile: delay-high
+  count: 1000
+  placement: balanced
+  parallel: false
+  await: false
+  interval:
+    model: exponential
+    mean: 2500ms
+  lifetime:
+    model: fixed
+    value: 100s
+- name: build compact churn population
+  action: wait
+  duration: 2m
+- name: burst publish from static-low
+  action: publish
+  group: static-low
+  type: full
+  count: 3
+  topic: kpl/prysm/beacon_block
+  payloadSize: 200000
+  payloadEncoding: envelope
+  deliveryWindow: 4s
+  parallel: false
+  await: true
+  onError: continue
+  interval:
+    model: exponential
+    mean: 1s
+- name: short inter-burst gap
+  action: wait
+  duration: 1s
+- name: burst publish from static-medium
+  action: publish
+  group: static-medium
+  type: full
+  count: 3
+  topic: kpl/prysm/beacon_block
+  payloadSize: 200000
+  payloadEncoding: envelope
+  deliveryWindow: 4s
+  parallel: false
+  await: true
+  onError: continue
+  interval:
+    model: exponential
+    mean: 1s
+- name: short inter-burst gap
+  action: wait
+  duration: 1s
+- name: burst publish from static-high
+  action: publish
+  group: static-high
+  type: full
+  count: 3
+  topic: kpl/prysm/beacon_block
+  payloadSize: 200000
+  payloadEncoding: envelope
+  deliveryWindow: 4s
+  parallel: false
+  await: true
+  onError: continue
+  interval:
+    model: exponential
+    mean: 1s
+- name: collect final telemetry
+  action: wait
+  duration: 10s
+- name: stop load test
+  action: stop-all
+- name: await
+  action: wait
+  duration: 60s

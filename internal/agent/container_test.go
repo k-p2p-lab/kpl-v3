@@ -41,7 +41,7 @@ func newContainerTestServer(t *testing.T, settings map[string]string) (*Server, 
 	}
 	d, path := fakeDocker(t, settings)
 	server.docker = d
-	t.Cleanup(func() { server.stopAll(); server.waitStopped(5 * time.Second) })
+	t.Cleanup(func() { server.stopAll(); server.waitStopped(5 * time.Second); _ = server.Close() })
 	return server, path
 }
 

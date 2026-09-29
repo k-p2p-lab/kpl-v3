@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -191,17 +192,23 @@ func TestAgentRunRejectsOccupiedMetricsAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
+	dataDir, history, nodes := legacyHistoryFixture(t, 1)
 	s, err := New(Config{
 		DockerImage: "registry.example:5000/kpl-v3:test", DockerNetwork: "kpl-v3-peers",
 		ID: "agent", Listen: "127.0.0.1:0", AdvertiseURL: "http://agent:8090",
 		ControllerURL: "http://controller:8080", MetricsListen: occupied.Addr().String(),
-		MetricsURL: "http://worker.example:9091/metrics", DataDir: t.TempDir(),
+		MetricsURL: "http://worker.example:9091/metrics", DataDir: dataDir,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "metrics endpoint") {
 		t.Fatalf("occupied metrics address error=%v", err)
+	}
+	// A duplicate process must detect the occupied port before migrating the
+	// running older Agent's per-Peer history directory into a database file.
+	if _, err := os.Stat(history.path("nodes", nodes[0].ID)); err != nil {
+		t.Fatalf("duplicate Agent changed the legacy history before binding: %v", err)
 	}
 }
 

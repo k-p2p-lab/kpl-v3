@@ -32,8 +32,8 @@ func historyTestServer(t *testing.T) *Server {
 	t.Cleanup(func() {
 		s.heartbeatMu.Lock()
 		defer s.heartbeatMu.Unlock()
-		if s.historyReplay != nil && s.historyReplay.directory != nil {
-			s.historyReplay.directory.Close()
+		if err := s.Close(); err != nil {
+			t.Error(err)
 		}
 		s.historyReplay = nil
 	})
@@ -104,10 +104,15 @@ func TestChurnHistoryMemoryIsBoundedAndRetiredIDsRemainFenced(t *testing.T) {
 	if len(s.snapshotWithHistory(false).Nodes) != peerHistoryRecent {
 		t.Fatal("registration replay grew to all historical Peers")
 	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := New(s.config, s.logger)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	s = restarted
 	if len(restarted.processes) != 0 || len(restarted.runFences) != 0 {
 		t.Fatal("restart loaded an unbounded history index")
 	}
@@ -148,10 +153,14 @@ func TestRunFenceCacheEvictionPersistsMaximumAndSurvivesRestart(t *testing.T) {
 	if err := s.reclaimHistory(); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := New(s.config, s.logger)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = restarted.Close() })
 	if err := historyAdmission(restarted, "old-peer", "run-000", 9); err == nil {
 		t.Fatal("restart lost stored fence")
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	bolt "go.etcd.io/bbolt"
 )
 
 const peerHistoryRecent = 64
@@ -27,17 +28,20 @@ var errTelemetryBacklogFull = errors.New("Agent telemetry backlog is full; retry
 
 var errPeerHistoryFull = errors.New("Agent terminal evidence is awaiting delivery or local storage; retry after recovery")
 
-// Compact terminal identities/fences live on local Agent storage, not in an
-// ever-growing live process map. Files are looked up directly; no full index is
-// loaded at startup. Maintenance never holds Server.mu while accessing disk.
+// Compact terminal identities live in one local database; run fences remain
+// directly addressable files. No full record index is loaded into the Go heap.
+// Maintenance never holds Server.mu while accessing disk.
 type agentHistory struct {
 	directory string
 	mu        sync.Mutex
+	storeMu   sync.Mutex
+	db        *bolt.DB
+	closed    bool
 }
 
 func openAgentHistory(dataDir string) (*agentHistory, error) {
 	h := &agentHistory{directory: filepath.Join(dataDir, "peer-history")}
-	for _, kind := range []string{"nodes", "runs", "fences"} {
+	for _, kind := range []string{"runs", "fences"} {
 		if err := os.MkdirAll(filepath.Join(h.directory, kind), 0700); err != nil {
 			return nil, err
 		}
@@ -52,17 +56,7 @@ func (h *agentHistory) contains(id string) (bool, error) {
 	if h == nil {
 		return false, nil
 	}
-	info, err := os.Lstat(h.path("nodes", id))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if !info.Mode().IsRegular() {
-		return false, errors.New("invalid retired Peer identity")
-	}
-	return true, nil
+	return h.containsStored(id)
 }
 func (h *agentHistory) fence(id string) (uint64, bool, error) {
 	if h == nil {
@@ -98,22 +92,6 @@ func (h *agentHistory) saveFence(id string, generation uint64) error {
 	}
 	data, _ := json.Marshal(generation)
 	return writeTelemetryFile(h.path("fences", id), data)
-}
-func (h *agentHistory) retire(node model.Node) error {
-	runPath := h.path("runs", node.RunID)
-	if _, err := os.Stat(runPath); errors.Is(err, os.ErrNotExist) {
-		data, _ := json.Marshal(node.RunID)
-		if err := writeTelemetryFile(runPath, data); err != nil {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
-	data, err := json.Marshal(node)
-	if err != nil {
-		return err
-	}
-	return writeTelemetryFile(h.path("nodes", node.ID), data)
 }
 
 // Returns with mu held on success. A fence may be written/evicted while the
@@ -230,23 +208,26 @@ func (s *Server) reclaimHistory() error {
 		cleaned++
 	}
 	count := min(historyPruneBatch, max(0, len(candidates)-peerHistoryRecent))
+	// Commit the whole bounded batch before dropping any in-memory evidence.
+	// A registration racing this write can still invalidate acknowledgements.
+	nodes := make([]model.Node, 0, count)
+	s.mu.RLock()
 	for _, proc := range candidates[:count] {
-		// Acknowledged, successfully removed processes cannot change state. Keep
-		// only the compact record if registration invalidates its acknowledgement.
-		s.mu.RLock()
-		node := heartbeatNodeStatus(proc)
-		s.mu.RUnlock()
-		if err := s.history.retire(node); err != nil {
-			return err
-		}
-		s.mu.Lock()
-		if s.processes[node.ID] == proc && proc.heartbeatAcknowledged && processCleanupComplete(proc) {
-			delete(s.processes, node.ID)
+		nodes = append(nodes, heartbeatNodeStatus(proc))
+	}
+	s.mu.RUnlock()
+	if err := s.history.saveNodes(nodes); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	for i, proc := range candidates[:count] {
+		if s.processes[nodes[i].ID] == proc && proc.heartbeatAcknowledged && processCleanupComplete(proc) {
+			delete(s.processes, nodes[i].ID)
 			s.historyRevision++
 			s.historyPeersRetired++
 		}
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	ids := make([]string, 0, len(fences))
 	for id := range fences {
 		ids = append(ids, id)
@@ -285,7 +266,7 @@ func (s *Server) reclaimHistory() error {
 		s.runFences = compact
 	}
 	s.mu.Unlock()
-	return nil
+	return s.history.cleanLegacyNodes()
 }
 func (s *Server) historyLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)

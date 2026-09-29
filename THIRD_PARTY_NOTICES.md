@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-This file identifies third-party source included directly in K-P2PLab. Original license files and notices are retained with that source. Other Go dependencies and their versions are declared in [go.mod](go.mod) and [go.sum](go.sum).
+This file identifies third-party source included directly in K-P2PLab and selected linked dependencies. Original license files and notices are retained with included source or copied below. All Go dependencies and their versions are declared in [go.mod](go.mod) and [go.sum](go.sum).
 
 ## go-libp2p-pubsub
 
@@ -31,3 +31,14 @@ Only the upstream [score.go](third_party/go-libp2p-pubsub/score.go) source file 
 The observation fields and timestamp are captured under the existing score lock; inspection callbacks remain asynchronous. Scoring arithmetic, decay, routing, wire protocols, and defaults are unchanged.
 
 K-P2PLab also adds an [inspection regression test](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go), [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), and a [SHA-256 manifest of the original upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json). The root [go.mod](go.mod) selects this local copy through a `replace` directive.
+
+## bbolt
+
+K-P2PLab uses the unmodified bbolt Go module for the Agent's local retired-Peer history store.
+
+- Upstream project: [etcd-io/bbolt](https://github.com/etcd-io/bbolt)
+- Version: [v1.4.3](https://github.com/etcd-io/bbolt/tree/v1.4.3), selected by [go.mod](go.mod)
+- License: MIT, copyright (c) 2013 Ben Johnson
+- Original license: [third_party/licenses/bbolt-LICENSE](third_party/licenses/bbolt-LICENSE)
+
+The module is downloaded through Go modules; its source is not vendored in this repository.

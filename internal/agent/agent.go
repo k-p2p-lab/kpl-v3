@@ -178,7 +178,12 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	return s, nil
 }
 
+// Close releases local history resources. Run calls it after shutdown; callers
+// using a Server without Run must close it after all operations finish.
+func (s *Server) Close() error { return s.history.close() }
+
 func (s *Server) Run(ctx context.Context) error {
+	defer s.Close()
 	defer s.docker.waitClient.CloseIdleConnections()
 	// Bind before reconciling: a duplicate Agent on the same host must not remove the
 	// running Agent's peers and only then discover that one of its ports is
@@ -200,6 +205,11 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listener) (resultErr error) {
+	if s.history != nil {
+		if _, err := s.history.store(); err != nil {
+			return fmt.Errorf("open Peer history: %w", err)
+		}
+	}
 	s.logger.Info("agent startup checking Docker runtime", "id", s.config.ID)
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := s.docker.check(checkCtx)
@@ -350,9 +360,6 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 	defer func() {
 		s.heartbeatMu.Lock()
 		defer s.heartbeatMu.Unlock()
-		if s.historyReplay != nil && s.historyReplay.directory != nil {
-			s.historyReplay.directory.Close()
-		}
 		s.historyReplay = nil
 	}()
 

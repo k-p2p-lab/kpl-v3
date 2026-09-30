@@ -36,7 +36,7 @@ func TestBlockedLoginResponseDoesNotBlockOtherSessions(t *testing.T) {
 			}
 			if status == http.StatusServiceUnavailable {
 				for i := 1; i < sessionLimit; i++ {
-					key := sha256.Sum256([]byte(fmt.Sprint(i)))
+					key := sha256.Sum256(fmt.Append(nil, i))
 					s.auth.sessions[key] = &browserSession{expires: time.Now().Add(sessionLifetime), done: make(chan struct{})}
 				}
 			}

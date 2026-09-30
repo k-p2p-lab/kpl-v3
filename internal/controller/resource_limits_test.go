@@ -174,6 +174,9 @@ func TestStreamCoalescesFrequentTelemetryAndSharesEncoding(t *testing.T) {
 			count++
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
 	<-done
 	if count < 1 || count > 2 {
 		t.Fatalf("frequent telemetry produced %d snapshots in 1.25 seconds", count)
@@ -244,7 +247,7 @@ func BenchmarkSequencedEventHistory(b *testing.B) {
 	a := newRunMetricAccumulator()
 	e := model.TraceEvent{NodeID: "peer", SessionID: "session", Type: "rpc_metadata"}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		e.Sequence = uint64(i + 1)
 		a.observe(e)
 	}

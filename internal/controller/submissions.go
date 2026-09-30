@@ -33,7 +33,7 @@ func (s *Server) submitScenario(ctx context.Context, raw []byte, count int, key 
 	sum := sha256.Sum256([]byte(key))
 	name := hex.EncodeToString(sum[:])
 	id := "run-request-" + name
-	hash := sha256.Sum256(append([]byte(fmt.Sprintf("%d\n", count)), raw...))
+	hash := sha256.Sum256(append(fmt.Appendf(nil, "%d\n", count), raw...))
 	digest := hex.EncodeToString(hash[:])
 	s.submissionMu.Lock()
 	defer s.submissionMu.Unlock()

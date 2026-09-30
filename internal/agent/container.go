@@ -27,10 +27,11 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 		// Match v2's ServiceCreate admission boundary. Docker CLI/daemon create
 		// latency must not consume a peer's lifetime before it exists. Copy,
 		// startup and bootstrap still consume lifetime, as scheduling did in v2.
+		createdAt := time.Now()
 		s.mu.Lock()
-		setProcessMetadata(proc, "containerCreatedAt", time.Now().UTC().Format(time.RFC3339Nano))
+		setProcessMetadata(proc, "containerCreatedAt", createdAt.UTC().Format(time.RFC3339Nano))
 		s.mu.Unlock()
-		scheduleLifetimeStop(ctx, lifetime, func() { _ = s.stopNode(node.ID) })
+		scheduleLifetimeStop(ctx, lifetime, createdAt, func() { _ = s.stopNode(node.ID) })
 	})
 	if err != nil {
 		var cleanupErr error

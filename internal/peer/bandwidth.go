@@ -12,22 +12,30 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
+const bandwidthPeerRetention = time.Minute
+
+type peerBandwidth struct {
+	stats        metrics.Stats
+	lastActivity time.Time
+}
+
 // The upstream flow-meter reporter publishes counters on an asynchronous sweep.
 // Keep synchronous integer counters so even sub-second runs and the last bytes
 // before host.Close are included. Global and stream hooks are called separately:
 // stream hooks update attribution only and must not double-count global bytes.
 type bandwidthReporter struct {
-	mu        sync.Mutex
-	started   time.Time
-	totals    metrics.Stats
-	protocols map[protocol.ID]metrics.Stats
-	peers     map[peer.ID]metrics.Stats
+	mu            sync.Mutex
+	started       time.Time
+	totals        metrics.Stats
+	protocols     map[protocol.ID]metrics.Stats
+	peers         map[peer.ID]peerBandwidth
+	peerHighWater int
 }
 
 var _ metrics.Reporter = (*bandwidthReporter)(nil)
 
 func newBandwidthReporter() *bandwidthReporter {
-	return &bandwidthReporter{started: time.Now(), protocols: make(map[protocol.ID]metrics.Stats), peers: make(map[peer.ID]metrics.Stats)}
+	return &bandwidthReporter{started: time.Now(), protocols: make(map[protocol.ID]metrics.Stats), peers: make(map[peer.ID]peerBandwidth)}
 }
 func (b *bandwidthReporter) LogSentMessage(n int64) {
 	if n <= 0 {
@@ -54,12 +62,14 @@ func (b *bandwidthReporter) logStream(n int64, p protocol.ID, remote peer.ID, se
 	ps, rs := b.protocols[p], b.peers[remote]
 	if sent {
 		ps.TotalOut += n
-		rs.TotalOut += n
+		rs.stats.TotalOut += n
 	} else {
 		ps.TotalIn += n
-		rs.TotalIn += n
+		rs.stats.TotalIn += n
 	}
+	rs.lastActivity = time.Now()
 	b.protocols[p], b.peers[remote] = ps, rs
+	b.peerHighWater = max(b.peerHighWater, len(b.peers))
 }
 func (b *bandwidthReporter) LogSentMessageStream(n int64, p protocol.ID, remote peer.ID) {
 	b.logStream(n, p, remote, true)
@@ -68,8 +78,35 @@ func (b *bandwidthReporter) LogRecvMessageStream(n int64, p protocol.ID, remote 
 	b.logStream(n, p, remote, false)
 }
 
-// Reporter getters expose lifetime mean bytes/s. Chart rates are calculated
-// separately from successive samples, using monotonic elapsed time.
+// Remote IDs grow without bound on long-lived bootstrap peers during churn.
+// Retain connected and recently used remotes; exported global/protocol counters
+// keep all traffic. The grace interval covers crossed connection/hook snapshots.
+func (b *bandwidthReporter) prunePeers(connected []peer.ID) {
+	active := make(map[peer.ID]struct{}, len(connected))
+	for _, id := range connected {
+		active[id] = struct{}{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cutoff := time.Now().Add(-bandwidthPeerRetention)
+	for id, entry := range b.peers {
+		if _, ok := active[id]; !ok && !entry.lastActivity.After(cutoff) {
+			delete(b.peers, id)
+		}
+	}
+	// Deleting entries alone can retain a large map allocation after a burst.
+	if b.peerHighWater > 0 && len(b.peers) <= b.peerHighWater/2 {
+		retained := make(map[peer.ID]peerBandwidth, len(b.peers))
+		for id, entry := range b.peers {
+			retained[id] = entry
+		}
+		b.peers, b.peerHighWater = retained, len(retained)
+	}
+}
+
+// Getters divide retained counters by the process-session duration. Global and
+// protocol totals cover the whole session; per-peer attribution may be retired.
+// Chart rates use successive samples and monotonic elapsed time.
 func (b *bandwidthReporter) withRate(s metrics.Stats) metrics.Stats {
 	seconds := time.Since(b.started).Seconds()
 	if seconds > 0 {
@@ -86,7 +123,7 @@ func (b *bandwidthReporter) GetBandwidthTotals() metrics.Stats {
 func (b *bandwidthReporter) GetBandwidthForPeer(p peer.ID) metrics.Stats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.withRate(b.peers[p])
+	return b.withRate(b.peers[p].stats)
 }
 func (b *bandwidthReporter) GetBandwidthForProtocol(p protocol.ID) metrics.Stats {
 	b.mu.Lock()
@@ -98,7 +135,7 @@ func (b *bandwidthReporter) GetBandwidthByPeer() map[peer.ID]metrics.Stats {
 	defer b.mu.Unlock()
 	out := make(map[peer.ID]metrics.Stats, len(b.peers))
 	for p, s := range b.peers {
-		out[p] = b.withRate(s)
+		out[p] = b.withRate(s.stats)
 	}
 	return out
 }
@@ -141,6 +178,7 @@ func (s *Server) bandwidthLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.bandwidth.prunePeers(s.host.Network().Peers())
 			s.emitBandwidth(false)
 		}
 	}

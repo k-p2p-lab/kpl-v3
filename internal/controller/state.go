@@ -255,6 +255,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	reportedOccupied := max(0, h.Agent.ActiveNodes)
 	observedActive := 0
 	releasedReservations := 0
+	metricNodes := make([]model.Node, 0, len(h.Nodes))
 	for _, node := range h.Nodes {
 		// Both input timestamps use the Agent's clock. Preserve LastSeen for
 		// status/creation merges, but normalize its age for topology freshness.
@@ -287,6 +288,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			}
 		}
 		s.setNodeLocked(node)
+		// Initialize from the merged state, so old live reports cannot recreate
+		// metric baselines for terminal nodes. Marker reads happen after unlock.
+		metricNodes = append(metricNodes, node)
 		if s.reservations[node.ID] == h.Agent.ID {
 			delete(s.reservations, node.ID)
 			releasedReservations++
@@ -337,8 +341,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	}
 	s.agents[h.Agent.ID] = h.Agent
 	s.mu.Unlock()
-	for _, node := range h.Nodes {
-		node.AgentID = h.Agent.ID
+	for _, node := range metricNodes {
 		s.metrics.initNode(node)
 	}
 	s.notify()

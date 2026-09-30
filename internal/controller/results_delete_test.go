@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,106 @@ func TestResultDeletionTombstonePreventsLateEventResurrectionAfterRestart(t *tes
 	}
 	if len(server.state.snapshot().Experiments) != 0 || len(server.state.snapshot().Events) != 0 {
 		t.Fatal("deleted result remained in current Controller history")
+	}
+}
+
+func TestResultDeletionReleasesRunMetricsAndTiming(t *testing.T) {
+	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	run, _ := resultFixture(t, server, "run-forget", "completed", time.Now().UTC())
+	server.state.experiments[run.ID] = run
+	server.state.runTimings[run.ID] = &runTiming{phases: make([]phaseTiming, 100)}
+	agent, err := server.state.registerAgent(model.Agent{ID: "agent", URL: "http://agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{ID: "ended", RunID: run.ID, State: model.NodeReady}
+	keeper := model.Node{ID: "live", RunID: "other-run", State: model.NodeReady}
+	heartbeat := model.AgentHeartbeat{Agent: model.Agent{ID: agent.ID}, Nodes: []model.Node{node, keeper}, Partial: true}
+	if err := server.state.heartbeat(heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	events := []model.TraceEvent{
+		{RunID: keeper.RunID, Type: "publish", Topic: "topic"},
+		{RunID: run.ID, Type: "publish", Topic: "topic", Fields: map[string]any{"wireBytes": 123, "payloadEncoding": "raw"}},
+		{RunID: run.ID, Type: "send_prune", Fields: map[string]any{"controlEntries": 1, "messageIdCount": 2, "peerExchangeCount": 3}},
+		{RunID: run.ID, Type: "phase-operation-failed", Fields: map[string]any{"action": "publish"}},
+		{RunID: run.ID, Type: "telemetry_drop", Fields: map[string]any{"count": 4}},
+	}
+	if err := server.state.appendEvents(model.EventBatch{AgentID: agent.ID, Events: events}); err != nil {
+		t.Fatal(err)
+	}
+	node.State = model.NodeStopped
+	heartbeat.Nodes = []model.Node{node}
+	if err := server.state.heartbeat(heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.deleteSavedResult(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, retained := server.state.runTimings[run.ID]; retained {
+		t.Error("deleted result retained phase timing history")
+	}
+	if _, retained := server.state.runMetrics[run.ID]; retained {
+		t.Error("deleted result retained detailed live metrics")
+	}
+	// Filtering in place must release fields in the unused backing-array tail.
+	for _, event := range server.state.events[len(server.state.events):cap(server.state.events)] {
+		if event.Fields != nil || event.RunID != "" {
+			t.Error("recent-event backing array retained deleted evidence")
+			break
+		}
+	}
+	checkCounters := func() {
+		t.Helper()
+		for key := range gatherTestMetrics(t, server.state) {
+			if strings.HasSuffix(strings.SplitN(key, "{", 2)[0], "_total") && strings.Contains(key, `run_id="`+run.ID+`"`) {
+				t.Errorf("deleted run retained counter %s", key)
+				break
+			}
+		}
+		server.state.metrics.initializedAgents.Range(func(key, _ any) bool {
+			if key.([2]string)[0] == run.ID {
+				t.Error("deleted run retained Agent metric initialization")
+			}
+			return true
+		})
+		server.state.metrics.initializedTopics.Range(func(key, _ any) bool {
+			if key.([3]string)[0] == run.ID {
+				t.Error("deleted run retained topic metric initialization")
+			}
+			return true
+		})
+		requireMetricValue(t, gatherTestMetrics(t, server.state), "kpl_events_total", map[string]string{"run_id": keeper.RunID, "agent_id": agent.ID, "event_type": "publish", "topic": "topic"}, 1)
+	}
+	checkCounters()
+	// A replayed terminal record and an older live report must not reinitialize
+	// deleted counters. The terminal inventory fence still rejects revival.
+	for _, lateState := range []string{model.NodeStopped, model.NodeReady} {
+		node.State = lateState
+		heartbeat.Nodes = []model.Node{node}
+		if err := server.state.heartbeat(heartbeat); err != nil {
+			t.Fatal(err)
+		}
+		checkCounters()
+	}
+	// Even an ID absent from Controller inventory is fenced by the durable
+	// result marker, including after Controller restart.
+	for _, current := range []*Server{server, New(server.config, nil)} {
+		if current != server {
+			if _, err := current.state.registerAgent(model.Agent{ID: agent.ID, URL: agent.URL}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		node.ID, node.State = "late-unknown", model.NodeReady
+		heartbeat.Nodes = []model.Node{node}
+		if err := current.state.heartbeat(heartbeat); err != nil {
+			t.Fatal(err)
+		}
+		for key := range gatherTestMetrics(t, current.state) {
+			if strings.HasPrefix(key, "kpl_events_total{") && strings.Contains(key, `run_id="`+run.ID+`"`) {
+				t.Fatalf("late unknown node recreated deleted counters: %s", key)
+			}
+		}
 	}
 }
 

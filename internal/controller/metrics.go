@@ -24,13 +24,16 @@ type controllerMetrics struct {
 	controlPXRecords  *prometheus.CounterVec
 	operationFailures *prometheus.CounterVec
 	droppedEvents     *prometheus.CounterVec
+	lifecycleMu       sync.Mutex
+	resultDeleted     func(string) (bool, error)
 	initializedAgents sync.Map
 	initializedTopics sync.Map
 }
 
 func newControllerMetrics(s *state) *controllerMetrics {
 	m := &controllerMetrics{
-		registry: prometheus.NewRegistry(),
+		registry:      prometheus.NewRegistry(),
+		resultDeleted: s.resultDeletedLocked,
 		events: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "kpl_events_total", Help: "Telemetry and Controller events received since Controller startup.",
 		}, []string{"run_id", "agent_id", "event_type", "topic"}),
@@ -65,10 +68,20 @@ func newControllerMetrics(s *state) *controllerMetrics {
 // scrape between the heartbeat and publication can provide a rate baseline.
 // Initialization is shared by run/Agent/topic rather than by individual node.
 func (m *controllerMetrics) initNode(node model.Node) {
-	if node.RunID == "" || node.AgentID == "" {
+	if node.RunID == "" || node.AgentID == "" || node.State == model.NodeStopped || node.State == model.NodeFailed || node.State == model.NodeStopping {
 		return
 	}
-	if _, initialized := m.initializedAgents.LoadOrStore([2]string{node.RunID, node.AgentID}, struct{}{}); !initialized {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	agentKey := [2]string{node.RunID, node.AgentID}
+	if _, initialized := m.initializedAgents.Load(agentKey); !initialized {
+		// First initialization only; no disk reads on ordinary heartbeats. The
+		// durable marker also rejects late, previously unseen nodes after restart.
+		if deleted, err := m.resultDeleted(node.RunID); err != nil || deleted {
+			return
+		}
+	}
+	if _, initialized := m.initializedAgents.LoadOrStore(agentKey, struct{}{}); !initialized {
 		// Connection lifecycle events have no topic. These series must exist
 		// before disconnects to expose their first increase to Prometheus.
 		for _, eventType := range []string{"add_peer", "remove_peer"} {
@@ -110,6 +123,30 @@ func (m *controllerMetrics) initNode(node model.Node) {
 		}
 		m.droppedEvents.WithLabelValues(node.RunID, node.AgentID)
 	}
+}
+
+// Caller holds persistMu to serialize event ingestion with deletion. The
+// lifecycle lock serializes heartbeat initialization, whose marker lookup runs
+// outside state.mu. Prometheus keeps its own scraped history.
+func (m *controllerMetrics) deleteRun(runID string) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	labels := prometheus.Labels{"run_id": runID}
+	for _, counter := range []*prometheus.CounterVec{m.events, m.messageBytes, m.controlRPCs, m.controlEntries, m.controlMessageIDs, m.controlPXRecords, m.operationFailures, m.droppedEvents} {
+		counter.DeletePartialMatch(labels)
+	}
+	m.initializedAgents.Range(func(key, _ any) bool {
+		if key.([2]string)[0] == runID {
+			m.initializedAgents.Delete(key)
+		}
+		return true
+	})
+	m.initializedTopics.Range(func(key, _ any) bool {
+		if key.([3]string)[0] == runID {
+			m.initializedTopics.Delete(key)
+		}
+		return true
+	})
 }
 
 func (m *controllerMetrics) observeEvent(event model.TraceEvent) {

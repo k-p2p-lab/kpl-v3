@@ -3,9 +3,11 @@ package peer
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -30,6 +32,13 @@ func TestBandwidthReporterImmediateExactConcurrentCounters(t *testing.T) {
 			}
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			b.prunePeers([]peer.ID{"remote"})
+		}
+	}()
 	wg.Wait()
 	s := b.snapshot(true)
 	if s.SentBytes != 34000 || s.ReceivedBytes != 22000 || !s.Final || len(s.Protocols) != 1 || s.Protocols[0].SentBytes != 34000 || s.ElapsedNS <= 0 {
@@ -45,6 +54,43 @@ func TestBandwidthReporterImmediateExactConcurrentCounters(t *testing.T) {
 	if b.GetBandwidthForProtocol("/test").TotalOut != 34000 || b.GetBandwidthTotals().TotalIn != 22000 || len(b.GetBandwidthByPeer()) != 1 {
 		t.Fatal("getters leaked mutable state")
 	}
+}
+
+func TestBandwidthReporterRetiresChurnPeersWithoutLosingMeasuredBytes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newBandwidthReporter()
+		b.LogSentMessage(19)
+		b.LogSentMessageStream(19, "/test", "bootstrap")
+		var sent, received int64 = 19, 0
+		for round := range 12 {
+			for i := range 256 {
+				id := peer.ID(fmt.Sprintf("retired-%d-%d", round, i))
+				b.LogSentMessage(17)
+				b.LogSentMessageStream(17, "/test", id)
+				b.LogRecvMessage(11)
+				b.LogRecvMessageStream(11, "/test", id)
+				sent += 17
+				received += 11
+			}
+			// Recently used remotes survive a crossed connection snapshot.
+			b.prunePeers([]peer.ID{"bootstrap"})
+			if got := len(b.GetBandwidthByPeer()); got != 257 {
+				t.Fatalf("recent attribution lost: %d peers", got)
+			}
+			time.Sleep(bandwidthPeerRetention)
+			b.prunePeers([]peer.ID{"bootstrap"})
+			if got := len(b.GetBandwidthByPeer()); got != 1 || b.peerHighWater != 1 {
+				t.Fatalf("round %d retained churn history: peers=%d highWater=%d", round, got, b.peerHighWater)
+			}
+			if got := b.GetBandwidthForPeer("bootstrap").TotalOut; got != 19 {
+				t.Fatalf("idle connected peer lost attribution: %d", got)
+			}
+			sample := b.snapshot(true)
+			if sample.SentBytes != sent || sample.ReceivedBytes != received || len(sample.Protocols) != 1 || sample.Protocols[0].SentBytes != sent || sample.Protocols[0].ReceivedBytes != received {
+				t.Fatalf("retirement changed recorded bytes: %+v", sample)
+			}
+		}
+	})
 }
 
 func TestBandwidthReporterMeasuresRealLibp2pStreamBytes(t *testing.T) {

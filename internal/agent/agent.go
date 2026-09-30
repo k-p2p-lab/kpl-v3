@@ -601,7 +601,7 @@ func resolveCreateNodeConfig(request model.CreateNodeRequest) (model.NodeConfig,
 	return resolved, resolved.Type
 }
 
-func scheduleLifetimeStop(ctx context.Context, value string, stop func()) bool {
+func scheduleLifetimeStop(ctx context.Context, value string, createdAt time.Time, stop func()) bool {
 	if value == "" {
 		return false
 	}
@@ -609,13 +609,18 @@ func scheduleLifetimeStop(ctx context.Context, value string, stop func()) bool {
 	if err != nil || lifetime < 0 {
 		return false
 	}
+	// Anchor expiry before launching the waiter. Agent lock contention and
+	// goroutine scheduling must consume, rather than extend, the lifetime.
+	timer := time.NewTimer(max(time.Duration(0), time.Until(createdAt.Add(lifetime))))
 	go func() {
-		timer := time.NewTimer(lifetime)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 		case <-timer.C:
-			stop()
+			// Both channels can be ready for an immediate/overdue lifetime.
+			if ctx.Err() == nil {
+				stop()
+			}
 		}
 	}()
 	return true

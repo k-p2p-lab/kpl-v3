@@ -401,15 +401,18 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 	if err := removeResultDirectory(runs, id); err != nil {
 		return err
 	}
+	s.state.metrics.deleteRun(id)
 	s.state.mu.Lock()
 	delete(s.state.experiments, id)
 	delete(s.state.runMetrics, id)
+	delete(s.state.runTimings, id)
 	events := s.state.events[:0]
 	for _, event := range s.state.events {
 		if event.RunID != id {
 			events = append(events, event)
 		}
 	}
+	clear(s.state.events[len(events):])
 	s.state.events = events
 	s.state.mu.Unlock()
 	s.state.notify()

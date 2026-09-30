@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -9,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -134,6 +135,10 @@ func TestLiveSummaryRefreshesPendingDeadlinesAndLateEvidence(t *testing.T) {
 }
 
 func TestStreamCoalescesFrequentTelemetryAndSharesEncoding(t *testing.T) {
+	synctest.Test(t, testStreamCoalescing)
+}
+
+func testStreamCoalescing(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	first, err := s.streamSnapshot()
 	if err != nil {
@@ -143,43 +148,28 @@ func TestStreamCoalescesFrequentTelemetryAndSharesEncoding(t *testing.T) {
 	if err != nil || &first[0] != &second[0] {
 		t.Fatal("tabs did not share encoded snapshot")
 	}
-	server := httptest.NewServer(s.apiTestHandler(context.Background()))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 1250*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v1/stream", nil)
-	response, err := server.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream", nil).WithContext(ctx)
+	response := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.state.notify()
-			}
-		}
+		s.handleStream(response, req)
 	}()
-	count := 0
-	scanner := bufio.NewScanner(response.Body)
-	for scanner.Scan() {
-		if scanner.Text() == "event: snapshot" {
-			count++
-		}
+	synctest.Wait()
+	// Measure the same interval without racing a client timeout against EOF.
+	for range 1250 {
+		s.state.notify()
+		time.Sleep(time.Millisecond)
 	}
-	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
-	}
+	cancel()
 	<-done
-	if count < 1 || count > 2 {
+	if count := strings.Count(response.Body.String(), "event: snapshot\n"); count != 2 {
 		t.Fatalf("frequent telemetry produced %d snapshots in 1.25 seconds", count)
+	}
+	if len(s.state.watchers) != 0 {
+		t.Fatal("canceled stream retained its state subscription")
 	}
 }
 

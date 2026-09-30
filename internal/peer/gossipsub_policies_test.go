@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -245,6 +247,45 @@ func TestGossipBlacklistExpiresWithoutBackgroundWorkers(t *testing.T) {
 	if blacklist.Contains(id) || !blacklist.Add(id) {
 		t.Fatal("expired blacklist entry did not recover")
 	}
+}
+
+func TestGossipBlacklistReclaimsExpiredChurnIDsOnUnrelatedAccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		blacklist := &gossipBlacklist{ttl: time.Second, entries: make(map[peer.ID]time.Time)}
+		for round := range 12 {
+			for i := range 256 {
+				if !blacklist.Add(peer.ID(fmt.Sprintf("retired-%d-%d", round, i))) {
+					t.Fatal("new churn ID was already blacklisted")
+				}
+			}
+			time.Sleep(time.Second)
+			if blacklist.Contains("unrelated-peer") || len(blacklist.entries) != 0 || blacklist.highWater != 0 {
+				t.Fatalf("round %d retained expired IDs: entries=%d highWater=%d", round, len(blacklist.entries), blacklist.highWater)
+			}
+		}
+	})
+}
+
+func TestGossipBlacklistExpiryPreservesPolicy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		blacklist := &gossipBlacklist{ttl: 2 * time.Second, entries: make(map[peer.ID]time.Time)}
+		permanent := &gossipBlacklist{entries: make(map[peer.ID]time.Time)}
+		blacklist.Add("old")
+		permanent.Add("blocked")
+		time.Sleep(time.Second)
+		if blacklist.Add("old") {
+			t.Fatal("duplicate admission changed the expiry policy")
+		}
+		blacklist.Add("recent")
+		time.Sleep(time.Second)
+		if blacklist.Contains("old") || !blacklist.Contains("recent") {
+			t.Fatal("sweep changed unexpired membership or refreshed a duplicate")
+		}
+		time.Sleep(time.Hour)
+		if !permanent.Contains("blocked") || permanent.Add("blocked") {
+			t.Fatal("zero-TTL blacklist lost permanent membership")
+		}
+	})
 }
 
 type policyDiscovery struct{ advertisements chan discovery.Options }

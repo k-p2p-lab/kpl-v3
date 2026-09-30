@@ -222,15 +222,39 @@ func gossipSubscriptionFilter(config model.PubSubSubscriptionFilterConfig) pubsu
 // Lazy expiry avoids leaking a time-cache cleanup goroutine after a peer stops.
 // PubSub may call Add/Contains from callbacks, so the adapter owns its lock.
 type gossipBlacklist struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	entries map[peer.ID]time.Time
+	mu        sync.Mutex
+	ttl       time.Duration
+	entries   map[peer.ID]time.Time
+	nextPrune time.Time
+	highWater int
+}
+
+// Callers hold mu. Sweep expiry on normal access, including previously unseen
+// IDs, so departed peers need not be queried again to release their entries.
+func (b *gossipBlacklist) pruneExpiredLocked(now time.Time) {
+	if b.ttl <= 0 || now.Before(b.nextPrune) {
+		return
+	}
+	b.nextPrune = now.Add(min(b.ttl, time.Minute))
+	for id, expires := range b.entries {
+		if !now.Before(expires) {
+			delete(b.entries, id)
+		}
+	}
+	if b.highWater > 0 && len(b.entries) <= b.highWater/2 {
+		retained := make(map[peer.ID]time.Time, len(b.entries))
+		for id, expires := range b.entries {
+			retained[id] = expires
+		}
+		b.entries, b.highWater = retained, len(retained)
+	}
 }
 
 func (b *gossipBlacklist) Add(id peer.ID) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
+	b.pruneExpiredLocked(now)
 	at, exists := b.entries[id]
 	if exists && (b.ttl == 0 || now.Before(at)) {
 		return false
@@ -240,13 +264,16 @@ func (b *gossipBlacklist) Add(id peer.ID) bool {
 	} else {
 		b.entries[id] = time.Time{}
 	}
+	b.highWater = max(b.highWater, len(b.entries))
 	return true
 }
 func (b *gossipBlacklist) Contains(id peer.ID) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	now := time.Now()
+	b.pruneExpiredLocked(now)
 	at, exists := b.entries[id]
-	if exists && b.ttl > 0 && !time.Now().Before(at) {
+	if exists && b.ttl > 0 && !now.Before(at) {
 		delete(b.entries, id)
 		return false
 	}

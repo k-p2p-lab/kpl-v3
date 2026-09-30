@@ -45,12 +45,20 @@ test('analysis polling preserves the visible list and refresh label while the re
   assert.equal(element('#savedResultsTable').hidden, false);
   assert.equal(element('#savedResultsTable').attributes['aria-busy'], 'true');
   assert.equal(element('#refreshResults').textContent, 'Refresh');
+  for (const selector of ['#refreshResults', '#refreshExperiments']) {
+    assert.equal(element(selector).disabled, true);
+    assert.equal(element(selector).attributes['aria-busy'], 'true');
+  }
   assert.equal(rows.writes, writes);
   resolve([{ ...run }]);
   await refreshing;
   assert.equal(element('#savedResultsStatus').hidden, true);
   assert.equal(element('#savedResultsTable').attributes['aria-busy'], 'false');
   assert.equal(element('#refreshResults').textContent, 'Refresh');
+  for (const selector of ['#refreshResults', '#refreshExperiments']) {
+    assert.equal(element(selector).disabled, false);
+    assert.equal(element(selector).attributes['aria-busy'], 'false');
+  }
   assert.equal(rows.writes, writes, 'an unchanged poll rebuilt the result rows');
   assert.equal([...timers.values()].filter(timer => timer.delay === 3000).length, 1);
   state.savedResults[0].analysis = { state: 'running', progress: 10 };
@@ -83,6 +91,8 @@ test('a failed refresh retains the loaded results and reports the error', async 
   assert.equal(element('#savedResultsStatus').attributes.role, 'alert');
   assert.match(element('#savedResultsStatus').textContent, /Controller unavailable.*Showing the last loaded list/);
   assert.equal(element('#refreshResults').disabled, false);
+  assert.equal(element('#refreshExperiments').disabled, false);
+  assert.equal(element('#refreshExperiments').attributes['aria-busy'], 'false');
 });
 
 

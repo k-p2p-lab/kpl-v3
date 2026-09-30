@@ -207,6 +207,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 }
 .panel-header { min-height: 4rem; justify-content: space-between; gap: 1rem; padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--line-soft); }
 .panel-header > div:first-child { min-width: 0; margin-right: auto; }
+.run-header-actions { display: flex; align-items: center; gap: .6rem; flex-shrink: 0; }
 .panel-body { min-width: 0; }
 .events-panel > .panel-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .events-panel > .panel-header { flex: 0 0 auto; }

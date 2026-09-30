@@ -63,3 +63,41 @@ test('isolated, bar and scatter ranges stay shaded; log and clipped panels remai
   assert.equal((panels.match(/class="chart-uncertainty"/g) || []).length, 2);
   assert.doesNotMatch(panels, /clip-path|NaN|Infinity/);
 });
+
+test('many series keep distinct colors shared by lines, uncertainty and legends', () => {
+  const input = chart(Array.from({ length: 48 }, (_, i) => ({
+    name: `Group ${i + 1}`, points: [{ x: 0, y: i + 1, error: .2 }, { x: 1, y: i + 2, error: .3 }],
+  })));
+  const before = JSON.stringify(input), csv = chartCSV(input), svg = chartSVG(input);
+  const lines = [...data(svg).matchAll(/stroke="([^"]+)" stroke-width="2"/g)].map(match => match[1]);
+  const ranges = [...shades(svg).matchAll(/<g fill="([^"]+)"/g)].map(match => match[1]);
+  const legends = [...svg.matchAll(/<rect x="68" y="\d+" width="9" height="9" fill="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(lines.length, 48);
+  assert.equal(new Set(lines).size, 48, 'series colors repeated within one chart');
+  assert.deepEqual(ranges, lines);
+  assert.deepEqual(legends, lines);
+  assert.equal(chartSVG(input), svg, 'colors changed between renders');
+  assert.equal(JSON.stringify(input), before);
+  assert.equal(chartCSV(input), csv);
+});
+
+test('minimal point marks preserve observations, gaps and scatter color meaning', () => {
+  const points = [{ x: 0, y: 1 }, { x: 1, y: 2 }, { x: 2, y: null }, { x: 3, y: 4 }];
+  for (const mode of ['line', 'step', 'scatter']) {
+    const input = chart([{ name: 'Observations', points }], { mode });
+    const svg = chartSVG(input);
+    const markers = [...data(svg).matchAll(/<circle [^>]*r="([^"]+)"/g)];
+    assert.equal(markers.length, 3, 'a valid or isolated observation disappeared');
+    assert.ok(markers.every(match => Number(match[1]) > 0 && Number(match[1]) <= .6));
+    if (mode === 'scatter') {
+      assert.doesNotMatch(data(svg), /stroke-width="2"/, 'independent observations were connected');
+      assert.equal((data(svg).match(/tabindex="0"/g) || []).length, 3);
+    } else {
+      const path = data(svg).match(/<path d="([^"]+)"[^>]+stroke-width="2"/)[1];
+      assert.equal((path.match(/M/g) || []).length, 2, 'missing data no longer breaks the line');
+    }
+  }
+  const svg = chartSVG(chart([{ name: 'Reach', points: [{ x: 1, y: 1, colorValue: 0 }, { x: 2, y: 2, colorValue: 1 }] }], { mode: 'scatter' }));
+  assert.match(data(svg), /fill="hsl\(0,65%,35%\)"/);
+  assert.match(data(svg), /fill="hsl\(120,65%,35%\)"/);
+});

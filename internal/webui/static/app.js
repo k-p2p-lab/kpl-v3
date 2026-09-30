@@ -1418,10 +1418,12 @@ function renderSavedResults() {
     ? `${formatNumber(visible.length)} of ${formatNumber(results.length)} saved runs`
     : `${formatNumber(results.length)} saved runs`);
   const status = $("#savedResultsStatus");
-  const refresh = $("#refreshResults");
-  refresh.disabled = state.resultsLoading;
-  setText(refresh, "Refresh");
-  refresh.setAttribute("aria-busy", String(state.resultsLoading));
+  for (const selector of ["#refreshResults", "#refreshExperiments"]) {
+    const refresh = $(selector);
+    refresh.disabled = state.resultsLoading;
+    setText(refresh, "Refresh");
+    refresh.setAttribute("aria-busy", String(state.resultsLoading));
+  }
   $("#savedResultsTable").setAttribute("aria-busy", String(state.resultsLoading));
   status.classList.toggle("error", Boolean(state.resultsError));
   status.setAttribute("role", state.resultsError ? "alert" : "status");
@@ -2218,6 +2220,7 @@ $("#toggleAgentEnabled").addEventListener("click", () => void toggleAgentEnabled
 $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
 $("#refreshResults").addEventListener("click", refreshSavedResults);
+$("#refreshExperiments").addEventListener("click", refreshSavedResults);
 $("#refreshAgents").addEventListener("click", () => refreshAgents());
 $("#discoverAgents").addEventListener("click", () => refreshAgents(true));
 globalThis.KPLAgentResources?.init({api});

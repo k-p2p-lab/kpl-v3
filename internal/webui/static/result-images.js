@@ -17,7 +17,28 @@
     "#0f766e",
     "#dc2626",
     "#7c5b18",
+    "#be185d",
+    "#0369a1",
+    "#4d7c0f",
+    "#a21caf",
+    "#475569",
+    "#0e7490",
+    "#b45309",
+    "#4338ca",
+    "#047857",
+    "#9f1239",
+    "#6b21a8",
+    "#3f6212",
+    "#1e3a8a",
+    "#9d4b66",
   ];
+  function seriesColor(index) {
+    if (index < colors.length) return colors[index];
+    const extra = index - colors.length;
+    const hue = (23 + extra * 137.508) % 360;
+    const lightness = [36, 30, 38][extra % 3];
+    return `hsl(${hue.toFixed(3)},65%,${lightness}%)`;
+  }
   const finite = (value) => typeof value === "number" && Number.isFinite(value);
   const escape = (value) =>
     String(value ?? "").replace(
@@ -209,6 +230,7 @@
       return `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="${offset}" viewBox="0 0 640 ${offset}">${nested}</svg>`;
     }
     const eligible = (p) => pointOK(p) && (!logX || p.x > 0);
+    const palette = series.map((_, index) => seriesColor(index));
     const valid = series.flatMap((s) => s.points.filter(eligible));
     const footer =
       (source + " · " + note).match(/.{1,90}(?:\s|$)|.{1,90}/g) || [];
@@ -290,7 +312,7 @@
     svg += `<text x="342" y="310" fill="#34485b" text-anchor="middle">${escape(xLabel)}</text><text transform="translate(16 150) rotate(-90)" fill="#34485b" text-anchor="middle">${escape(yLabel)}</text>`;
     let uncertainty = "", data = "";
     series.forEach((s, index) => {
-      const color = colors[index % colors.length];
+      const color = palette[index];
       let d = "",
         previous = null;
       const width = Math.max(
@@ -371,7 +393,9 @@
               : `L${f(plotX(p.x))} ${f(y(p.y))}`
             : `M${f(plotX(p.x))} ${f(y(p.y))}`;
         }
-        data += `<circle cx="${f(plotX(p.x))}" cy="${f(y(p.y))}" r="${mode === "scatter" ? 6 : 2}" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
+        // Tiny marks disappear into the line stroke while keeping isolated
+        // observations visible. Independent scatter cases keep their own marks.
+        data += `<circle cx="${f(plotX(p.x))}" cy="${f(y(p.y))}" r="0.6" fill="${pointColor}"${mode === "scatter" ? ` tabindex="0" aria-label="${escape(description)}"` : ""}><title>${escape(description)}</title></circle>`;
         previous = p;
       }
       flushBand();
@@ -385,7 +409,7 @@
     // A nested viewport avoids clip-path ID collisions in multi-panel exports.
     svg += `<svg class="chart-uncertainty" x="68" y="28" width="548" height="238" viewBox="68 28 548 238" overflow="hidden" pointer-events="none" aria-hidden="true">${uncertainty}</svg><g class="chart-data">${data}</g>`;
     series.forEach((s, i) => {
-      svg += `<rect x="68" y="${326 + i * 20}" width="9" height="9" fill="${colors[i % colors.length]}"/><text x="84" y="${335 + i * 20}" fill="#34485b"><title>${escape(s.name)}</title>${escape(s.name.length > 76 ? s.name.slice(0, 73) + "…" : s.name)}</text>`;
+      svg += `<rect x="68" y="${326 + i * 20}" width="9" height="9" fill="${palette[i]}"/><text x="84" y="${335 + i * 20}" fill="#34485b"><title>${escape(s.name)}</title>${escape(s.name.length > 76 ? s.name.slice(0, 73) + "…" : s.name)}</text>`;
     });
     return svg + foot + "</svg>";
   }

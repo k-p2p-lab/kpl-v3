@@ -23,6 +23,7 @@ const analysisSummaryFile = "analysis-summary.json"
 var errAnalysisQueueFull = errors.New("analysis queue is full; try again after a job finishes")
 
 type analysisJobStatus struct {
+	SavedAnalysisID string    `json:"savedAnalysisId,omitempty"`
 	SourceHash      string    `json:"sourceHash,omitempty"`
 	Reused          bool      `json:"reused,omitempty"`
 	SourceRevision  string    `json:"sourceRevision,omitempty"`
@@ -43,6 +44,22 @@ type analysisJobStatus struct {
 	SnapshotAt      time.Time `json:"snapshotAt"`
 	Error           string    `json:"error,omitempty"`
 	ResultURL       string    `json:"resultUrl,omitempty"`
+}
+
+// Saved artifacts are explicitly selected while a replacement is in progress.
+// The ordinary result endpoint continues to require a completed current job.
+func (status analysisJobStatus) savedAnalysisID() string {
+	if status.State == "completed" {
+		return status.ID
+	}
+	return status.SavedAnalysisID
+}
+
+func (status analysisJobStatus) servesArtifact(jobID string, saved bool) bool {
+	if status.State == "completed" {
+		return jobID == "" || jobID == status.ID
+	}
+	return saved && jobID != "" && jobID == status.SavedAnalysisID
 }
 
 type analysisJob struct {
@@ -171,7 +188,7 @@ func (s *Server) loadAnalysisJob(id string) (*analysisJob, error) {
 	if err := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size)).Decode(&status); err != nil {
 		return nil, fmt.Errorf("read analysis job: %w", err)
 	}
-	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) {
+	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
 		return nil, errors.New("invalid analysis job metadata")
 	}
 	switch status.State {
@@ -257,6 +274,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	}
 	now := time.Now().UTC()
 	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}}
+	job.status.SavedAnalysisID = existing.status.savedAnalysisID()
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
 		previous := existing.status
 		job.previous = &previous
@@ -453,6 +471,17 @@ func (s *Server) saveAnalysisJob(ctx context.Context, job *analysisJob, analysis
 		return err
 	}
 	defer current.Close()
+	// Invalidate the old artifact reference durably before replacing either
+	// file. A crash or failed metadata write cannot serve a new file under an
+	// old saved-analysis ID after restart.
+	if job.status.SavedAnalysisID != "" {
+		status := job.status
+		status.SavedAnalysisID = ""
+		if err := writeAnalysisJSON(root, analysisJobFile, status); err != nil {
+			return err
+		}
+		job.status = status
+	}
 	if err := artifact.publish(analysisResultFile); err != nil {
 		return err
 	}
@@ -533,7 +562,7 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 		if err != nil {
 			return resultFile{}, err
 		}
-		if job.status.State != "completed" || r.URL.Query().Get("jobId") != "" && r.URL.Query().Get("jobId") != job.status.ID {
+		if !job.status.servesArtifact(r.URL.Query().Get("jobId"), r.URL.Query().Get("saved") == "1") {
 			return resultFile{}, errResultBusy
 		}
 		s.state.persistMu.Lock()

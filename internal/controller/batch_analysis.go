@@ -115,7 +115,7 @@ func (s *Server) loadBatchAnalysis(id string) (*batchAnalysisJob, error) {
 	if err = json.NewDecoder(io.NewSectionReader(file.file, 0, file.size)).Decode(&status); err != nil {
 		return nil, err
 	}
-	if status.Version != batchAnalysisVersion || status.BatchID != id || !validResultID(status.ID) {
+	if status.Version != batchAnalysisVersion || status.BatchID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
 		return nil, errors.New("invalid batch analysis metadata")
 	}
 	switch status.State {
@@ -282,6 +282,7 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	}
 	now := time.Now().UTC()
 	status := batchAnalysisStatus{analysisJobStatus: analysisJobStatus{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}, BatchID: id, Membership: membership, TotalRuns: len(selected), ExpectedRuns: expected, RunIDs: []string{}}
+	status.SavedAnalysisID = existing.status.savedAnalysisID()
 	for _, run := range selected {
 		status.RunIDs = append(status.RunIDs, run.ID)
 	}
@@ -481,6 +482,15 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Clear the persisted old-artifact reference before publishing a replacement.
+	if job.status.SavedAnalysisID != "" {
+		status := job.status
+		status.SavedAnalysisID = ""
+		if err := s.persistBatchAnalysis(status); err != nil {
+			return err
+		}
+		job.status = status
+	}
 	if err := artifact.publish(batchResultFile); err != nil {
 		return err
 	}
@@ -564,7 +574,7 @@ func (s *Server) handleBatchArtifact(w http.ResponseWriter, r *http.Request, id 
 		if err != nil {
 			return resultFile{}, err
 		}
-		if job.status.State != "completed" || r.URL.Query().Get("jobId") != "" && r.URL.Query().Get("jobId") != job.status.ID {
+		if !job.status.servesArtifact(r.URL.Query().Get("jobId"), r.URL.Query().Get("saved") == "1") {
 			return resultFile{}, errResultBusy
 		}
 		root, err := s.batchAnalysisDirectory(id, false)

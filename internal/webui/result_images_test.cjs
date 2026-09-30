@@ -565,3 +565,145 @@ test("score component charts keep observer groups, negative penalties and missin
  assert.equal(p3b.series[0].points[0].y,-3);
  assert.ok(!charts.some(c=>c.id==='peer-score-p7'));
 });
+
+for (const outcome of ['unchanged', 'changed', 'failed']) {
+  test(`saved analysis stays visible while hashes are checked: ${outcome}`, async () => {
+    let poll, reads = 0, renders = 0;
+    const requests = [];
+    const { ui, element } = fixture(async (url, options) => {
+      requests.push(url);
+      if (url.includes('/result?')) {
+        const data = artifact('run');
+        if (url.includes('jobId=new-job')) {
+          data.analysisId = 'new-job';
+          data.result.name = 'Updated run';
+        }
+        return data;
+      }
+      if (options.method === 'POST') return job('run', 'running', { id: 'check-job', phase: 'checking-sources', savedAnalysisId: 'run-job' });
+      if (++reads === 1) return job('run', 'completed', { stale: true });
+      return new Promise(resolve => { poll = resolve; });
+    }, async () => { renders++; return png; });
+    const work = ui.open('run');
+    await settle(() => poll);
+    assert.match(element('resultImagesGrid').innerHTML, /graph-node_count/);
+    assert.match(element('resultImagesStatus').textContent, /Showing saved analysis.*Comparing source content hashes/);
+    assert.match(element('resultImagesDate').textContent, /Saved analysis; checking for updates/);
+    assert.equal(element('downloadResultAnalysis').hidden, false);
+    assert.match(element('downloadResultAnalysis').href, /jobId=run-job&saved=1$/);
+    assert.equal(element('refreshResultImages').disabled, true);
+    assert.equal(element('resultImagesProgress').hidden, false);
+    const before = renders;
+    element('resultMetricSearch').value = 'node';
+    element('resultMetricSearch').listeners.input();
+    if (outcome === 'unchanged') poll(job('run', 'completed', { reused: true }));
+    else if (outcome === 'changed') poll(job('run', 'completed', { id: 'new-job' }));
+    else poll(job('run', 'failed', { id: 'check-job', error: 'Archive is unavailable' }));
+    await work;
+    assert.equal(element('refreshResultImages').disabled, false);
+    assert.equal(element('resultImagesProgress').hidden, true);
+    if (outcome === 'unchanged') {
+      assert.equal(renders, before, 'unchanged hashes re-rendered all PNGs');
+      assert.equal(requests.filter(url => url.includes('/result?')).length, 1);
+      assert.equal(element('resultMetricSearch').value, 'node');
+      assert.match(element('resultImagesDate').textContent, /Source unchanged/);
+      assert.doesNotMatch(element('resultImagesDate').textContent, /checking for updates/);
+    } else if (outcome === 'changed') {
+      assert.ok(renders > before);
+      assert.equal(element('resultImagesName').textContent, 'Updated run');
+      assert.match(element('downloadResultAnalysis').href, /jobId=new-job$/);
+    } else {
+      assert.equal(renders, before);
+      assert.match(element('resultImagesGrid').innerHTML, /graph-node_count/);
+      assert.match(element('resultImagesStatus').textContent, /Showing saved analysis.*Archive is unavailable/);
+      assert.equal(element('retryResultImages').hidden, false);
+      assert.match(element('resultImagesDate').textContent, /update not confirmed/);
+    }
+    element('resultImagesDialog').close();
+  });
+}
+
+test('reopening a running verification loads its saved result without submitting again', async () => {
+  let poll, reads = 0, posts = 0;
+  const { ui, element } = fixture(async (url, options) => {
+    if (url.includes('/result?')) {
+      assert.match(url, /jobId=run-job&saved=1$/);
+      return artifact('run');
+    }
+    if (options.method === 'POST') posts++;
+    if (++reads === 1) return job('run', 'running', { id: 'checking-job', savedAnalysisId: 'run-job', phase: 'checking-sources' });
+    return new Promise(resolve => { poll = resolve; });
+  });
+  const work = ui.open('run');
+  await settle(() => poll);
+  assert.match(element('resultImagesGrid').innerHTML, /graph-node_count/);
+  assert.match(element('resultImagesStatus').textContent, /Comparing source content hashes/);
+  assert.equal(posts, 0);
+  element('resultImagesDialog').close();
+  poll(job('run', 'completed', { reused: true }));
+  await work;
+  assert.equal(element('resultImagesGrid').innerHTML, '');
+  assert.equal(element('resultImagesDialog').open, false);
+});
+
+test('batch mean summary and charts remain available during source verification', async () => {
+  let poll, reads = 0;
+  const runs = [sample('first'), sample('second')];
+  for (const run of runs) run.result.batchId = 'batch';
+  const data = { version: 1, analysisId: 'saved-batch', batchId: 'batch', aggregation: 'equal-run-mean-v1',
+    asOf: sample().asOf, expectedRuns: 2, missingRuns: 0, excluded: [], runs,
+    summary: { 'metrics.averageLatencyMs': { average: 15, deviation: 0, count: 2 } } };
+  const completed = { id: 'saved-batch', batchId: 'batch', state: 'completed', analysisVersion: 6 };
+  const { ui, element } = fixture(async (url, options) => {
+    if (url.includes('/result?')) return data;
+    if (options.method === 'POST') return { ...completed, id: 'checking-batch', state: 'running', phase: 'checking-sources', totalRuns: 2, savedAnalysisId: completed.id };
+    if (++reads === 1) return { ...completed, state: 'idle', stale: true };
+    return new Promise(resolve => { poll = resolve; });
+  });
+  const work = ui.openBatch('batch');
+  await settle(() => poll);
+  assert.equal(element('batchAnalysisSummary').hidden, false);
+  assert.match(element('batchAnalysisSummary').innerHTML, /15/);
+  assert.match(element('resultImagesGrid').innerHTML, /graph-node_count/);
+  assert.match(element('resultImagesStatus').textContent, /Showing saved analysis.*Comparing source content hashes/);
+  assert.match(element('downloadResultAnalysis').href, /batch-analysis-jobs\/batch\/result\?jobId=saved-batch&saved=1$/);
+  poll({ ...completed, reused: true });
+  await work;
+  assert.match(element('resultImagesDate').textContent, /Source unchanged/);
+  element('resultImagesDialog').close();
+});
+
+test('manual reanalysis keeps existing charts through a slow status request', async () => {
+  let hold = false, release;
+  const { ui, element } = fixture(async (url) => {
+    if (hold && !url.includes('/result?')) return new Promise(resolve => { release = resolve; });
+    return completedAPI(url);
+  });
+  await ui.open('run');
+  const grid = element('resultImagesGrid').innerHTML;
+  const bundle = element('downloadAllResultImages').href;
+  hold = true;
+  const refresh = ui.open('run', { refresh: true });
+  assert.equal(element('resultImagesGrid').innerHTML, grid);
+  assert.equal(element('downloadAllResultImages').href, bundle);
+  await settle(() => release);
+  element('resultImagesDialog').close();
+  release(job());
+  await refresh;
+  assert.equal(element('resultImagesGrid').innerHTML, '');
+});
+
+test('missing saved artifacts do not stop source checking and current analysis', async () => {
+  let posts = 0;
+  const { ui, element } = fixture(async (url, options) => {
+    if (url.includes('&saved=1')) throw Object.assign(new Error('Saved file unavailable'), { status: 404 });
+    if (url.includes('/result?')) return { ...artifact('run'), analysisId: 'new-job' };
+    if (options.method === 'POST') { posts++; return job('run', 'completed', { id: 'new-job' }); }
+    return job('run', 'completed', { stale: true });
+  });
+  await ui.open('run');
+  assert.equal(posts, 1);
+  assert.match(element('resultImagesStatus').textContent, /images ready/);
+  assert.match(element('downloadResultAnalysis').href, /jobId=new-job$/);
+  element('resultImagesDialog').close();
+});

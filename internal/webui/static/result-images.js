@@ -777,6 +777,8 @@
       controller = null,
       revision = 0,
       currentData = null,
+      displayedAnalysis = null,
+      imagesReady = false,
       objectURLs = [];
     let researchTools = null;
     let imageGroups = [], imageAssets = new Map(), selectedProtocol = "common", imageFailure = "";
@@ -811,12 +813,16 @@
       if ($("downloadAllResultImages"))
         $("downloadAllResultImages").hidden = true;
     }
-    function cancel() {
+    function cancel(preserve = false) {
       revision++;
       controller?.abort();
       controller = null;
       researchTools?.cancel();
-      clearImages();
+      if (preserve !== true) {
+        clearImages();
+        displayedAnalysis = null;
+        imagesReady = false;
+      }
     }
     function blobURL(blob) {
       const url = root.URL.createObjectURL(blob);
@@ -1009,63 +1015,116 @@
     }
     async function open(id, { refresh = false, retry = false, isBatch = false } = {}) {
       if (!id || (currentID === id && currentBatch === isBatch && controller)) return;
+      const preserve = dialog.open && currentID === id && currentBatch === isBatch && !!displayedAnalysis;
       if (!dialog.open || currentID !== id || currentBatch !== isBatch) selectedProtocol = "common";
-      cancel();
+      cancel(preserve);
       currentID = id;
       currentBatch = isBatch;
-      if ($("batchAnalysisSummary")) $("batchAnalysisSummary").hidden = true;
-      currentData = null;
+      if (!preserve) {
+        if ($("batchAnalysisSummary")) $("batchAnalysisSummary").hidden = true;
+        currentData = null;
+        $("resultImagesName").textContent = id;
+        $("resultImagesDate").textContent = "";
+        $("downloadResultAnalysis").hidden = true;
+        $("refreshResultImages").hidden = true;
+      }
       if ($("researchTools")) $("researchTools").hidden = true;
       const requestRevision = revision,
         view = new AbortController();
       controller = view;
       const path = `/api/v1/${isBatch ? "batch-analysis-jobs" : "analysis-jobs"}/${encodeURIComponent(id)}`;
-      $("resultImagesName").textContent = id;
-      $("resultImagesDate").textContent = "";
+      const refreshButton = $("refreshResultImages");
+      refreshButton.disabled = true;
       $("resultImagesProgress").hidden = true;
-      $("downloadResultAnalysis").hidden = true;
-      $("refreshResultImages").hidden = true;
-      status("Checking analysis job…");
-      dialog.setAttribute("aria-busy", "true");
+      status(`${preserve ? "Showing saved analysis · " : ""}Checking analysis job…`);
+      dialog.setAttribute("aria-busy", preserve ? "false" : "true");
       if (!dialog.open) dialog.showModal();
+
+      function showMetadata(data, job, saved) {
+        // Pin downloads to the displayed snapshot, never the in-progress job.
+        const download = $("downloadResultAnalysis");
+        download.href = `${path}/result?jobId=${encodeURIComponent(data.analysisId)}${saved ? "&saved=1" : ""}`;
+        download.download = `${id}${isBatch ? "-batch" : ""}-analysis.json`;
+        download.hidden = false;
+        refreshButton.hidden = false;
+        const suffix = saved ? " · Saved analysis; checking for updates" : job.reused ? " · Source unchanged; saved analysis reused" : "";
+        if (isBatch) {
+          $("resultImagesName").textContent = `${data.name || id} · Batch mean`;
+          $("resultImagesDate").textContent = `${batch.description(data)} · Computed ${timeLabel(data.asOf)}${suffix}`;
+          const summary = $("batchAnalysisSummary");
+          if (summary) {
+            summary.hidden = false;
+            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary>${batch.reliabilityMarkup(data, escape)}<p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead>${batch.summaryGroups(data.summary).map(group => `<tbody><tr class="metric-category-row"><th colspan="4" scope="rowgroup">${escape(research.categoryLabels[group.category])}</th></tr>${group.rows.map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody>`).join("")}</table></div>`;
+          }
+        } else {
+          $("resultImagesName").textContent = data.result.name || id;
+          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}${suffix}`;
+          currentData = data;
+        }
+      }
+      async function showAnalysis(job, analysisID, saved = false) {
+        let data = displayedAnalysis;
+        if (data?.analysisId !== analysisID) {
+          // Construct the same-origin URL locally, including for saved previews.
+          data = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${saved ? "&saved=1" : ""}`, {}, view.signal);
+          if (isBatch) batch.validate(data, id); else validateResponse(data, id);
+          if (data.analysisId !== analysisID)
+            throw new Error("The saved analysis changed. Reopen this result.");
+        }
+        if (revision !== requestRevision) return;
+        const needsImages = displayedAnalysis?.analysisId !== analysisID || !imagesReady;
+        if (needsImages) {
+          clearImages();
+          displayedAnalysis = data;
+          imagesReady = false;
+        }
+        showMetadata(data, job, saved);
+        if (needsImages) {
+          if (isBatch) {
+            await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
+          } else {
+            await prepareImages(buildCharts(data), id, view, requestRevision);
+          }
+          if (revision !== requestRevision) return;
+          imagesReady = true;
+        }
+        dialog.setAttribute("aria-busy", "false");
+      }
       try {
         let job = await request(path, {}, view.signal);
-        if (
-          refresh || job.stale ||
-          job.state === "idle" ||
+        if (revision !== requestRevision) return;
+        if ((isBatch ? job.batchId : job.runId) !== id) throw new Error("Unexpected analysis job response.");
+        const needsUpdate = refresh || job.stale || job.state === "idle" ||
           (job.state === "completed" && (job.analysisVersion || 0) < 5) ||
-          (retry && ["failed", "interrupted", "canceled"].includes(job.state))
-        ) {
-          job = await request(
-            path + (refresh ? "?refresh=1" : ""),
-            { method: "POST" },
-            view.signal,
-          );
+          (retry && ["failed", "interrupted", "canceled"].includes(job.state));
+        const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
+        if (savedID && (needsUpdate || job.state !== "completed")) {
+          try {
+            await showAnalysis(job, savedID, true);
+          } catch (error) {
+            if (view.signal.aborted || [401, 403].includes(error.status)) throw error;
+            // A missing/replaced/unreadable cache must not prevent checking or
+            // computing the current result. Keep an already displayed snapshot.
+          }
+        }
+        if (revision !== requestRevision) return;
+        if (needsUpdate) {
+          status(`${displayedAnalysis ? "Showing saved analysis · " : ""}Requesting analysis update…`);
+          job = await request(path + (refresh ? "?refresh=1" : ""), { method: "POST" }, view.signal);
         }
         while (true) {
           if (revision !== requestRevision) return;
-          if (
-            (isBatch ? job.batchId : job.runId) !== id ||
-            ![
-              "queued",
-              "running",
-              "completed",
-              "failed",
-              "interrupted",
-              "canceled",
-            ].includes(job.state)
-          )
+          if ((isBatch ? job.batchId : job.runId) !== id ||
+            !["queued", "running", "completed", "failed", "interrupted", "canceled"].includes(job.state))
             throw new Error("Unexpected analysis job response.");
           onJob(job);
-          $("resultImagesDate").textContent =
+          if (!displayedAnalysis) $("resultImagesDate").textContent =
             `Requested ${timeLabel(job.createdAt)} · Snapshot ${timeLabel(job.snapshotAt)}`;
-          status(isBatch && pendingJob(job) ? `${job.completedRuns || 0}/${job.totalRuns} runs complete · ${jobDescription(job)}` : jobDescription(job));
+          const description = isBatch && pendingJob(job) ? `${job.completedRuns || 0}/${job.totalRuns} runs complete · ${jobDescription(job)}` : jobDescription(job);
+          status(`${displayedAnalysis && pendingJob(job) ? "Showing saved analysis · " : ""}${description}`);
           const progress = $("resultImagesProgress");
           progress.hidden = !pendingJob(job);
-          if (
-            job.state === "running" &&
-            (isBatch || ["events.jsonl", "observations.jsonl"].includes(job.phase) && job.totalBytes > 0)
-          )
+          if (job.state === "running" && (isBatch || ["events.jsonl", "observations.jsonl"].includes(job.phase) && job.totalBytes > 0))
             progress.value = Math.max(0, Math.min(100, job.progress));
           else progress.removeAttribute("value");
           if (!pendingJob(job)) break;
@@ -1073,49 +1132,24 @@
           job = await request(path, {}, view.signal);
         }
         if (job.state !== "completed")
-          throw new Error(
-            job.error || `Analysis ${job.state}. Retry to start again.`,
-          );
-        // Construct the same-origin URL locally; never trust a stored URL as a credential destination.
-        const resultPath = `${path}/result?jobId=${encodeURIComponent(job.id)}`;
-        const download = $("downloadResultAnalysis");
-        download.href = resultPath;
-        download.download = `${id}${isBatch ? "-batch" : ""}-analysis.json`;
-        download.hidden = false;
-        $("refreshResultImages").hidden = false;
-        const data = await request(resultPath, {}, view.signal);
-        if (isBatch) batch.validate(data, id); else validateResponse(data, id);
-        if (data.analysisId !== job.id)
-          throw new Error("The saved analysis changed. Reopen this result.");
+          throw new Error(job.error || `Analysis ${job.state}. Retry to start again.`);
+        await showAnalysis(job, job.id);
         if (revision !== requestRevision) return;
-        if (isBatch) {
-          $("resultImagesName").textContent = `${data.name || id} · Batch mean`;
-          $("resultImagesDate").textContent = `${batch.description(data)} · Computed ${timeLabel(data.asOf)}${job.reused ? " · Source unchanged; saved analysis reused" : ""}`;
-          const summary = $("batchAnalysisSummary");
-          if (summary) {
-            summary.hidden = false;
-            summary.innerHTML = `<summary>Mean metrics and contributing run counts</summary>${batch.reliabilityMarkup(data, escape)}<p class="dialog-help">Equal run weight. Mean, between-run sample SD, and contributing runs (n). Missing evidence is excluded. P95 is the mean of each run's P95.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Mean</th><th>Sample SD</th><th>n / runs</th></tr></thead>${batch.summaryGroups(data.summary).map(group => `<tbody><tr class="metric-category-row"><th colspan="4" scope="rowgroup">${escape(research.categoryLabels[group.category])}</th></tr>${group.rows.map(([key, stat]) => `<tr><th scope="row">${escape(batch.label(key))}</th><td>${number(stat.average)}</td><td>${number(stat.deviation)}</td><td>${number(stat.count)} / ${data.runs.length}</td></tr>`).join("")}</tbody>`).join("")}</table></div>`;
-          }
-          await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
-        } else {
-          $("resultImagesName").textContent = data.result.name || id;
-          $("resultImagesDate").textContent = `${data.result.state} · Snapshot ${timeLabel(data.asOf)}${job.reused ? " · Source unchanged; saved analysis reused" : job.stale ? " · Source may have changed; reopen to check." : ""}`;
-          currentData = data;
-          researchTools?.setData(data);
-          await prepareImages(buildCharts(data), id, view, requestRevision);
-        }
+        if (!isBatch) researchTools?.setData(currentData);
+        status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.${job.reused ? " Source unchanged; saved analysis reused." : ""}`);
       } catch (error) {
         if (revision === requestRevision) {
-          status(
-            error.name === "AbortError"
-              ? "Status request timed out. The server job continues; retry to reconnect."
-              : error.message,
-            true,
-          );
+          const message = error.name === "AbortError"
+            ? "Status request timed out. The server job continues; retry to reconnect."
+            : error.message;
+          status(`${displayedAnalysis ? "Showing saved analysis · " : ""}${message}`, true);
+          if (displayedAnalysis) $("resultImagesDate").textContent = $("resultImagesDate").textContent.replace("checking for updates", "update not confirmed");
         }
       } finally {
         if (revision === requestRevision) {
           controller = null;
+          refreshButton.disabled = false;
+          $("resultImagesProgress").hidden = true;
           dialog.setAttribute("aria-busy", "false");
         }
       }

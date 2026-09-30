@@ -96,7 +96,7 @@ func (s *Server) preparePublicationWithClock(request model.PublishRequest, readi
 		return publication{wire: payload, encoding: encoding, sentAt: reading.timestamp, clock: reading}, nil
 	}
 	sequence := s.publishSeq.Add(1)
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d", s.config.Node.ID, reading.timestamp.UnixNano(), sequence)))
+	digest := sha256.Sum256(fmt.Appendf(nil, "%s:%d:%d", s.config.Node.ID, reading.timestamp.UnixNano(), sequence))
 	message := envelope{ID: hex.EncodeToString(digest[:16]), RunID: s.config.Node.RunID, Publisher: s.config.Node.ID, SentAt: reading.timestamp.UnixNano(), Payload: payload}
 	if reading.synchronized {
 		message.ClockBasis = controllerClockBasis

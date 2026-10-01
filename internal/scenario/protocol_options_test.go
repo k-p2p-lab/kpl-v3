@@ -61,3 +61,37 @@ phases:
 		t.Fatal("misspelled policy was silently accepted")
 	}
 }
+
+func TestHopWaveExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
+	data, err := os.ReadFile("../../examples/hopwave.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenario, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range scenario.Phases {
+		if phase.Action != "join" {
+			continue
+		}
+		wire, err := json.Marshal(model.PeerProcessConfig{NodeConfig: phase.Node})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var process model.PeerProcessConfig
+		if err := json.Unmarshal(wire, &process); err != nil {
+			t.Fatal(err)
+		}
+		config := process.NodeConfig.WithDefaults()
+		if err := config.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if config.GossipSub.HopWave == nil || !*config.GossipSub.HopWave {
+			t.Fatal("HopWave was lost between profile, join and Peer config")
+		}
+		if *config.GossipSub.Params.HopWaveFactor != 0.5 || *config.GossipSub.Params.HopWaveInterval != 3 {
+			t.Fatal("HopWave parameters were lost between profile, join and Peer config")
+		}
+	}
+}

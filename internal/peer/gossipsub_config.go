@@ -13,6 +13,9 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) (
 		return nil, err
 	}
 	options = append(options, pubsub.WithEventTracer(tracer))
+	if config.HopWave != nil && *config.HopWave {
+		options = append(options, pubsub.WithHopWavePublish(true))
+	}
 	if config.PeerOutboundQueueSize != nil {
 		options = append(options, pubsub.WithPeerOutboundQueueSize(*config.PeerOutboundQueueSize))
 	}
@@ -79,6 +82,8 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) (
 	params.MaxIDontWantMessages = *p.MaxIDontWantMessages
 	params.IDontWantMessageThreshold = *p.IDontWantMessageThreshold
 	params.IDontWantMessageTTL = *p.IDontWantMessageTTL
+	params.HopWaveFactor = *p.HopWaveFactor
+	params.HopWaveInterval = *p.HopWaveInterval
 
 	durations := []struct {
 		name   string

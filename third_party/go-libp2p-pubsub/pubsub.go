@@ -69,6 +69,9 @@ type PubSub struct {
 	// topics.
 	maxMessageSize int
 
+	// Optional HopWave wire metadata; fixed before the processing loop starts.
+	hopWave bool
+
 	// size of the outbound message channel that we maintain for each peer
 	peerOutboundQueueSize int
 

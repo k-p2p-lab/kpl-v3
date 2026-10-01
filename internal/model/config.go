@@ -368,6 +368,13 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 	if p.IDontWantMessageTTL == nil {
 		p.IDontWantMessageTTL = intPointer(3)
 	}
+	if p.HopWaveFactor == nil {
+		value := float64(1)
+		p.HopWaveFactor = &value
+	}
+	if p.HopWaveInterval == nil {
+		p.HopWaveInterval = intPointer(1)
+	}
 
 	c.Topics = append([]string(nil), c.GossipSub.Topics...)
 	c.D, c.DLow, c.DHigh = *p.D, *p.DLow, *p.DHigh
@@ -502,6 +509,12 @@ func (c NodeConfig) Validate() error {
 			}
 			if !validNumber(*p.GossipFactor) || *p.GossipFactor < 0 || *p.GossipFactor > 1 {
 				return fmt.Errorf("gossipsub gossipFactor must be finite and in [0, 1]")
+			}
+			if !validNumber(*p.HopWaveFactor) || *p.HopWaveFactor < 0 || *p.HopWaveFactor > 1 {
+				return fmt.Errorf("gossipsub hopWaveFactor must be finite and in [0, 1]")
+			}
+			if *p.HopWaveInterval < 1 || *p.HopWaveInterval > 2147483647 {
+				return fmt.Errorf("gossipsub hopWaveInterval must be in [1, 2147483647]")
 			}
 			if !validNumber(*p.SlowHeartbeatWarning) || *p.SlowHeartbeatWarning < 0 {
 				return fmt.Errorf("gossipsub slowHeartbeatWarning must be finite and non-negative")

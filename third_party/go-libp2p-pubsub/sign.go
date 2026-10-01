@@ -55,6 +55,9 @@ func verifyMessageSignature(m *pb.Message) error {
 	xm := *m
 	xm.Signature = nil
 	xm.Key = nil
+	// HopWave metadata is mutable at each relay, outside the signed content.
+	xm.PropaType = nil
+	xm.HopCount = nil
 	bytes, err := xm.Marshal()
 	if err != nil {
 		return err
@@ -107,7 +110,10 @@ func messagePubKey(m *pb.Message) (crypto.PubKey, error) {
 }
 
 func signMessage(pid peer.ID, key crypto.PrivKey, m *pb.Message) error {
-	bytes, err := m.Marshal()
+	xm := *m
+	xm.PropaType = nil
+	xm.HopCount = nil
+	bytes, err := xm.Marshal()
 	if err != nil {
 		return err
 	}

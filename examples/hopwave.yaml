@@ -1,0 +1,32 @@
+# Run on Linux Swarm. Every PubSub participant enables the HopWave extension.
+# Saved deliver/duplicate events retain wire-reported hops and propagation type.
+version: 2
+name: hopwave-gossipsub
+seed: 1001
+profiles:
+  boot:
+    type: boot
+    gossipsub:
+      enabled: true
+      hopWave: true
+      params:
+        hopWaveFactor: 0.5
+        hopWaveInterval: 3
+      topics: [kpl/hopwave]
+  worker:
+    type: full
+    gossipsub:
+      hopWave: true
+      params:
+        hopWaveFactor: 0.5
+        hopWaveInterval: 3
+      topics: [kpl/hopwave]
+phases:
+  - {action: join, group: boot, role: boot, profile: boot, count: 1}
+  - {action: wait-ready, group: boot, readyRatio: 1, timeout: 1m}
+  - {action: join, group: workers, role: worker, profile: worker, count: 3, placement: balanced}
+  - {action: wait-ready, group: workers, readyRatio: 1, timeout: 2m}
+  - {action: wait, duration: 5s}
+  - {action: publish, group: workers, topic: kpl/hopwave, count: 1, repeat: 5, payloadSize: 1024, deliveryWindow: 10s, interval: {model: fixed, value: 1s}}
+  - {action: wait, duration: 15s}
+  - {action: stop-all}

@@ -157,6 +157,7 @@ func (t *pubsubTracer) DuplicateMessage(msg *Message) {
 			MessageID:    []byte(t.idGen.ID(msg)),
 			ReceivedFrom: []byte(msg.ReceivedFrom),
 			Topic:        msg.Topic,
+			PropaType:    (*pb.TraceEvent_PropagationType)(msg.PropaType),
 		},
 	}
 
@@ -187,6 +188,8 @@ func (t *pubsubTracer) DeliverMessage(msg *Message) {
 			MessageID:    []byte(t.idGen.ID(msg)),
 			Topic:        msg.Topic,
 			ReceivedFrom: []byte(msg.ReceivedFrom),
+			PropaType:    (*pb.TraceEvent_PropagationType)(msg.PropaType),
+			HopCount:     msg.HopCount,
 		},
 	}
 

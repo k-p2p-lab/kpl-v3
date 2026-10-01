@@ -4,12 +4,14 @@ This file identifies third-party source included directly in K-P2PLab and select
 
 ## go-libp2p-pubsub
 
-K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation.
+K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation and optional HopWave forwarding.
 
 - Upstream project: [libp2p/go-libp2p-pubsub](https://github.com/libp2p/go-libp2p-pubsub)
 - Upstream version: [v0.13.1](https://github.com/libp2p/go-libp2p-pubsub/tree/v0.13.1)
 - Upstream commit: [`68726389f2c07d451f93a210146472e2e11ac32f`](https://github.com/libp2p/go-libp2p-pubsub/commit/68726389f2c07d451f93a210146472e2e11ac32f)
 - Included source: [third_party/go-libp2p-pubsub](third_party/go-libp2p-pubsub)
+- HopWave paper: [Sungwook Lee and Hongtaek Ju, HopWave, APNOMS 2026](https://github.com/k-p2p-lab/kpl-v3/wiki/Publications#hopwave-reference); not yet published
+- HopWave implementation source: [kmu-comnet/go-libp2p-pubsub, hop-wave revision `7f75a9d`](https://github.com/kmu-comnet/go-libp2p-pubsub/tree/7f75a9dbee3d5e1e3a15a9d30fa8a428590af76c), selectively adapted from its v0.14.2 base while retaining KPL's v0.13.1 baseline
 
 ### Licenses
 
@@ -23,14 +25,16 @@ The original license files are included:
 
 ### K-P2PLab modifications
 
-Only the upstream [score.go](third_party/go-libp2p-pubsub/score.go) source file is modified:
+The [score.go](third_party/go-libp2p-pubsub/score.go) patch provides:
 
 - Added `TimedPeerScoreInspectFn`, which supplies the observation timestamp with the score snapshots, including empty snapshots.
 - Added `InMesh`, `MeshMessageDeliveriesActive`, and `MeshFailurePenalty` to topic score snapshots so K-P2PLab can measure P1, P3, and P3b accurately.
 
-The observation fields and timestamp are captured under the existing score lock; inspection callbacks remain asynchronous. Scoring arithmetic, decay, routing, wire protocols, and defaults are unchanged.
+The observation fields and timestamp are captured under the existing score lock; inspection callbacks remain asynchronous. Scoring arithmetic and decay are unchanged.
 
-K-P2PLab also adds an [inspection regression test](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go), [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), and a [SHA-256 manifest of the original upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json). The root [go.mod](go.mod) selects this local copy through a `replace` directive.
+The HopWave adaptation adds optional unsigned propagation/hop metadata and periodic full/fractional forwarding to GossipSub. It changes `pubsub.go`, `topic.go`, `gossipsub.go`, `sign.go`, `trace.go` and the RPC/trace protobuf schemas and generated bindings, and adds [hopwave.go](third_party/go-libp2p-pubsub/hopwave.go). Outgoing copies preserve cached/subscriber metadata. HopWave is disabled by default; existing GossipSub protocol IDs and default routing remain.
+
+K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go) and [HopWave](third_party/go-libp2p-pubsub/kpl_hopwave_test.go) regression tests, [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), a [SHA-256 manifest of the pristine upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json), and a [manifest of HopWave reference sources](third_party/go-libp2p-pubsub/KPL-HOPWAVE-SHA256.json). Original license files are unchanged; the reference fork retains the same licenses. The root [go.mod](go.mod) selects this local copy through a `replace` directive.
 
 ## bbolt
 

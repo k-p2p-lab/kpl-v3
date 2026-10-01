@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/kmu-comnet/go-libp2p-pubsub",
+  "revision": "7f75a9dbee3d5e1e3a15a9d30fa8a428590af76c",
+  "baseRevision": "abb8f8a2cd5aee610e16de66d63cd539a353e166",
+  "files": {
+    "gossipsub.go": "f2d2ff633ff4291b5b7ea7ae65b9c3c72c9f0a4469dd8e41a292e87d14d8cbfb",
+    "pb/rpc.pb.go": "f929eec59449b71704113e45975c925083ed94b239b14a396029045b2c1c3b30",
+    "pb/rpc.proto": "dc13b81572217899fc0420971db59aed4a55ea87396972516bdc7e35a737c42a",
+    "pb/trace.pb.go": "49e388db1534beb92b344d5ab36e7b1a3e59b352860cd77dd956ffcfed5e822c",
+    "pb/trace.proto": "ac028e2bc3dc21f0b053fe523731183f11ff28f718d4ee369b78fd965004749c",
+    "sign.go": "7c7e8b9a9f6c5b0e392a3c3aeb36a06d3b87ad9b3a365eaebeae530f2f3d1bf9",
+    "topic.go": "a57f9d367efa7c132745432ee99be33b3e607a76ddafa67800933fbfcdd0fe47",
+    "trace.go": "94974d331fbe5bd46cdf259b8e4e5ba087439bff2c7f89a0539f7e61772f7b1f"
+  },
+  "metadataRevision": "6d217e5a0eaed10816d8213626428e17575ec5f0"
+}

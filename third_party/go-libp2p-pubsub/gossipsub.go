@@ -238,6 +238,13 @@ type GossipSubParams struct {
 
 	// IDONTWANT is cleared when it's older than the TTL.
 	IDontWantMessageTTL int
+
+	// HopWaveFactor is the fraction of eligible publication recipients selected
+	// between full waves. Only used with WithHopWavePublish(true).
+	HopWaveFactor float64
+	// HopWaveInterval resets the transmitted hop counter to zero for a full wave.
+	// This is a hop interval, not a timer or an absolute path length.
+	HopWaveInterval int
 }
 
 // NewGossipSub returns a new PubSub object using the default GossipSubRouter as the router.
@@ -314,6 +321,8 @@ func DefaultGossipSubParams() GossipSubParams {
 		IDontWantMessageThreshold: GossipSubIDontWantMessageThreshold,
 		IDontWantMessageTTL:       GossipSubIDontWantMessageTTL,
 		SlowHeartbeatWarning:      0.1,
+		HopWaveFactor:             1,
+		HopWaveInterval:           1,
 	}
 }
 
@@ -445,6 +454,11 @@ func WithGossipSubParams(cfg GossipSubParams) Option {
 			return fmt.Errorf("pubsub router is not gossipsub")
 		}
 		// Overwrite current config and associated variables in the router.
+		if gs.hopWavePublish {
+			if err := validateHopWaveParams(cfg); err != nil {
+				return err
+			}
+		}
 		gs.params = cfg
 		gs.connect = make(chan connectInfo, cfg.MaxPendingConnections)
 		gs.mcache = NewMessageCache(cfg.HistoryGossip, cfg.HistoryLength)
@@ -516,6 +530,9 @@ type GossipSubRouter struct {
 
 	// whether to use flood publishing
 	floodPublish bool
+
+	// Whether to apply periodic full/fractional forwarding to publications.
+	hopWavePublish bool
 
 	// number of heartbeats since the beginning of time; this allows us to amortize some resource
 	// clean up -- eg backoff clean up.
@@ -858,7 +875,11 @@ func (gs *GossipSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb.
 				continue
 			}
 
-			ihave[mid] = msg.Message
+			out := msg.Message
+			if gs.p.hopWave {
+				out = gs.hopWaveMessage(msg.Message, pb.PropagationType_LAZY_PULL)
+			}
+			ihave[mid] = out
 		}
 	}
 
@@ -1207,12 +1228,17 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 		}
 	}
 
-	out := rpcWithMessages(msg.Message)
+	message := msg.Message
+	if gs.p.hopWave {
+		message = gs.hopWaveMessage(message, pb.PropagationType_EAGER_PUSH)
+	}
+	delete(tosend, from)
+	delete(tosend, peer.ID(msg.GetFrom()))
+	if gs.hopWavePublish && message.HopCount != nil && *message.HopCount != 0 {
+		tosend = selectHopWavePeers(tosend, gs.params.HopWaveFactor)
+	}
+	out := rpcWithMessages(message)
 	for pid := range tosend {
-		if pid == from || pid == peer.ID(msg.GetFrom()) {
-			continue
-		}
-
 		gs.sendRPC(pid, out, false)
 	}
 }

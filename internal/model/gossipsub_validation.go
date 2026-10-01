@@ -15,6 +15,9 @@ import (
 // ValidateExtended checks every declarative adapter for PubSub's callback and
 // interface options before any peer or network operation is started.
 func (c GossipSubConfig) ValidateExtended() error {
+	if c.HopWave != nil && *c.HopWave && c.Router != "" && c.Router != "gossipsub" {
+		return fmt.Errorf("hopWave requires the gossipsub router")
+	}
 	if err := validateMessageID(c.MessageID); err != nil {
 		return err
 	}

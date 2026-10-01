@@ -37,6 +37,12 @@ message TraceEvent {
     PRUNE = 12;
   }
 
+  enum PropagationType {
+    UNKNOWN = 0;
+    EAGER_PUSH = 1;
+    LAZY_PULL = 2;
+  }
+
   message PublishMessage {
     optional bytes messageID = 1;
     optional string topic = 2;
@@ -53,12 +59,15 @@ message TraceEvent {
     optional bytes messageID = 1;
     optional bytes receivedFrom = 2;
     optional string topic = 3;
+    optional PropagationType propaType = 4;
   }
 
   message DeliverMessage {
     optional bytes messageID = 1;
     optional string topic = 2;
     optional bytes receivedFrom = 3;
+    optional PropagationType propaType = 4;
+    optional int32 hopCount = 5;
   }
 
   message AddPeer {

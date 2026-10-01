@@ -21,6 +21,14 @@ message Message {
 	optional string topic = 4;
 	optional bytes signature = 5;
 	optional bytes key = 6;
+	optional PropagationType propaType = 7;
+	optional int32 hopCount = 8;
+}
+
+enum PropagationType {
+	UNKNOWN = 0;
+	EAGER_PUSH = 1;
+	LAZY_PULL = 2;
 }
 
 message ControlMessage {

@@ -34,6 +34,8 @@ The observation fields and timestamp are captured under the existing score lock;
 
 The HopWave adaptation adds optional unsigned propagation/hop metadata and periodic full/fractional forwarding to GossipSub. It changes `pubsub.go`, `topic.go`, `gossipsub.go`, `sign.go`, `trace.go` and the RPC/trace protobuf schemas and generated bindings, and adds [hopwave.go](third_party/go-libp2p-pubsub/hopwave.go). Outgoing copies preserve cached/subscriber metadata. HopWave is disabled by default; existing GossipSub protocol IDs and default routing remain.
 
+The copy also bounds periodic direct-peer reconnect work, cancels initial timers and connection queue waits on shutdown, and releases resources when default GossipSub construction fails. These changes and their [lifecycle tests](third_party/go-libp2p-pubsub/kpl_lifecycle_test.go) affect `gossipsub.go` and `pubsub.go`.
+
 K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go) and [HopWave](third_party/go-libp2p-pubsub/kpl_hopwave_test.go) regression tests, [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), a [SHA-256 manifest of the pristine upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json), and a [manifest of HopWave reference sources](third_party/go-libp2p-pubsub/KPL-HOPWAVE-SHA256.json). Original license files are unchanged; the reference fork retains the same licenses. The root [go.mod](go.mod) selects this local copy through a `replace` directive.
 
 ## bbolt

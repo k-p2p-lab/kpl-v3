@@ -22,10 +22,18 @@ The implementation source used for this port is [kmu-comnet/go-libp2p-pubsub, ho
 - Outgoing metadata uses a shallow message copy with new metadata pointers. Subscribers, cached arrivals, trace events and queued pushes remain unchanged. Repeated pull replies neither accumulate the counter nor contaminate queued eager labels. Normal forwarding resets the propagation label to eager.
 - Missing, negative and overflowing counters remain unknown. Unknown counters use full publication forwarding. Wire fields are unauthenticated reports and require compatible instrumentation/settings along the path for interpretation. Protocol IDs remain GossipSub's, as in the fork; unpatched signed-message verifiers do not support the extension.
 
-Modified upstream files are `score.go`, `pubsub.go`, `topic.go`, `gossipsub.go`, `sign.go`, `trace.go` and the four protobuf schema/binding files. KPL adds `hopwave.go`, score/HopWave regression tests and the two provenance manifests. The upstream license files are retained unchanged.
+Modified upstream files are `score.go`, `pubsub.go`, `topic.go`, `gossipsub.go`, `sign.go`, `trace.go` and the four protobuf schema/binding files. KPL adds `hopwave.go`, score/HopWave/lifecycle regression tests and the two provenance manifests. The upstream license files are retained unchanged.
+
+## Resource lifetime
+
+- Failed default GossipSub construction closes its owned address book. PubSub starts the backoff and seen-message cache workers only after option, signature and discovery setup succeeds.
+- Initial heartbeat and direct-peer connection delays stop on context cancellation. Initial direct-peer queue sends also stop on cancellation.
+- Periodic direct-peer reconnects use the bounded connector queue without spawning blocked senders; peers that do not fit are retried on a later eligible heartbeat.
+
+`kpl_lifecycle_test.go` covers failed construction, canceled timers and queue waits, and reconnects after queue capacity becomes available.
 
 ## Integration and upgrades
 
 The root `go.mod` selects this local replacement; Docker copies it before dependency download. KPL exposes routing through `gossipsub.hopwave` and `gossipsub.params.hopwaveFactor` / `hopwaveInterval`. Operator and log contracts live in the wiki's [Protocol Options](https://github.com/k-p2p-lab/kpl-v3/wiki/Protocol-Options#hopwave).
 
-When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply both score inspection and HopWave patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave network tests explicitly use TCP, Noise and Yamux, matching the application transport.
+When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply the score inspection, HopWave and resource-lifetime patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave network tests explicitly use TCP, Noise and Yamux, matching the application transport.

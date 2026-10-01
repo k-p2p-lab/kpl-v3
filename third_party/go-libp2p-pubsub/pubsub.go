@@ -274,7 +274,6 @@ func NewPubSub(ctx context.Context, h host.Host, rt PubSubRouter, opts ...Option
 		newPeerError:          make(chan peer.ID),
 		peerDead:              make(chan struct{}, 1),
 		peerDeadPend:          make(map[peer.ID]struct{}),
-		deadPeerBackoff:       newBackoff(ctx, 1000, BackoffCleanupInterval, MaxBackoffAttempts),
 		cancelCh:              make(chan *Subscription),
 		getPeers:              make(chan *listPeerReq),
 		addSub:                make(chan *addSubReq),
@@ -318,11 +317,13 @@ func NewPubSub(ctx context.Context, h host.Host, rt PubSubRouter, opts ...Option
 		}
 	}
 
-	ps.seenMessages = timecache.NewTimeCacheWithStrategy(ps.seenMsgStrategy, ps.seenMsgTTL)
-
 	if err := ps.disc.Start(ps); err != nil {
 		return nil, err
 	}
+	// These caches start cleanup goroutines. Initialize them only after every
+	// fallible setup step so rejected options/discovery cannot leave them alive.
+	ps.deadPeerBackoff = newBackoff(ctx, 1000, BackoffCleanupInterval, MaxBackoffAttempts)
+	ps.seenMessages = timecache.NewTimeCacheWithStrategy(ps.seenMsgStrategy, ps.seenMsgTTL)
 
 	rt.Attach(ps)
 

@@ -251,7 +251,16 @@ type GossipSubParams struct {
 func NewGossipSub(ctx context.Context, h host.Host, opts ...Option) (*PubSub, error) {
 	rt := DefaultGossipSubRouter(h)
 	opts = append(opts, WithRawTracer(rt.tagTracer))
-	return NewGossipSubWithRouter(ctx, h, rt, opts...)
+	ps, err := NewGossipSubWithRouter(ctx, h, rt, opts...)
+	if err != nil {
+		// Attach owns normal shutdown; failed construction never reaches it.
+		if closer, ok := rt.cab.(io.Closer); ok {
+			if closeErr := closer.Close(); closeErr != nil {
+				log.Warnf("failed to close addr book after initialization error: %v", closeErr)
+			}
+		}
+	}
+	return ps, err
 }
 
 // NewGossipSubWithRouter returns a new PubSub object using the given router.

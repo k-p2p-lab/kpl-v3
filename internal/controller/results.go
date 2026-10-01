@@ -549,7 +549,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			job, err := s.batchAnalysisStatus(id)
 			if err == nil && job.State != "idle" {
-				if job.State == "completed" && (job.Membership != batchMembership(batchMembers[id]) || job.SourceHash == "") {
+				if job.State == "completed" && (job.Membership != batchMembership(batchMembers[id]) || job.SourceHash == "" || job.AnalysisVersion != currentAnalysisVersion) {
 					job.State, job.Stale = "idle", true
 				}
 				status = &job

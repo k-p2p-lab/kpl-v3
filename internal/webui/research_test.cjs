@@ -246,7 +246,7 @@ test("CSV and ZIP downloads preserve exact graph values and valid signatures", a
   assert.equal(bytes.readUInt32LE(bytes.length - 22), 0x06054b50);
   assert.equal(bytes.readUInt16LE(bytes.length - 12), 1);
 });
-test("old analysis cache upgrades once without explicit refresh", async () => {
+test("server-marked old analysis cache upgrades once without explicit refresh", async () => {
   const elements = new Map(),
     el = (id) => {
       if (!elements.has(id))
@@ -277,20 +277,21 @@ test("old analysis cache upgrades once without explicit refresh", async () => {
     document: { querySelector: (s) => el(s.slice(1)) },
     renderImage: async () => "data:image/png;base64,iVBORw0KGgo=",
     api: async (path, opts) => {
-      if (path.includes("/result?")) return a;
+      if (path.includes("/result?")) return { ...a, analysisId: path.includes("jobId=previous") ? "previous" : "new" };
       if (opts.method === "POST") {
         posts++;
         return {
           version: 1,
-          analysisVersion: 4,
+          analysisVersion: 6,
           id: "new",
           runId: "old",
           state: "completed",
         };
       }
-      return { version: 1, analysisVersion: 3, id: "previous", runId: "old", state: "completed" };
+      return { version: 1, analysisVersion: posts ? 6 : 5, id: posts ? "new" : "previous", runId: "old", state: "completed", stale: posts === 0 };
     },
   });
+  await ui.open("old");
   await ui.open("old");
   assert.equal(posts, 1);
   assert.match(el("resultImagesStatus").textContent, /images ready/);

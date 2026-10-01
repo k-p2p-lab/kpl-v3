@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http/httptest"
 	"os"
 	"sync"
@@ -14,6 +16,57 @@ import (
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
+
+func TestArchiveRejectsTruncatedCapturedFile(t *testing.T) {
+	for _, operation := range []string{"local-hash", "archive-hash", "copy"} {
+		t.Run(operation, func(t *testing.T) {
+			s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+			local, err := os.OpenRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer local.Close()
+			if err := local.WriteFile("events.jsonl", []byte("first\nsecond\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			source, err := openResultFile(local, "events.jsonl")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.close()
+			// Keep the captured inode but shorten it after its size was pinned.
+			if err := local.WriteFile("events.jsonl", []byte("first\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "local-hash":
+				_, err = hashRunFile(source)
+			case "archive-hash":
+				_, err = s.hashArchiveFile(t.Context(), source)
+			case "copy":
+				remote, openErr := os.OpenRoot(t.TempDir())
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				defer remote.Close()
+				_, err = s.copyArchiveFile(t.Context(), remote, "events.jsonl", source)
+				if _, statErr := remote.Lstat("events.jsonl"); !errors.Is(statErr, os.ErrNotExist) {
+					t.Errorf("truncated archive was published: %v", statErr)
+				}
+				entries, readErr := localRunEntries(remote)
+				if readErr != nil || len(entries) != 0 {
+					t.Errorf("failed copy left temporary files: %v %v", entries, readErr)
+				}
+			}
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("truncated source returned %v, want unexpected EOF", err)
+			}
+			if data, readErr := local.ReadFile("events.jsonl"); readErr != nil || string(data) != "first\n" {
+				t.Fatalf("failed archive modified remaining local evidence: %q %v", data, readErr)
+			}
+		})
+	}
+}
 
 // Measures the complete copy + destination checksum verification on local disk.
 // NAS throughput can be lower; no experiment is running during this benchmark.
@@ -41,8 +94,8 @@ func BenchmarkArchiveCopy8MiB(b *testing.B) {
 	sum := sha256.Sum256(payload)
 	expected := hex.EncodeToString(sum[:])
 	b.SetBytes(int64(len(payload)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		stored, err := s.copyArchiveFile(context.Background(), remote, "events.jsonl", source)
 		if err != nil || stored.SHA256 != expected || stored.Size != int64(len(payload)) {
 			b.Fatalf("archive copy: %+v %v", stored, err)

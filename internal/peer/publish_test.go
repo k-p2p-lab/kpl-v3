@@ -126,6 +126,54 @@ func TestEnvelopeCarriesControllerClockUncertainty(t *testing.T) {
 	}
 }
 
+func TestBackwardClockCorrectionPreservesObservationUncertainty(t *testing.T) {
+	node := model.Node{ID: "node", RunID: "run"}
+	tel := newTelemetry(node, "", "", nil)
+	server := &Server{config: model.PeerProcessConfig{Node: node}, host: newConfigTestHost(t), telemetry: tel}
+	base := time.Now()
+	tel.acceptClockEstimate(controllerClockEstimate{offset: time.Hour, uncertainty: 2 * time.Millisecond}, base)
+	tel.startMeasurement([]string{"topic-a"})
+	start := <-tel.events
+
+	// A refresh can move the controller estimate behind a prior checkpoint.
+	// Preserve source ordering, but include that displacement in the bound.
+	tel.acceptClockEstimate(controllerClockEstimate{offset: -time.Hour, uncertainty: 2 * time.Millisecond}, time.Now())
+	publication, err := server.preparePublicationWithClock(model.PublishRequest{PayloadSize: 1}, tel.clockReading())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := tel.clockReading().timestamp
+	tel.emitObserved(func(reading controllerClockReading) (model.TraceEvent, bool) {
+		return server.deliveryEventWithClock(publicationTestMessage(publication.wire, "backward-clock", corepeer.ID("previous-hop")), "topic-a", reading)
+	})
+	after := tel.clockReading().timestamp
+	delivery := <-tel.events
+	if !delivery.Timestamp.After(start.Timestamp) {
+		t.Fatalf("receipt preceded measurement start: start=%s receipt=%s", start.Timestamp, delivery.Timestamp)
+	}
+	uncertainty := time.Duration(delivery.Fields["clockUncertaintyMs"].(float64) * float64(time.Millisecond))
+	if uncertainty < delivery.Timestamp.Sub(after)+2*time.Millisecond || uncertainty > delivery.Timestamp.Sub(before)+2*time.Millisecond {
+		t.Fatalf("clock correction missing from uncertainty: receipt=%s sampled=[%s, %s] uncertainty=%s", delivery.Timestamp, before, after, uncertainty)
+	}
+	combined := time.Duration(delivery.Fields["latencyUncertaintyMs"].(float64) * float64(time.Millisecond))
+	if difference := combined - uncertainty; difference < 2*time.Millisecond-time.Nanosecond || difference > 2*time.Millisecond+time.Nanosecond {
+		t.Fatalf("latency did not include corrected receiver uncertainty: %+v", delivery.Fields)
+	}
+	tel.checkpoint()
+	checkpoint := <-tel.events
+	if !checkpoint.Timestamp.After(delivery.Timestamp) || checkpoint.Fields["clockUncertaintyMs"].(float64) < 1000 {
+		t.Fatalf("checkpoint lost clock correction: %+v", checkpoint)
+	}
+
+	// Once the estimate catches up, do not carry the old bound into new events.
+	tel.acceptClockEstimate(controllerClockEstimate{offset: 2 * time.Hour, uncertainty: time.Millisecond}, time.Now())
+	tel.stopMeasurement()
+	stop := <-tel.events
+	if !stop.Timestamp.After(checkpoint.Timestamp) || stop.Fields["clockUncertaintyMs"] != float64(1) {
+		t.Fatalf("normal clock uncertainty did not recover: %+v", stop)
+	}
+}
+
 func TestAllTopicsRawPublishUsesExactBytesAndDistinctMessages(t *testing.T) {
 	server, parent := publicationTestServer(t)
 	subs := make(map[string]*pubsub.Subscription)

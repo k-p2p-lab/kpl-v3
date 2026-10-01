@@ -1119,7 +1119,6 @@
         if (revision !== requestRevision) return;
         if ((isBatch ? job.batchId : job.runId) !== id) throw new Error("Unexpected analysis job response.");
         const needsUpdate = refresh || job.stale || job.state === "idle" ||
-          (job.state === "completed" && (job.analysisVersion || 0) < 5) ||
           (retry && ["failed", "interrupted", "canceled"].includes(job.state));
         const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
         if (savedID && (needsUpdate || job.state !== "completed")) {

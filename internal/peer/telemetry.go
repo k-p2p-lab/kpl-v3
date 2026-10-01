@@ -95,7 +95,11 @@ func (t *telemetry) emitObservedPriority(build func(controllerClockReading) (mod
 func (t *telemetry) observationClockLocked() controllerClockReading {
 	reading := t.clockReading()
 	if !reading.timestamp.After(t.observedAt) {
-		reading.timestamp = t.observedAt.Add(time.Nanosecond)
+		next := t.observedAt.Add(time.Nanosecond)
+		// Preserve source ordering across a backwards clock correction without
+		// claiming the clamped timestamp still has only the probe's RTT error.
+		reading.uncertainty += next.Sub(reading.timestamp)
+		reading.timestamp = next
 	}
 	t.observedAt = reading.timestamp
 	return reading

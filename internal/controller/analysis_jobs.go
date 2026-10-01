@@ -216,7 +216,7 @@ func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {
 		if e != nil {
 			return analysisJobStatus{}, e
 		}
-		if current != status.SourceRevision || status.SourceHash == "" {
+		if current != status.SourceRevision || status.SourceHash == "" || status.AnalysisVersion != currentAnalysisVersion {
 			status.Stale = true
 		}
 	}

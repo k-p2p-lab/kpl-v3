@@ -176,8 +176,12 @@ func (s *state) markRunArchiveDirty(id string) {
 
 func hashRunFile(file resultFile) (string, error) {
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file.reader()); err != nil {
+	n, err := io.Copy(hash, file.reader())
+	if err != nil {
 		return "", err
+	}
+	if n != file.size {
+		return "", io.ErrUnexpectedEOF
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
@@ -194,6 +198,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 	hash := sha256.New()
 	reader := source.reader()
 	buffer := make([]byte, archiveChunkBytes)
+	var copied int64
 	for {
 		if err = s.waitArchiveIdle(ctx); err != nil {
 			break
@@ -207,6 +212,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 				break
 			}
 			_, _ = hash.Write(buffer[:n])
+			copied += int64(n)
 			s.archiveProgress()
 		}
 		if err == io.EOF {
@@ -221,6 +227,9 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 		if err = sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
 			break
 		}
+	}
+	if err == nil && copied != source.size {
+		err = io.ErrUnexpectedEOF
 	}
 	if err == nil {
 		err = output.Sync()
@@ -628,6 +637,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 	digest := sha256.New()
 	reader := file.reader()
 	buffer := make([]byte, archiveChunkBytes)
+	var read int64
 	for {
 		if err := s.waitArchiveIdle(ctx); err != nil {
 			return "", err
@@ -636,6 +646,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 		n, err := reader.Read(buffer)
 		if n > 0 {
 			_, _ = digest.Write(buffer[:n])
+			read += int64(n)
 			s.archiveProgress()
 		}
 		if err == io.EOF {
@@ -647,6 +658,9 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 		if err := sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
 			return "", err
 		}
+	}
+	if read != file.size {
+		return "", io.ErrUnexpectedEOF
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }

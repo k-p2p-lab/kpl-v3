@@ -535,7 +535,7 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 			members, err = s.allBatchMembers(r.Context(), id)
 			if err == nil {
 				status, err = s.batchAnalysisStatus(id)
-				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || status.SourceHash == "") {
+				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || status.SourceHash == "" || status.AnalysisVersion != currentAnalysisVersion) {
 					status.State, status.Stale = "idle", true
 				}
 			}

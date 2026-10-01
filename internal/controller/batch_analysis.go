@@ -203,9 +203,17 @@ func (s *Server) allBatchMembers(ctx context.Context, id string) ([]savedResult,
 func batchMembership(members []savedResult) string {
 	// Include historical attempts because they contribute to reliability statistics.
 	// Ignore display-only download sizes and job statuses, and normalize order.
+	contributors := make(map[string]bool, len(members))
+	for _, member := range currentBatchMembers(members) {
+		contributors[member.ID] = member.State == "completed"
+	}
 	canonical := make([]savedResult, 0, len(members))
 	for _, m := range members {
-		canonical = append(canonical, savedResult{SourceRevision: m.SourceRevision, PreviousRunIDs: m.PreviousRunIDs, Superseded: m.Superseded, ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
+		revision := ""
+		if contributors[m.ID] {
+			revision = m.SourceRevision
+		}
+		canonical = append(canonical, savedResult{SourceRevision: revision, PreviousRunIDs: m.PreviousRunIDs, Superseded: m.Superseded, ID: m.ID, Name: m.Name, State: m.State, Active: m.Active, BatchID: m.BatchID, Iteration: m.Iteration, Repetitions: m.Repetitions, StartedAt: m.StartedAt, FinishedAt: m.FinishedAt})
 	}
 	sort.Slice(canonical, func(i, j int) bool { return canonical[i].ID < canonical[j].ID })
 	data, _ := json.Marshal(canonical)

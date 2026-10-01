@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+const archiveBytesPerSecond = 32 << 20
+const archiveChunkBytes = 256 << 10
+
 // There is exactly one background NAS worker. A blocked mount consumes this
 // worker, not a new goroutine per tick or any Controller control/persistence lock.
 func (s *Server) runArchiveLoop(ctx context.Context) {
@@ -190,7 +193,7 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 	s.archiveProgress()
 	hash := sha256.New()
 	reader := source.reader()
-	buffer := make([]byte, 64<<10)
+	buffer := make([]byte, archiveChunkBytes)
 	for {
 		if err = s.waitArchiveIdle(ctx); err != nil {
 			break
@@ -213,9 +216,9 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 		if err != nil {
 			break
 		}
-		// Bound background traffic even while idle (8 MiB/s). A new run pauses the
+		// Bound background traffic even while idle (32 MiB/s). A new run pauses the
 		// next chunk instead of waiting for a potentially stalled NAS syscall.
-		if err = sleepContext(ctx, time.Duration(n)*time.Second/(8<<20)-time.Since(started)); err != nil {
+		if err = sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
 			break
 		}
 	}
@@ -256,6 +259,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	s.setArchivePhase("preparing")
 	var files []resultFile
 	var manifest runArchiveManifestData
+	var sourceRevision, capturedFingerprint string
 	defer func() {
 		for _, file := range files {
 			file.close()
@@ -312,6 +316,12 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		if err != nil {
 			return err
 		}
+		fingerprint, err := sourceFingerprintAt(root, manifest)
+		if err != nil {
+			return err
+		}
+		sourceRevision = sourceRevisionFor(fingerprint, manifest)
+		logs := []string{}
 		for _, name := range []string{"events.jsonl", "observations.jsonl"} {
 			info, err := root.Lstat(name)
 			if errors.Is(err, os.ErrNotExist) {
@@ -326,6 +336,11 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			if time.Since(info.ModTime()) < quiet {
 				return errResultBusy
 			}
+			logs = append(logs, name)
+		}
+		// Check both tails before renaming either one. A deferred attempt must
+		// not change source hints merely because the other log was still busy.
+		for _, name := range logs {
 			segment := strings.TrimSuffix(name, ".jsonl") + "-segment-" + time.Now().UTC().Format("20060102T150405.000000000") + "-" + rand.Text() + ".jsonl"
 			if err := root.Rename(name, segment); err != nil {
 				return err
@@ -352,6 +367,18 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				return err
 			}
 			files = append(files, file)
+		}
+		capturedFingerprint, err = sourceFingerprintAt(root, manifest)
+		if err != nil {
+			return err
+		}
+		// Renaming sealed local logs preserves their bytes. Publish this hint
+		// before NAS I/O so opening Images during a transfer also reuses the cache.
+		if fingerprint != capturedFingerprint {
+			manifest.SourceFingerprint, manifest.SourceRevision = capturedFingerprint, sourceRevision
+			if err := writeRunArchive(root, manifest); err != nil {
+				return err
+			}
 		}
 		return nil
 	}()
@@ -542,6 +569,10 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		return err
 	}
 	defer local.Close()
+	currentFingerprint, err := sourceFingerprintAt(local, manifest)
+	if err != nil {
+		return err
+	}
 	if err := writeRunArchive(local, manifest); err != nil {
 		return err
 	}
@@ -562,6 +593,26 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			}
 		}
 	}
+	// All copied bytes were checksum-verified before unlinking. Preserve the
+	// pre-move revision only if no source changed during NAS work. Late telemetry
+	// or metadata replacements must still request normal source verification.
+	previousFingerprint, previousRevision := manifest.SourceFingerprint, manifest.SourceRevision
+	manifest.SourceFingerprint, manifest.SourceRevision = "", ""
+	if currentFingerprint == capturedFingerprint {
+		manifest.SourceFingerprint, err = sourceFingerprintAt(local, manifest)
+		if err != nil {
+			return err
+		}
+		manifest.SourceRevision = sourceRevision
+	}
+	if manifest.SourceFingerprint != previousFingerprint || manifest.SourceRevision != previousRevision {
+		if err := writeRunArchive(local, manifest); err != nil {
+			return err
+		}
+		if err := syncRunDirectory(local); err != nil {
+			return err
+		}
+	}
 	return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
 }
 func syncRunDirectory(root *os.Root) error {
@@ -576,7 +627,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 	s.setArchivePhase("verifying")
 	digest := sha256.New()
 	reader := file.reader()
-	buffer := make([]byte, 64<<10)
+	buffer := make([]byte, archiveChunkBytes)
 	for {
 		if err := s.waitArchiveIdle(ctx); err != nil {
 			return "", err
@@ -593,7 +644,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 		if err != nil {
 			return "", err
 		}
-		if err := sleepContext(ctx, time.Duration(n)*time.Second/(8<<20)-time.Since(started)); err != nil {
+		if err := sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
 			return "", err
 		}
 	}

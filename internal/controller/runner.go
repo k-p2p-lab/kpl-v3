@@ -1425,6 +1425,7 @@ func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error 
 	if err := os.WriteFile(filepath.Join(dir, "scenario.yaml"), raw, 0o644); err != nil {
 		return fmt.Errorf("write scenario manifest: %w", err)
 	}
+	s.state.markRunArchiveDirty(experiment.ID)
 	return s.persistExperiment(experiment)
 }
 
@@ -1435,6 +1436,29 @@ func (s *Server) persistExperiment(experiment model.Experiment) error {
 	}
 	metadata, err := json.MarshalIndent(experiment, "", "  ")
 	if err != nil {
+		return err
+	}
+	// Repeated cleanup/status updates often leave the metadata unchanged. Keep
+	// its inode and revision instead of scheduling another archive/hash check.
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	previous, err := openResultFile(root, "experiment.json")
+	if err == nil {
+		var contents []byte
+		if previous.size == int64(len(metadata)) {
+			contents, err = io.ReadAll(previous.reader())
+		}
+		previous.close()
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(contents, metadata) {
+			return nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if err := writeFileAtomic(filepath.Join(dir, "experiment.json"), metadata, 0644); err != nil {

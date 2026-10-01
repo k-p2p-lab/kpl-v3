@@ -32,10 +32,12 @@ type storedRunFile struct {
 	Segment    string `json:"segment,omitempty"`
 }
 type runArchiveManifestData struct {
-	Version int                        `json:"version"`
-	RunID   string                     `json:"runId"`
-	Files   map[string]storedRunFile   `json:"files"`
-	Logs    map[string][]storedRunFile `json:"logs"`
+	Version           int                        `json:"version"`
+	RunID             string                     `json:"runId"`
+	Files             map[string]storedRunFile   `json:"files"`
+	Logs              map[string][]storedRunFile `json:"logs"`
+	SourceFingerprint string                     `json:"sourceFingerprint,omitempty"`
+	SourceRevision    string                     `json:"sourceRevision,omitempty"`
 }
 type runArchiveStatus struct {
 	State     string    `json:"state"`

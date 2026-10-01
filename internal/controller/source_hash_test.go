@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 func hashTestFile(t *testing.T, name, contents string) resultFile {
@@ -185,13 +188,93 @@ func TestAnalysisHashSurvivesNASArchival(t *testing.T) {
 	first := awaitAnalysisJob(t, s, "run")
 	s.analysisWorkers.Wait()
 	archiveTestRun(t, s, "run")
+	s.archiveIOCheck = func() { t.Fatal("unchanged archived analysis read NAS") }
+	status, err := s.analysisJobStatus("run")
+	if err != nil || status.Stale || status.SourceRevision != first.SourceRevision {
+		t.Fatalf("archive move requested source verification: %+v %v", status, err)
+	}
 	if _, err := s.startAnalysisJob(ctx, "run", false); err != nil {
 		t.Fatal(err)
 	}
 	archived := awaitAnalysisJob(t, s, "run")
 	s.analysisWorkers.Wait()
-	if archived.State != "completed" || archived.ID != first.ID || archived.SourceHash != first.SourceHash || !archived.Reused || archived.Stale {
+	if archived.State != "completed" || archived.ID != first.ID || archived.SourceHash != first.SourceHash || archived.Reused || archived.Stale {
 		t.Fatalf("archive relocation regenerated identical analysis: %+v", archived)
+	}
+	restarted := New(s.config, nil)
+	restarted.archiveIOCheck = s.archiveIOCheck
+	status, err = restarted.startAnalysisJob(ctx, "run", false)
+	if err != nil || status.State != "completed" || status.ID != first.ID {
+		t.Fatalf("archive revision did not survive restart: %+v %v", status, err)
+	}
+}
+
+func TestArchiveSourceRevisionPreservesCacheDuringTransferAndDetectsLateWrites(t *testing.T) {
+	for _, rewrite := range []bool{false, true} {
+		name := "late-telemetry"
+		if rewrite {
+			name = "preserved-size-mtime-rewrite"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+			batchFixture(t, s, "batch", "run", "completed", 1, 2, 2)
+			if _, err := s.startAnalysisJob(context.Background(), "run", false); err != nil {
+				t.Fatal(err)
+			}
+			first := awaitAnalysisJob(t, s, "run")
+			s.analysisWorkers.Wait()
+			var once sync.Once
+			s.archiveIOCheck = func() {
+				once.Do(func() {
+					// The worker has sealed local logs and released its locks before
+					// this NAS boundary. Opening Images must not start hash checking.
+					status, err := s.analysisJobStatus("run")
+					if err != nil || status.Stale || status.ID != first.ID {
+						t.Fatalf("sealing invalidated cache: %+v %v", status, err)
+					}
+					if rewrite {
+						path := filepath.Join(s.config.DataDir, currentRunsDirectory, "run", "scenario.yaml")
+						info, err := os.Stat(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						data, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+						data[len("version: ")] = '2'
+						if err := os.WriteFile(path, data, 0600); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := s.state.appendEvents(model.EventBatch{Events: []model.TraceEvent{storageEvent("run", "late")}}); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			archiveTestRun(t, s, "run")
+			s.archiveIOCheck = nil
+			status, err := s.analysisJobStatus("run")
+			if err != nil || !status.Stale {
+				t.Fatalf("late source change reused stale analysis: %+v %v", status, err)
+			}
+			if _, err := s.startAnalysisJob(context.Background(), "run", false); err != nil {
+				t.Fatal(err)
+			}
+			changed := awaitAnalysisJob(t, s, "run")
+			s.analysisWorkers.Wait()
+			if changed.State != "completed" || changed.ID == first.ID || changed.SourceHash == first.SourceHash {
+				t.Fatalf("late source change did not compute new analysis: %+v", changed)
+			}
+			// A later archive pass must preserve the newly computed boundary too.
+			archiveTestRun(t, s, "run")
+			status, err = s.analysisJobStatus("run")
+			if err != nil || status.Stale || status.ID != changed.ID {
+				t.Fatalf("second archive invalidated updated analysis: %+v %v", status, err)
+			}
+		})
 	}
 }
 
@@ -212,12 +295,13 @@ func TestBatchAnalysisHashReuseChangesAndForce(t *testing.T) {
 	artifact := resultRequest(s, http.MethodGet, first.ResultURL).Body.String()
 	archiveTestRun(t, s, "one")
 	archiveTestRun(t, s, "two")
+	s.archiveIOCheck = func() { t.Fatal("unchanged archived batch read NAS") }
 	if _, err := s.startBatchAnalysis(ctx, "batch", false); err != nil {
 		t.Fatal(err)
 	}
 	reused := awaitBatch(t, s, "batch")
 	s.analysisWorkers.Wait()
-	if reused.State != "completed" || reused.ID != first.ID || !reused.Reused || reused.Membership == first.Membership || reused.SourceHash != first.SourceHash {
+	if reused.State != "completed" || reused.ID != first.ID || reused.Reused || reused.Membership != first.Membership || reused.SourceHash != first.SourceHash {
 		t.Fatalf("archived batch did not reuse original analysis: %+v", reused)
 	}
 	if resultRequest(s, http.MethodGet, reused.ResultURL).Body.String() != artifact {
@@ -235,6 +319,7 @@ func TestBatchAnalysisHashReuseChangesAndForce(t *testing.T) {
 		t.Fatalf("excluded logs invalidated statistics: %+v", got)
 	}
 	s.analysisWorkers.Wait()
+	s.archiveIOCheck = nil
 	restarted := New(s.config, nil)
 	cached, err := restarted.startBatchAnalysis(ctx, "batch", false)
 	if err != nil || cached.ID != first.ID || cached.State != "completed" {

@@ -708,6 +708,7 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 	}
 	defer runs.Close()
 	snapshot := &resultSnapshot{}
+	var revision string
 	// Event appends and metadata replacements use this same lock. Only open,
 	// stat and the in-memory ownership check belong in the critical section.
 	err = func() error {
@@ -742,6 +743,7 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 			}
 			snapshot.files = append(snapshot.files, file)
 		}
+		revision = sourceRevisionFor(sourceRevisionOf(snapshot.files), manifest)
 		snapshot.active = s.resultActive(id)
 		snapshot.exportedAt = time.Now().UTC()
 		if download {
@@ -764,7 +766,6 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		snapshot.close()
 		return nil, err
 	}
-	revision := sourceRevisionOf(snapshot.files)
 	releaseRemote, err := s.resolveArchivedFiles(ctx, id, snapshot.files)
 	if err != nil {
 		snapshot.close()

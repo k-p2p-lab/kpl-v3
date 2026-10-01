@@ -28,6 +28,37 @@ func archiveTestRun(t *testing.T, s *Server, id string) {
 		t.Fatal(err)
 	}
 }
+
+func TestArchiveQuietPeriodDoesNotPartiallyRotateLogs(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	resultFixture(t, s, "run", "completed", time.Now())
+	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, "run")
+	events := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(events, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(events, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "observations.jsonl"), []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.runSourceRevision("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.archiveRun(context.Background(), "run", archiveQuietPeriod); !errors.Is(err, errResultBusy) {
+		t.Fatalf("quiet period: %v", err)
+	}
+	after, err := s.runSourceRevision("run")
+	if err != nil || before != after {
+		t.Fatalf("deferred archival changed source revision: %q %q %v", before, after, err)
+	}
+	if _, err := os.Stat(events); err != nil {
+		t.Fatalf("quiet event log was rotated before observations settled: %v", err)
+	}
+}
 func storageZIP(t *testing.T, s *Server, id string) map[string][]byte {
 	t.Helper()
 	response := resultRequest(s, "GET", "/api/v1/experiments/"+id+"/download")

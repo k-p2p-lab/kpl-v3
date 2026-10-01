@@ -3,6 +3,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,41 @@ import (
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
+
+// Measures the complete copy + destination checksum verification on local disk.
+// NAS throughput can be lower; no experiment is running during this benchmark.
+func BenchmarkArchiveCopy8MiB(b *testing.B) {
+	s := New(ServerConfig{DataDir: b.TempDir()}, nil)
+	local, err := os.OpenRoot(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer local.Close()
+	payload := bytes.Repeat([]byte("record\n"), (8<<20)/7)
+	if err := local.WriteFile("events.jsonl", payload, 0600); err != nil {
+		b.Fatal(err)
+	}
+	source, err := openResultFile(local, "events.jsonl")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer source.close()
+	remote, err := os.OpenRoot(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer remote.Close()
+	sum := sha256.Sum256(payload)
+	expected := hex.EncodeToString(sum[:])
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		stored, err := s.copyArchiveFile(context.Background(), remote, "events.jsonl", source)
+		if err != nil || stored.SHA256 != expected || stored.Size != int64(len(payload)) {
+			b.Fatalf("archive copy: %+v %v", stored, err)
+		}
+	}
+}
 
 func archiveOverviewForTest(t *testing.T, s *Server) resultStorageOverview {
 	t.Helper()

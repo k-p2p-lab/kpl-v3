@@ -8,7 +8,47 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
+
+func TestUnchangedExperimentPersistenceKeepsSourceRevisionAndArchiveStatus(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	run := model.Experiment{ID: "run", State: "completed", Name: "unchanged"}
+	if err := s.persistManifest(run, []byte("version: 1\nname: unchanged\nphases:\n - action: stop-all\n")); err != nil {
+		t.Fatal(err)
+	}
+	archiveTestRun(t, s, run.ID)
+	path := filepath.Join(s.config.DataDir, currentRunsDirectory, run.ID, "experiment.json")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := s.runSourceRevision(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storageRevision := s.state.resultsRevision.Load()
+	if err := s.persistExperiment(run); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("unchanged metadata was replaced: %v", err)
+	}
+	current, err := s.runSourceRevision(run.ID)
+	if err != nil || current != revision || s.state.resultsRevision.Load() != storageRevision {
+		t.Fatalf("unchanged metadata invalidated archive/analysis: %q %q %v", current, revision, err)
+	}
+	run.State = "failed"
+	if err := s.persistExperiment(run); err != nil {
+		t.Fatal(err)
+	}
+	current, err = s.runSourceRevision(run.ID)
+	if err != nil || current == revision || s.state.resultsRevision.Load() == storageRevision {
+		t.Fatalf("changed metadata was ignored: %q %q %v", current, revision, err)
+	}
+}
 
 func TestAtomicMetadataReplacementAndTemporaryFileCleanup(t *testing.T) {
 	dir := t.TempDir()

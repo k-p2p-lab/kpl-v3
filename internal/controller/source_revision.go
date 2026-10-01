@@ -45,6 +45,21 @@ func sourceRevisionAt(root *os.Root, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fingerprint, err := sourceFingerprintAt(root, manifest)
+	return sourceRevisionFor(fingerprint, manifest), err
+}
+
+// An archive move changes inode/segment hints but preserves the logical source.
+// Accept the preserved revision only for the exact locally recorded layout.
+// A later write (including one restoring size/mtime) invalidates the fingerprint.
+func sourceRevisionFor(fingerprint string, manifest runArchiveManifestData) string {
+	if manifest.SourceRevision != "" && fingerprint == manifest.SourceFingerprint {
+		return manifest.SourceRevision
+	}
+	return fingerprint
+}
+
+func sourceFingerprintAt(root *os.Root, manifest runArchiveManifestData) (string, error) {
 	var files []resultFile
 	defer func() {
 		for _, f := range files {

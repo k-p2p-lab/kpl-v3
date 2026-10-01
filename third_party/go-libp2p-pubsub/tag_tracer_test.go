@@ -192,9 +192,9 @@ func TestTagTracerDeliveryTagsNearFirst(t *testing.T) {
 			ReceivedFrom: p,
 			Message: &pb.Message{
 				From:  []byte(p),
-				Data:  []byte(fmt.Sprintf("msg-%d", i)),
+				Data:  fmt.Appendf(nil, "msg-%d", i),
 				Topic: &topic,
-				Seqno: []byte(fmt.Sprintf("%d", i)),
+				Seqno: fmt.Appendf(nil, "%d", i),
 			},
 		}
 

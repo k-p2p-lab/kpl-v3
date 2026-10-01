@@ -115,7 +115,7 @@ func TestGossipSubCustomProtocols(t *testing.T) {
 
 	// send some messages
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not quite a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not quite a floooooood %d", i, i)
 
 		owner := rand.Intn(len(psubs))
 

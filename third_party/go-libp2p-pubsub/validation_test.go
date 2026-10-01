@@ -319,7 +319,7 @@ func TestValidateAssortedOptions(t *testing.T) {
 	time.Sleep(time.Second)
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 
 		psubs[i].Publish("test1", msg)
 		for _, sub := range subs1 {

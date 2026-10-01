@@ -101,7 +101,7 @@ func testWithTracer(t *testing.T, tracer EventTracer) {
 		if i%7 == 0 {
 			psubs[i].Publish("test", []byte("invalid!"))
 		} else {
-			msg := []byte(fmt.Sprintf("message %d", i))
+			msg := fmt.Appendf(nil, "message %d", i)
 			psubs[i].Publish("test", msg)
 		}
 	}

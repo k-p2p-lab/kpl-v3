@@ -198,7 +198,7 @@ func TestSimpleDiscovery(t *testing.T) {
 
 	// Try random peers sending messages and make sure they are received
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d the flooooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d the flooooooood %d", i, i)
 
 		owner := rand.Intn(len(psubs))
 
@@ -272,7 +272,7 @@ func TestGossipSubDiscoveryAfterBootstrap(t *testing.T) {
 
 	// test the mesh
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := rand.Intn(numHosts)
 

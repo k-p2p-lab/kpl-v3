@@ -66,7 +66,7 @@ func TestSparseGossipsub(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -107,7 +107,7 @@ func TestDenseGossipsub(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -148,7 +148,7 @@ func TestGossipsubFanout(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -176,7 +176,7 @@ func TestGossipsubFanout(t *testing.T) {
 	time.Sleep(time.Second * 1)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -217,7 +217,7 @@ func TestGossipsubFanoutMaintenance(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -256,7 +256,7 @@ func TestGossipsubFanoutMaintenance(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -302,7 +302,7 @@ func TestGossipsubFanoutExpiry(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 5; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -361,7 +361,7 @@ func TestGossipsubGossip(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -419,7 +419,7 @@ func TestGossipsubGossipPiggyback(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -480,7 +480,7 @@ func TestGossipsubGossipPropagation(t *testing.T) {
 	time.Sleep(time.Second * 1)
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 0
 
@@ -521,7 +521,7 @@ func TestGossipsubGossipPropagation(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 		gotit := false
 		for j := 0; j < len(collect); j++ {
 			if bytes.Equal(msg, collect[j]) {
@@ -566,7 +566,7 @@ func TestGossipsubPrune(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -663,7 +663,7 @@ func TestGossipsubPruneBackoffTime(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		// Don't publish from host 0, since everyone should have pruned it.
 		owner := mrand.Intn(len(psubs)-1) + 1
@@ -709,7 +709,7 @@ func TestGossipsubGraft(t *testing.T) {
 	time.Sleep(time.Second * 1)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -758,7 +758,7 @@ func TestGossipsubRemovePeer(t *testing.T) {
 	time.Sleep(time.Second * 1)
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := 5 + mrand.Intn(len(psubs)-5)
 
@@ -806,7 +806,7 @@ func TestGossipsubGraftPruneRetry(t *testing.T) {
 	time.Sleep(time.Second * 5)
 
 	for i, topic := range topics {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -890,7 +890,7 @@ func TestGossipsubControlPiggyback(t *testing.T) {
 
 	// and test that we have functional overlays
 	for i, topic := range topics {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -933,7 +933,7 @@ func TestMixedGossipsub(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d it's not a floooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d it's not a floooooood %d", i, i)
 
 		owner := mrand.Intn(len(psubs))
 
@@ -1115,7 +1115,7 @@ func TestGossipsubStarTopology(t *testing.T) {
 
 	// send a message from each peer and assert it was propagated
 	for i := 0; i < 20; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1211,7 +1211,7 @@ func TestGossipsubStarTopologyWithSignedPeerRecords(t *testing.T) {
 
 	// send a message from each peer and assert it was propagated
 	for i := 0; i < 20; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1254,7 +1254,7 @@ func TestGossipsubDirectPeers(t *testing.T) {
 
 	// publish some messages
 	for i := 0; i < 3; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1275,7 +1275,7 @@ func TestGossipsubDirectPeers(t *testing.T) {
 
 	// publish some messages
 	for i := 0; i < 3; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1354,7 +1354,7 @@ func TestGossipsubDirectPeersFanout(t *testing.T) {
 
 	// h2 publishes some messages to build a fanout
 	for i := 0; i < 3; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[2].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1439,7 +1439,7 @@ func TestGossipsubFloodPublish(t *testing.T) {
 
 	// send a message from the star and assert it was received
 	for i := 0; i < 20; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[0].Publish("test", msg)
 
 		for _, sub := range subs {
@@ -1565,7 +1565,7 @@ func TestGossipsubNegativeScore(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	for i := 0; i < 20; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i%20].Publish("test", msg)
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1886,7 +1886,7 @@ func TestGossipsubOpportunisticGrafting(t *testing.T) {
 
 	// publish a bunch of messages from the real hosts
 	for i := 0; i < 1000; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i%10].Publish("test", msg)
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -2117,7 +2117,7 @@ func TestGossipsubPeerScoreInspect(t *testing.T) {
 	time.Sleep(time.Second)
 
 	for i := 0; i < 20; i++ {
-		msg := []byte(fmt.Sprintf("message %d", i))
+		msg := fmt.Appendf(nil, "message %d", i)
 		psubs[i%2].Publish("test", msg)
 		time.Sleep(20 * time.Millisecond)
 	}

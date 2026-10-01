@@ -156,7 +156,7 @@ func TestMessageCache(t *testing.T) {
 func makeTestMessage(n int) *pb.Message {
 	seqno := make([]byte, 8)
 	binary.BigEndian.PutUint64(seqno, uint64(n))
-	data := []byte(fmt.Sprintf("%d", n))
+	data := fmt.Appendf(nil, "%d", n)
 	topic := "test"
 	return &pb.Message{
 		Data:  data,

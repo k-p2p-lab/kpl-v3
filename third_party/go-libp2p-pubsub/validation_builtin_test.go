@@ -64,7 +64,7 @@ func testBasicSeqnoValidator(t *testing.T, ttl time.Duration) {
 	time.Sleep(time.Millisecond * 100)
 
 	for i := 0; i < 100; i++ {
-		msg := []byte(fmt.Sprintf("%d the flooooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d the flooooooood %d", i, i)
 
 		owner := rng.Intn(len(psubs))
 
@@ -112,7 +112,7 @@ func TestBasicSeqnoValidatorReplay(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	for i := 0; i < 10; i++ {
-		msg := []byte(fmt.Sprintf("%d the flooooooood %d", i, i))
+		msg := fmt.Appendf(nil, "%d the flooooooood %d", i, i)
 
 		owner := rng.Intn(len(psubs))
 

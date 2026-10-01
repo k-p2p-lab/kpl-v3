@@ -70,7 +70,6 @@ func estimateControllerClockWithRetry(parent context.Context, controllerURL stri
 				Time time.Time `json:"time"`
 			}
 			resp, requestErr := client.Do(req)
-			finished := time.Now()
 			if requestErr != nil {
 				err = requestErr
 			} else {
@@ -82,6 +81,9 @@ func estimateControllerClockWithRetry(parent context.Context, controllerURL stri
 				} else if response.Time.IsZero() {
 					err = fmt.Errorf("Controller clock endpoint returned an empty time")
 				} else {
+					// Do returns after headers; include receipt and decoding of the
+					// timestamp body in the midpoint and uncertainty interval.
+					finished := time.Now()
 					roundTrip := finished.Sub(started)
 					if roundTrip >= 0 && roundTrip < bestRoundTrip {
 						midpoint := started.Add(roundTrip / 2)

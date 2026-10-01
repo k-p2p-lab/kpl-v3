@@ -17,7 +17,7 @@ func TestRejectsNonFiniteReadyRatio(t *testing.T) {
 
 func TestPublishPayloadLimitValidatedBeforeExecution(t *testing.T) {
 	for _, size := range []int{32, 16 << 20, (16 << 20) + 1} {
-		_, err := Parse([]byte(fmt.Sprintf("name: limits\nphases: [{action: publish, group: peers, count: 1, payloadSize: %d}]", size)))
+		_, err := Parse(fmt.Appendf(nil, "name: limits\nphases: [{action: publish, group: peers, count: 1, payloadSize: %d}]", size))
 		if size <= 16<<20 && err != nil {
 			t.Errorf("valid payload size %d: %v", size, err)
 		}

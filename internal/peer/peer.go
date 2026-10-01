@@ -250,6 +250,7 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 	}
 	apiServer := &http.Server{
 		Handler:           s.handler(),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

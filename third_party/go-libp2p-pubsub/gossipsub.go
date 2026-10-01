@@ -577,14 +577,27 @@ func (gs *GossipSubRouter) Attach(p *PubSub) {
 
 	// connect to direct peers
 	if len(gs.direct) > 0 {
-		go func() {
-			if gs.params.DirectConnectInitialDelay > 0 {
-				time.Sleep(gs.params.DirectConnectInitialDelay)
-			}
-			for p := range gs.direct {
-				gs.connect <- connectInfo{p: p}
-			}
-		}()
+		go gs.initialDirectConnect()
+	}
+}
+
+func (gs *GossipSubRouter) initialDirectConnect() {
+	timer := time.NewTimer(gs.params.DirectConnectInitialDelay)
+	defer timer.Stop()
+	select {
+	case <-gs.p.ctx.Done():
+		return
+	case <-timer.C:
+	}
+	for p := range gs.direct {
+		if gs.p.ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-gs.p.ctx.Done():
+			return
+		case gs.connect <- connectInfo{p: p}:
+		}
 	}
 }
 
@@ -1539,7 +1552,16 @@ func appendOrMergeRPC(slice []*RPC, limit int, elems ...RPC) []*RPC {
 }
 
 func (gs *GossipSubRouter) heartbeatTimer() {
-	time.Sleep(gs.params.HeartbeatInitialDelay)
+	timer := time.NewTimer(gs.params.HeartbeatInitialDelay)
+	defer timer.Stop()
+	select {
+	case <-gs.p.ctx.Done():
+		return
+	case <-timer.C:
+	}
+	if gs.p.ctx.Err() != nil {
+		return
+	}
 	select {
 	case gs.p.eval <- gs.heartbeat:
 	case <-gs.p.ctx.Done():
@@ -1901,12 +1923,17 @@ func (gs *GossipSubRouter) directConnect() {
 		}
 	}
 
-	if len(toconnect) > 0 {
-		go func() {
-			for _, p := range toconnect {
-				gs.connect <- connectInfo{p: p}
-			}
-		}()
+	for _, p := range toconnect {
+		if gs.p.ctx.Err() != nil {
+			return
+		}
+		select {
+		case gs.connect <- connectInfo{p: p}:
+		default:
+			// Retry on a later heartbeat instead of accumulating blocked
+			// goroutines while the bounded connector queue is full.
+			return
+		}
 	}
 }
 

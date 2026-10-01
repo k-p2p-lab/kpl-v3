@@ -116,7 +116,17 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 		if err != nil {
 			return fmt.Errorf("check stored run fence: %w", err)
 		}
+		// Telemetry admission may be waiting for disk I/O. Sample its pressure
+		// before taking the state lock used by heartbeats and lifetime stops.
+		s.eventsMu.Lock()
+		pendingTerminations := len(s.terminations)
+		telemetryFull := s.spool != nil && (s.pendingEventsLocked() >= telemetryBacklogEvents || s.pendingBytesLocked() >= telemetryBacklogBytes)
+		s.eventsMu.Unlock()
 		s.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
 		if revision != s.historyRevision {
 			s.mu.Unlock()
 			continue
@@ -146,10 +156,6 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 			s.mu.Unlock()
 			return errCapacityReached
 		}
-		s.eventsMu.Lock()
-		pendingTerminations := len(s.terminations)
-		telemetryFull := s.spool != nil && (s.pendingEventsLocked() >= telemetryBacklogEvents || s.pendingBytesLocked() >= telemetryBacklogBytes)
-		s.eventsMu.Unlock()
 		if telemetryFull {
 			s.mu.Unlock()
 			return errTelemetryBacklogFull

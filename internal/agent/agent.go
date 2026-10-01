@@ -643,26 +643,39 @@ func (s *Server) writePeerConfig(config model.PeerProcessConfig) (string, error)
 }
 
 func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr error) {
+	observedAt := time.Now().UTC()
+	state, message := model.NodeStopped, ""
+	s.mu.Lock()
+	current, ok := s.processes[nodeID]
+	if cleanupErr != nil || runErr != nil && proc.node.State != model.NodeStopping {
+		state, message = model.NodeFailed, errors.Join(runErr, cleanupErr).Error()
+	}
+	var termination *model.TraceEvent
+	if ok && current == proc {
+		// Stop accepting status/publication updates while retaining the slot and
+		// completion signal until termination evidence has entered the queue.
+		current.node.State = model.NodeStopping
+		current.node.LastSeen = observedAt
+		if cleanupErr == nil {
+			// This bounds the exit time, not the end of a subscription session.
+			termination = &model.TraceEvent{EventID: cryptorand.Text(), RunID: current.node.RunID, NodeID: nodeID, AgentID: s.config.ID, Type: "measurement_terminated", Timestamp: observedAt}
+		}
+	}
+	s.mu.Unlock()
+	if termination != nil {
+		// Spool writes may stall. Never hold the state lock while waiting for
+		// telemetry admission: heartbeats and other lifetime stops must proceed.
+		s.queueTermination(*termination)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	proc.exited = true
 	proc.cleanupErr = cleanupErr
-	current, ok := s.processes[nodeID]
+	current, ok = s.processes[nodeID]
 	if ok && current == proc {
 		current.node.LastSeen = time.Now().UTC()
-		if cleanupErr == nil {
-			// This is an upper bound on the exit time, never evidence that the
-			// process stayed subscribed until the Agent observed its exit.
-			s.queueTermination(model.TraceEvent{EventID: cryptorand.Text(), RunID: current.node.RunID, NodeID: nodeID, AgentID: s.config.ID, Type: "measurement_terminated", Timestamp: current.node.LastSeen})
-		}
-		setProcessMetadata(current, "stoppedAt", current.node.LastSeen.Format(time.RFC3339Nano))
-		if cleanupErr == nil && (current.node.State == model.NodeStopping || runErr == nil) {
-			current.node.State = model.NodeStopped
-			current.node.Error = ""
-		} else {
-			current.node.State = model.NodeFailed
-			current.node.Error = errors.Join(runErr, cleanupErr).Error()
-		}
+		setProcessMetadata(current, "stoppedAt", observedAt.Format(time.RFC3339Nano))
+		current.node.State, current.node.Error = state, message
 	}
 	if processCleanupComplete(proc) {
 		setProcessMetadata(proc, "cleanupComplete", "true")
@@ -681,7 +694,7 @@ func (s *Server) stopNode(nodeID string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("node %q not found", nodeID)
 	}
-	if proc.node.State == model.NodeStopped || proc.node.State == model.NodeFailed {
+	if proc.exited {
 		if proc.cleanupErr != nil && proc.containerID != "" {
 			s.retryContainerCleanupLocked(proc)
 		}
@@ -695,7 +708,9 @@ func (s *Server) stopNode(nodeID string) error {
 	}
 	cancel := proc.cancel
 	s.mu.Unlock()
-	cancel()
+	if cancel != nil {
+		cancel()
+	}
 	return nil
 }
 
@@ -740,7 +755,7 @@ func (s *Server) stopRunGeneration(runID string, generation uint64) {
 			}
 			continue
 		}
-		if proc.node.State == model.NodeStopping || proc.node.State == model.NodeStopped || proc.node.State == model.NodeFailed {
+		if proc.node.State == model.NodeStopping && proc.node.Metadata["stopRequestedAt"] != "" {
 			continue
 		}
 		proc.node.State = model.NodeStopping

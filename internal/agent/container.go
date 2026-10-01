@@ -103,33 +103,14 @@ func (s *Server) retryContainerCleanupLocked(proc *process) {
 
 func (s *Server) waitRunContainers(ctx context.Context, runID string, generation uint64) error {
 	s.mu.RLock()
-	type pendingCleanup struct {
-		proc *process
-		done <-chan struct{}
-	}
-	var pending []pendingCleanup
+	var pending []*process
 	for _, proc := range s.processes {
 		if proc.node.RunID == runID && proc.node.Generation <= generation {
-			pending = append(pending, pendingCleanup{proc: proc, done: proc.done})
+			pending = append(pending, proc)
 		}
 	}
 	s.mu.RUnlock()
-	var failures []error
-	for _, item := range pending {
-		if item.done != nil {
-			select {
-			case <-item.done:
-			case <-ctx.Done():
-				return fmt.Errorf("wait for peer container cleanup: %w", ctx.Err())
-			}
-		}
-		s.mu.RLock()
-		if item.proc.cleanupErr != nil {
-			failures = append(failures, item.proc.cleanupErr)
-		}
-		s.mu.RUnlock()
-	}
-	return errors.Join(failures...)
+	return s.waitProcessesStopped(ctx, pending)
 }
 
 func (s *Server) waitStopped(timeout time.Duration) error {
@@ -145,6 +126,10 @@ func (s *Server) waitStoppedContext(ctx context.Context) error {
 		pending = append(pending, proc)
 	}
 	s.mu.RUnlock()
+	return s.waitProcessesStopped(ctx, pending)
+}
+
+func (s *Server) waitProcessesStopped(ctx context.Context, pending []*process) error {
 	var failures []error
 	for _, proc := range pending {
 		for {

@@ -13,9 +13,9 @@ import (
 	corepeer "github.com/libp2p/go-libp2p/core/peer"
 )
 
-func TestHopWaveOptionReachesPeerPubSub(t *testing.T) {
+func TestHopwaveOptionReachesPeerPubSub(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		config := model.NodeConfig{GossipSub: model.GossipSubConfig{HopWave: &enabled}}.WithDefaults()
+		config := model.NodeConfig{GossipSub: model.GossipSubConfig{Hopwave: &enabled}}.WithDefaults()
 		options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
 		if err != nil {
 			t.Fatal(err)
@@ -43,16 +43,16 @@ func TestHopWaveOptionReachesPeerPubSub(t *testing.T) {
 		}
 		if enabled {
 			if msg.HopCount == nil || msg.GetHopCount() != 0 || msg.GetPropaType() != pb.PropagationType_EAGER_PUSH {
-				t.Fatal("configured Peer did not seed HopWave metadata")
+				t.Fatal("configured Peer did not seed Hopwave metadata")
 			}
 		} else if msg.HopCount != nil || msg.PropaType != nil {
-			t.Fatal("disabled Peer emitted HopWave metadata")
+			t.Fatal("disabled Peer emitted Hopwave metadata")
 		}
 		cancel()
 	}
 }
 
-func TestHopWaveDeliveryAndDuplicatePreserveReportedMetadata(t *testing.T) {
+func TestHopwaveDeliveryAndDuplicatePreserveReportedMetadata(t *testing.T) {
 	s := &Server{host: newConfigTestHost(t), config: model.PeerProcessConfig{Node: model.Node{ID: "node", RunID: "run"}, NodeConfig: model.NodeConfig{}.WithDefaults()}}
 	for _, encoding := range []string{"raw", "envelope"} {
 		data := []byte("raw payload")
@@ -74,7 +74,7 @@ func TestHopWaveDeliveryAndDuplicatePreserveReportedMetadata(t *testing.T) {
 			t.Fatal("duplicate rejected")
 		}
 		for _, event := range []model.TraceEvent{delivery, duplicate} {
-			if event.Fields["hopWaveHopCount"] != hops || event.Fields["hopWaveHopCountAvailable"] != true || event.Fields["hopWavePropagationType"] != "lazy-pull" || event.Fields["hopWaveSource"] != "wire" || event.Fields["hopWaveMetadataVersion"] != 1 {
+			if event.Fields["hopwaveHopCount"] != hops || event.Fields["hopwaveHopCountAvailable"] != true || event.Fields["hopwavePropagationType"] != "lazy-pull" || event.Fields["hopwaveSource"] != "wire" || event.Fields["hopwaveMetadataVersion"] != 1 {
 				t.Fatalf("%s %s lost metadata: %+v", encoding, event.Type, event.Fields)
 			}
 			if event.Fields["hop"] != nil || event.Fields["linkEstimate"] != nil {
@@ -87,12 +87,12 @@ func TestHopWaveDeliveryAndDuplicatePreserveReportedMetadata(t *testing.T) {
 	}
 	for _, msg := range []*pb.Message{{}, {PropaType: pb.PropagationType_EAGER_PUSH.Enum()}, {HopCount: func() *int32 { v := int32(-1); return &v }()}} {
 		fields := map[string]any{}
-		addHopWaveFields(fields, msg)
+		addHopwaveFields(fields, msg)
 		if msg.HopCount == nil && msg.PropaType == nil {
 			if !reflect.DeepEqual(fields, map[string]any{}) {
 				t.Fatal("legacy message acquired fabricated metadata")
 			}
-		} else if fields["hopWaveHopCountAvailable"] != false || fields["hopWaveHopCount"] != nil {
+		} else if fields["hopwaveHopCountAvailable"] != false || fields["hopwaveHopCount"] != nil {
 			t.Fatal("missing or invalid hop count became zero")
 		}
 	}

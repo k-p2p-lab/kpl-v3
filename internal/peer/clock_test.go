@@ -45,6 +45,30 @@ func TestEstimateControllerClockRequiresAValidHealthResponse(t *testing.T) {
 	}
 }
 
+func TestEstimateControllerClockIncludesResponseBodyDelay(t *testing.T) {
+	const delay = 20 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-timer.C:
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"time": time.Now().UTC()})
+	}))
+	defer server.Close()
+	estimate, err := estimateControllerClock(t.Context(), server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.uncertainty < delay/2 {
+		t.Fatalf("body delay excluded from clock uncertainty: got %s, want at least %s", estimate.uncertainty, delay/2)
+	}
+}
+
 func TestEstimateControllerClockRetriesTransientHealthFailures(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

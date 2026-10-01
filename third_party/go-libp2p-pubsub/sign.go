@@ -55,7 +55,7 @@ func verifyMessageSignature(m *pb.Message) error {
 	xm := *m
 	xm.Signature = nil
 	xm.Key = nil
-	// HopWave metadata is mutable at each relay, outside the signed content.
+	// Hopwave metadata is mutable at each relay, outside the signed content.
 	xm.PropaType = nil
 	xm.HopCount = nil
 	bytes, err := xm.Marshal()

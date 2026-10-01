@@ -8,18 +8,18 @@ profiles:
     type: boot
     gossipsub:
       enabled: true
-      hopWave: true
+      hopwave: true
       params:
-        hopWaveFactor: 0.5
-        hopWaveInterval: 3
+        hopwaveFactor: 0.5
+        hopwaveInterval: 3
       topics: [kpl/hopwave]
   worker:
     type: full
     gossipsub:
-      hopWave: true
+      hopwave: true
       params:
-        hopWaveFactor: 0.5
-        hopWaveInterval: 3
+        hopwaveFactor: 0.5
+        hopwaveInterval: 3
       topics: [kpl/hopwave]
 phases:
   - {action: join, group: boot, role: boot, profile: boot, count: 1}

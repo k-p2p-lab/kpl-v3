@@ -1,6 +1,7 @@
 package scenario
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
@@ -62,7 +63,7 @@ phases:
 	}
 }
 
-func TestHopWaveExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
+func TestHopwaveExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
 	data, err := os.ReadFile("../../examples/hopwave.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -87,11 +88,18 @@ func TestHopWaveExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
 		if err := config.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		if config.GossipSub.HopWave == nil || !*config.GossipSub.HopWave {
-			t.Fatal("HopWave was lost between profile, join and Peer config")
+		if config.GossipSub.Hopwave == nil || !*config.GossipSub.Hopwave {
+			t.Fatal("Hopwave was lost between profile, join and Peer config")
 		}
-		if *config.GossipSub.Params.HopWaveFactor != 0.5 || *config.GossipSub.Params.HopWaveInterval != 3 {
-			t.Fatal("HopWave parameters were lost between profile, join and Peer config")
+		if *config.GossipSub.Params.HopwaveFactor != 0.5 || *config.GossipSub.Params.HopwaveInterval != 3 {
+			t.Fatal("Hopwave parameters were lost between profile, join and Peer config")
+		}
+		// JSON decoding ignores key case, so a round trip alone would not
+		// detect regressions in the canonical spellings sent to the Agent/Peer.
+		for _, field := range []string{`"hopwave":true`, `"hopwaveFactor":0.5`, `"hopwaveInterval":3`} {
+			if !bytes.Contains(wire, []byte(field)) {
+				t.Fatalf("Peer config is missing canonical field %s", field)
+			}
 		}
 	}
 }

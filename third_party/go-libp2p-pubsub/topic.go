@@ -256,7 +256,7 @@ func (t *Topic) Publish(ctx context.Context, data []byte, opts ...PubOpt) error 
 		From:  nil,
 		Seqno: nil,
 	}
-	if t.p.hopWave {
+	if t.p.hopwave {
 		zero := int32(0)
 		m.HopCount = &zero
 		m.PropaType = pb.PropagationType_EAGER_PUSH.Enum()

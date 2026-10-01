@@ -8,52 +8,52 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// WithHopWave enables the HopWave hop/propagation metadata extension to
+// WithHopwave enables the Hopwave hop/propagation metadata extension to
 // GossipSub. Routing, mesh selection and scoring remain GossipSub's. All hops
 // in an experiment must support the extension for a complete hop count.
-func WithHopWave() Option {
+func WithHopwave() Option {
 	return func(p *PubSub) error {
 		if _, ok := p.rt.(*GossipSubRouter); !ok {
-			return fmt.Errorf("HopWave requires the GossipSub router")
+			return fmt.Errorf("Hopwave requires the GossipSub router")
 		}
-		p.hopWave = true
+		p.hopwave = true
 		return nil
 	}
 }
 
-// WithHopWavePublish enables periodic full forwarding with random fractional
-// forwarding between waves, as implemented by kmu-comnet's hop-wave branch.
+// WithHopwavePublish enables periodic full forwarding with random fractional
+// forwarding between waves. See KPL-CHANGES.md for source references.
 // It also enables the mutable wire metadata. Disabled is the default.
-func WithHopWavePublish(enabled bool) Option {
+func WithHopwavePublish(enabled bool) Option {
 	return func(p *PubSub) error {
 		gs, ok := p.rt.(*GossipSubRouter)
 		if !ok {
-			return fmt.Errorf("HopWave requires the GossipSub router")
+			return fmt.Errorf("Hopwave requires the GossipSub router")
 		}
 		if enabled {
-			if err := validateHopWaveParams(gs.params); err != nil {
+			if err := validateHopwaveParams(gs.params); err != nil {
 				return err
 			}
-			p.hopWave = true
+			p.hopwave = true
 		}
-		gs.hopWavePublish = enabled
+		gs.hopwavePublish = enabled
 		return nil
 	}
 }
 
-func validateHopWaveParams(params GossipSubParams) error {
-	if math.IsNaN(params.HopWaveFactor) || math.IsInf(params.HopWaveFactor, 0) || params.HopWaveFactor < 0 || params.HopWaveFactor > 1 {
-		return fmt.Errorf("HopWaveFactor must be finite and in [0, 1]")
+func validateHopwaveParams(params GossipSubParams) error {
+	if math.IsNaN(params.HopwaveFactor) || math.IsInf(params.HopwaveFactor, 0) || params.HopwaveFactor < 0 || params.HopwaveFactor > 1 {
+		return fmt.Errorf("HopwaveFactor must be finite and in [0, 1]")
 	}
-	if params.HopWaveInterval < 1 || params.HopWaveInterval > math.MaxInt32 {
-		return fmt.Errorf("HopWaveInterval must be in [1, 2147483647]")
+	if params.HopwaveInterval < 1 || params.HopwaveInterval > math.MaxInt32 {
+		return fmt.Errorf("HopwaveInterval must be in [1, 2147483647]")
 	}
 	return nil
 }
 
-func (gs *GossipSubRouter) hopWaveMessage(message *pb.Message, propagation pb.PropagationType) *pb.Message {
-	out := hopWaveMessage(message, propagation)
-	if gs.hopWavePublish && out.HopCount != nil && *out.HopCount >= int32(gs.params.HopWaveInterval) {
+func (gs *GossipSubRouter) hopwaveMessage(message *pb.Message, propagation pb.PropagationType) *pb.Message {
+	out := hopwaveMessage(message, propagation)
+	if gs.hopwavePublish && out.HopCount != nil && *out.HopCount >= int32(gs.params.HopwaveInterval) {
 		*out.HopCount = 0
 	}
 	return out
@@ -61,7 +61,7 @@ func (gs *GossipSubRouter) hopWaveMessage(message *pb.Message, propagation pb.Pr
 
 // Select only after excluding the previous sender, author and IDONTWANT peers.
 // Positive factors retain at least one eligible recipient, matching the fork.
-func selectHopWavePeers(candidates map[peer.ID]struct{}, factor float64) map[peer.ID]struct{} {
+func selectHopwavePeers(candidates map[peer.ID]struct{}, factor float64) map[peer.ID]struct{} {
 	if factor >= 1 {
 		return candidates
 	}
@@ -88,7 +88,7 @@ func selectHopWavePeers(candidates map[peer.ID]struct{}, factor float64) map[pee
 // shared with subscribers, tracers and the cache and must remain immutable.
 // Repeated IWANT replies increment the cached arrival count once per hop,
 // without accumulating retransmissions or contaminating eager deliveries.
-func hopWaveMessage(message *pb.Message, propagation pb.PropagationType) *pb.Message {
+func hopwaveMessage(message *pb.Message, propagation pb.PropagationType) *pb.Message {
 	out := *message
 	out.PropaType = propagation.Enum()
 	out.HopCount = nil

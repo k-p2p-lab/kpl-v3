@@ -214,7 +214,7 @@ func (s *Server) deliveryEventWithClock(message *pubsub.Message, topic string, r
 		event.MessageID = payload.ID
 		event.LatencyMS = float64(reading.timestamp.UnixNano()-payload.SentAt) / float64(time.Millisecond)
 		event.Fields = map[string]any{"publisher": payload.Publisher, "payloadBytes": len(payload.Payload), "wireBytes": len(data), "payloadEncoding": "envelope", "latencyAvailable": true, "localDelivery": local || payload.Publisher == s.config.Node.ID, "pubsubMessageId": wireID}
-		addHopWaveFields(event.Fields, message.Message)
+		addHopwaveFields(event.Fields, message.Message)
 		if reading.synchronized && payload.ClockBasis == controllerClockBasis &&
 			payload.ClockUncertaintyNS >= 0 && payload.ClockUncertaintyNS <= int64(5*time.Second) {
 			event.Fields["latencyClockSynchronized"] = true
@@ -234,7 +234,7 @@ func (s *Server) deliveryEventWithClock(message *pubsub.Message, topic string, r
 	event.MessageID = "pubsub-" + wireID
 	event.LatencyMS = -1
 	event.Fields = map[string]any{"payloadBytes": len(data), "wireBytes": len(data), "payloadEncoding": "raw", "latencyAvailable": false, "localDelivery": local, "pubsubMessageId": wireID}
-	addHopWaveFields(event.Fields, message.Message)
+	addHopwaveFields(event.Fields, message.Message)
 	return event, true
 }
 
@@ -245,7 +245,7 @@ func (s *Server) duplicateEvent(message *pubsub.Message, now time.Time) (model.T
 	wireID, local := s.messageIdentity(message)
 	event := model.TraceEvent{PeerID: s.host.ID().String(), Type: "duplicate", Topic: message.GetTopic(), RemotePeerID: message.ReceivedFrom.String(), Timestamp: now}
 	event.Fields = map[string]any{"wireBytes": len(message.Data), "localDelivery": local, "pubsubMessageId": wireID}
-	addHopWaveFields(event.Fields, message.Message)
+	addHopwaveFields(event.Fields, message.Message)
 	// Raw tracers run synchronously in PubSub. Read only correlation metadata;
 	// decoding the base64 Payload here would allocate the full payload for every
 	// duplicate, adding avoidable work to the propagation being measured.

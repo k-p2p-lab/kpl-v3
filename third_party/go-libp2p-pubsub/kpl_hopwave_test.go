@@ -19,7 +19,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 )
 
-func newHopWaveHosts(t *testing.T, count int) []host.Host {
+func newHopwaveHosts(t *testing.T, count int) []host.Host {
 	t.Helper()
 	hosts := make([]host.Host, count)
 	for i := range hosts {
@@ -40,11 +40,11 @@ func newHopWaveHosts(t *testing.T, count int) []host.Host {
 	return hosts
 }
 
-func TestKPLHopWaveForwardingPreservesInboundMessage(t *testing.T) {
+func TestKPLHopwaveForwardingPreservesInboundMessage(t *testing.T) {
 	for _, hops := range []int32{0, 1, -1, math.MaxInt32} {
 		m := &pb.Message{Data: []byte("payload"), HopCount: &hops, PropaType: pb.PropagationType_LAZY_PULL.Enum()}
 		before, _ := m.Marshal()
-		out := hopWaveMessage(m, pb.PropagationType_EAGER_PUSH)
+		out := hopwaveMessage(m, pb.PropagationType_EAGER_PUSH)
 		if out == m || out.PropaType == m.PropaType || out.GetPropaType() != pb.PropagationType_EAGER_PUSH {
 			t.Fatal("outgoing metadata shares the inbound message")
 		}
@@ -62,16 +62,16 @@ func TestKPLHopWaveForwardingPreservesInboundMessage(t *testing.T) {
 		encoded, err := out.Marshal()
 		var decoded pb.Message
 		if err != nil || decoded.Unmarshal(encoded) != nil || decoded.GetPropaType() != out.GetPropaType() || (decoded.HopCount == nil) != (out.HopCount == nil) || decoded.GetHopCount() != out.GetHopCount() {
-			t.Fatal("HopWave fields failed protobuf round trip")
+			t.Fatal("Hopwave fields failed protobuf round trip")
 		}
 	}
 	legacy := &pb.Message{Data: []byte("legacy")}
-	if out := hopWaveMessage(legacy, pb.PropagationType_LAZY_PULL); out.HopCount != nil {
+	if out := hopwaveMessage(legacy, pb.PropagationType_LAZY_PULL); out.HopCount != nil {
 		t.Fatal("missing hop count was synthesized from a legacy message")
 	}
 }
 
-func TestKPLHopWaveSignaturesExcludeOnlyMutableMetadata(t *testing.T) {
+func TestKPLHopwaveSignaturesExcludeOnlyMutableMetadata(t *testing.T) {
 	key, _, err := crypto.GenerateKeyPair(crypto.Ed25519, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestKPLHopWaveSignaturesExcludeOnlyMutableMetadata(t *testing.T) {
 	if err := signMessage(id, key, m); err != nil {
 		t.Fatal(err)
 	}
-	forwarded := hopWaveMessage(hopWaveMessage(m, pb.PropagationType_EAGER_PUSH), pb.PropagationType_LAZY_PULL)
+	forwarded := hopwaveMessage(hopwaveMessage(m, pb.PropagationType_EAGER_PUSH), pb.PropagationType_LAZY_PULL)
 	if err := verifyMessageSignature(forwarded); err != nil {
 		t.Fatalf("relay metadata invalidated signature: %v", err)
 	}
@@ -100,12 +100,12 @@ func TestKPLHopWaveSignaturesExcludeOnlyMutableMetadata(t *testing.T) {
 	}
 }
 
-func TestKPLHopWaveIWantRepliesDoNotAccumulateHopsOrMutateQueuedPush(t *testing.T) {
+func TestKPLHopwaveIWantRepliesDoNotAccumulateHopsOrMutateQueuedPush(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		h := newHopWaveHosts(t, 1)[0]
+		h := newHopwaveHosts(t, 1)[0]
 		remote, topic, hops := peer.ID("remote"), "topic", int32(2)
 		queue := newRpcQueue(4)
-		p := &PubSub{host: h, hopWave: enabled, maxMessageSize: DefaultMaxMessageSize,
+		p := &PubSub{host: h, hopwave: enabled, maxMessageSize: DefaultMaxMessageSize,
 			idGen: newMsgIdGenerator(), topics: map[string]map[peer.ID]struct{}{topic: {remote: {}}},
 			peers: map[peer.ID]*rpcQueue{remote: queue}, peerFilter: func(peer.ID, string) bool { return true }}
 		gs := &GossipSubRouter{p: p, params: DefaultGossipSubParams(), feature: GossipSubDefaultFeatures, mcache: NewMessageCache(3, 5),
@@ -145,33 +145,33 @@ func boolInt(value bool) int32 {
 	return 0
 }
 
-type hopWaveTraceCollector struct{ events chan *pb.TraceEvent }
+type hopwaveTraceCollector struct{ events chan *pb.TraceEvent }
 
-func (tr hopWaveTraceCollector) Trace(event *pb.TraceEvent) {
+func (tr hopwaveTraceCollector) Trace(event *pb.TraceEvent) {
 	if event.GetType() == pb.TraceEvent_DELIVER_MESSAGE {
 		tr.events <- event
 	}
 }
 
-func TestKPLHopWaveSignedPropagationAcrossTwoHops(t *testing.T) {
+func TestKPLHopwaveSignedPropagationAcrossTwoHops(t *testing.T) {
 	for _, mode := range []string{"default", "metadata", "waves"} {
 		enabled := mode != "default"
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		t.Cleanup(cancel)
-		hosts := newHopWaveHosts(t, 3)
+		hosts := newHopwaveHosts(t, 3)
 		psubs := make([]*PubSub, 3)
 		topics := make([]*Topic, 3)
 		subs := make([]*Subscription, 3)
-		traces := make([]hopWaveTraceCollector, 3)
+		traces := make([]hopwaveTraceCollector, 3)
 		for i, h := range hosts {
-			traces[i] = hopWaveTraceCollector{make(chan *pb.TraceEvent, 4)}
+			traces[i] = hopwaveTraceCollector{make(chan *pb.TraceEvent, 4)}
 			options := []Option{WithEventTracer(traces[i])}
 			if mode == "waves" {
 				params := DefaultGossipSubParams()
-				params.HopWaveFactor, params.HopWaveInterval = 0.5, 2
-				options = append(options, WithGossipSubParams(params), WithHopWavePublish(true))
+				params.HopwaveFactor, params.HopwaveInterval = 0.5, 2
+				options = append(options, WithGossipSubParams(params), WithHopwavePublish(true))
 			} else if enabled {
-				options = append(options, WithHopWave())
+				options = append(options, WithHopwave())
 			}
 			psubs[i] = getGossipsub(ctx, h, options...)
 			var err error
@@ -227,7 +227,7 @@ func TestKPLHopWaveSignedPropagationAcrossTwoHops(t *testing.T) {
 					t.Fatalf("subscriber %d: %+v", i, msg.Message)
 				}
 			} else if msg.HopCount != nil || msg.PropaType != nil {
-				t.Fatal("default GossipSub emitted HopWave metadata")
+				t.Fatal("default GossipSub emitted Hopwave metadata")
 			}
 			select {
 			case event := <-traces[i].events:
@@ -242,17 +242,17 @@ func TestKPLHopWaveSignedPropagationAcrossTwoHops(t *testing.T) {
 	}
 }
 
-func TestKPLHopWaveRejectsOtherRouters(t *testing.T) {
-	if err := WithHopWave()(&PubSub{rt: &FloodSubRouter{}}); err == nil {
-		t.Fatal("HopWave was silently accepted by FloodSub")
+func TestKPLHopwaveRejectsOtherRouters(t *testing.T) {
+	if err := WithHopwave()(&PubSub{rt: &FloodSubRouter{}}); err == nil {
+		t.Fatal("Hopwave was silently accepted by FloodSub")
 	}
-	if err := WithHopWavePublish(true)(&PubSub{rt: &FloodSubRouter{}}); err == nil {
-		t.Fatal("HopWave publication was silently accepted by FloodSub")
+	if err := WithHopwavePublish(true)(&PubSub{rt: &FloodSubRouter{}}); err == nil {
+		t.Fatal("Hopwave publication was silently accepted by FloodSub")
 	}
 }
 
-func TestKPLHopWavePeriodicForwardingAndPullRecovery(t *testing.T) {
-	h := newHopWaveHosts(t, 1)[0]
+func TestKPLHopwavePeriodicForwardingAndPullRecovery(t *testing.T) {
+	h := newHopwaveHosts(t, 1)[0]
 	for _, tc := range []struct {
 		name     string
 		hops     *int32
@@ -285,14 +285,14 @@ func TestKPLHopWavePeriodicForwardingAndPullRecovery(t *testing.T) {
 			for _, p := range []peer.ID{previous, author, "unwanted"} {
 				candidates[p], queues[p], protocols[p] = struct{}{}, newRpcQueue(4), GossipSubID_v12
 			}
-			p := &PubSub{host: h, hopWave: true, maxMessageSize: DefaultMaxMessageSize, idGen: newMsgIdGenerator(),
+			p := &PubSub{host: h, hopwave: true, maxMessageSize: DefaultMaxMessageSize, idGen: newMsgIdGenerator(),
 				topics: map[string]map[peer.ID]struct{}{topic: candidates}, peers: queues,
 				peerFilter: func(peer.ID, string) bool { return true }}
 			params := DefaultGossipSubParams()
-			params.HopWaveFactor, params.HopWaveInterval = tc.factor, tc.interval
+			params.HopwaveFactor, params.HopwaveInterval = tc.factor, tc.interval
 			msg := &Message{Message: &pb.Message{Topic: &topic, Data: []byte("payload"), From: []byte(author), Seqno: []byte("seq"), HopCount: tc.hops, PropaType: pb.PropagationType_LAZY_PULL.Enum()}, ReceivedFrom: previous}
 			mid := DefaultMsgIdFn(msg.Message)
-			gs := &GossipSubRouter{p: p, hopWavePublish: true, params: params, feature: GossipSubDefaultFeatures,
+			gs := &GossipSubRouter{p: p, hopwavePublish: true, params: params, feature: GossipSubDefaultFeatures,
 				mcache: NewMessageCache(3, 5), mesh: map[string]map[peer.ID]struct{}{topic: candidates}, peers: protocols,
 				unwanted: map[peer.ID]map[checksum]int{"unwanted": {computeChecksum(mid): 1}}}
 			before, _ := msg.Message.Marshal()
@@ -332,16 +332,16 @@ func TestKPLHopWavePeriodicForwardingAndPullRecovery(t *testing.T) {
 
 func int32ptr(value int32) *int32 { return &value }
 
-func TestKPLHopWaveValidatesParametersInEitherOptionOrder(t *testing.T) {
+func TestKPLHopwaveValidatesParametersInEitherOptionOrder(t *testing.T) {
 	for _, values := range []struct {
 		factor   float64
 		interval int
 	}{{-0.1, 3}, {1.1, 3}, {math.NaN(), 3}, {math.Inf(1), 3}, {0.5, 0}, {0.5, -1}, {0.5, math.MaxInt32 + 1}} {
 		params := DefaultGossipSubParams()
-		params.HopWaveFactor, params.HopWaveInterval = values.factor, values.interval
+		params.HopwaveFactor, params.HopwaveInterval = values.factor, values.interval
 		for _, first := range []bool{false, true} {
 			p := &PubSub{rt: &GossipSubRouter{params: DefaultGossipSubParams()}}
-			options := []Option{WithGossipSubParams(params), WithHopWavePublish(true)}
+			options := []Option{WithGossipSubParams(params), WithHopwavePublish(true)}
 			if first {
 				options[0], options[1] = options[1], options[0]
 			}
@@ -352,7 +352,7 @@ func TestKPLHopWaveValidatesParametersInEitherOptionOrder(t *testing.T) {
 				}
 			}
 			if err == nil {
-				t.Fatalf("invalid HopWave settings accepted: %+v", values)
+				t.Fatalf("invalid Hopwave settings accepted: %+v", values)
 			}
 		}
 	}

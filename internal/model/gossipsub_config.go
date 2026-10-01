@@ -18,7 +18,7 @@ type GossipSubConfig struct {
 	Publish                *PubSubPublishConfig            `json:"publish,omitempty" yaml:"publish,omitempty"`
 	Enabled                *bool                           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Router                 string                          `json:"router,omitempty" yaml:"router,omitempty"`
-	HopWave                *bool                           `json:"hopWave,omitempty" yaml:"hopWave,omitempty"`
+	Hopwave                *bool                           `json:"hopwave,omitempty" yaml:"hopwave,omitempty"`
 	TopicMode              string                          `json:"topicMode,omitempty" yaml:"topicMode,omitempty"`
 	RandomDegree           *int                            `json:"randomDegree,omitempty" yaml:"randomDegree,omitempty"`
 	RandomNetworkSize      *int                            `json:"randomNetworkSize,omitempty" yaml:"randomNetworkSize,omitempty"`
@@ -76,6 +76,6 @@ type GossipSubParamsConfig struct {
 	IWantFollowupTime         string   `json:"iWantFollowupTime,omitempty" yaml:"iWantFollowupTime,omitempty"`
 	IDontWantMessageThreshold *int     `json:"iDontWantMessageThreshold,omitempty" yaml:"iDontWantMessageThreshold,omitempty"`
 	IDontWantMessageTTL       *int     `json:"iDontWantMessageTTL,omitempty" yaml:"iDontWantMessageTTL,omitempty"`
-	HopWaveFactor             *float64 `json:"hopWaveFactor,omitempty" yaml:"hopWaveFactor,omitempty"`
-	HopWaveInterval           *int     `json:"hopWaveInterval,omitempty" yaml:"hopWaveInterval,omitempty"`
+	HopwaveFactor             *float64 `json:"hopwaveFactor,omitempty" yaml:"hopwaveFactor,omitempty"`
+	HopwaveInterval           *int     `json:"hopwaveInterval,omitempty" yaml:"hopwaveInterval,omitempty"`
 }

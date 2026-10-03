@@ -106,7 +106,12 @@ type stagedAnalysisJSON struct {
 func (staged *stagedAnalysisJSON) discard() { _ = staged.root.Remove(staged.temp) }
 func (staged *stagedAnalysisJSON) publish(name string) error {
 	// Rename replaces a link rather than following it.
-	return staged.root.Rename(staged.temp, name)
+	if err := staged.root.Rename(staged.temp, name); err != nil {
+		return err
+	}
+	// File.Sync during staging does not persist the renamed directory entry.
+	// Commit it before replacing artifacts or acknowledging the new job ID.
+	return syncRunDirectory(staged.root)
 }
 
 func stageAnalysisJSON(ctx context.Context, root *os.Root, value any) (*stagedAnalysisJSON, error) {
@@ -185,8 +190,12 @@ func (s *Server) loadAnalysisJob(id string) (*analysisJob, error) {
 		return nil, errors.New("analysis job metadata is too large")
 	}
 	var status analysisJobStatus
-	if err := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size)).Decode(&status); err != nil {
+	decoder := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size))
+	if err := decoder.Decode(&status); err != nil {
 		return nil, fmt.Errorf("read analysis job: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("analysis job metadata contains trailing data")
 	}
 	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
 		return nil, errors.New("invalid analysis job metadata")

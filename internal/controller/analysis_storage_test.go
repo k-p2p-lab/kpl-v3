@@ -218,3 +218,68 @@ func TestAnalysisArtifactCommitRejectsCanceledDeletedAndReplacedJobs(t *testing.
 		}
 	}
 }
+
+func TestAnalysisPublicationReportsDirectorySyncFailure(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	staged, err := stageAnalysisJSON(t.Context(), root, map[string]string{"analysisId": "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.discard()
+	// Rename requires write/search permission; opening the directory to sync
+	// its entries also requires read permission. Exercise a failure after rename.
+	if err := os.Chmod(directory, 0300); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(directory, 0700)
+	if probe, err := root.Open("."); err == nil {
+		probe.Close()
+		t.Skip("directory read permissions are not enforced for this user")
+	} else if !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+	if err := staged.publish(analysisResultFile); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("publication acknowledged without syncing its directory: %v", err)
+	}
+}
+
+func TestAnalysisRecoveryRejectsTrailingJobMetadata(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		for _, suffix := range []string{"\n \t", "\n{}", "\nnot-json"} {
+			t.Run(fmt.Sprintf("batch=%t/suffix=%q", batch, suffix), func(t *testing.T) {
+				f := newAnalysisStorageFixture(t, batch)
+				if err := f.save(map[string]string{"analysisId": "job-old"}); err != nil {
+					t.Fatal(err)
+				}
+				name := analysisJobFile
+				if batch {
+					name = batchJobFile
+				}
+				path := filepath.Join(filepath.Dir(f.artifact), name)
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(data, suffix...), 0600); err != nil {
+					t.Fatal(err)
+				}
+				restarted := New(f.server.config, nil)
+				want := http.StatusUnprocessableEntity
+				if strings.TrimSpace(suffix) == "" {
+					want = http.StatusOK
+				}
+				for _, url := range []string{f.path, f.path + "/result?jobId=job-old"} {
+					response := resultRequest(restarted, http.MethodGet, url)
+					if response.Code != want {
+						t.Errorf("recovered %s: %d, want %d: %s", url, response.Code, want, response.Body)
+					}
+				}
+			})
+		}
+	}
+}

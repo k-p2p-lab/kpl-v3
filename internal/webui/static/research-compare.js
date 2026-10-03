@@ -107,7 +107,7 @@
     if (
       weights.length !== 3 ||
       weights.some((w) => !finite(w) || w < 0) ||
-      weights.reduce((a, b) => a + b, 0) <= 0
+      weights.every((w) => w === 0)
     )
       throw new Error(
         "Use three nonnegative score weights with a positive sum.",
@@ -118,7 +118,11 @@
         [Infinity, -Infinity],
       ),
     );
-    const norm = weights.reduce((a, b) => a + b, 0);
+    // Only relative weights matter. Scale before summing or multiplying so
+    // finite large weights cannot overflow and tiny ones retain their ratios.
+    const largest = Math.max(...weights),
+      scaled = weights.map((weight) => weight / largest),
+      norm = scaled.reduce((a, b) => a + b, 0);
     return rows.map((row) => ({
       ...row,
       score: [row.frt, row.drc, row.reach].reduce((sum, v, i) => {
@@ -129,7 +133,7 @@
             : i === 2
               ? (v - lo) / (hi - lo)
               : (hi - v) / (hi - lo);
-        return sum + (benefit * weights[i]) / norm;
+        return sum + (benefit * scaled[i]) / norm;
       }, 0),
     }));
   }

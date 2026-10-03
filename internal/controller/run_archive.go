@@ -102,7 +102,17 @@ func (s *Server) archiveMaintenance(ctx context.Context) error {
 			}
 			for _, entry := range entries {
 				if entry.IsDir() && validResultID(entry.Name()) {
-					s.state.markRunArchiveDirty(entry.Name())
+					// Deletion can finish after the directory scan. Do not
+					// recreate queue state for a deleted or partially deleted run.
+					s.state.persistMu.Lock()
+					deleted, err := s.state.resultDeletedLocked(entry.Name())
+					if err == nil && !deleted {
+						s.state.markRunArchiveDirty(entry.Name())
+					}
+					s.state.persistMu.Unlock()
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}

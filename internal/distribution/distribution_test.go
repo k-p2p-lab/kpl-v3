@@ -2,9 +2,28 @@ package distribution
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestOptionalDistributionRequiresModelWhenConfigured(t *testing.T) {
+	if err := (Distribution{}).Validate(true); err != nil {
+		t.Fatalf("omitted optional distribution: %v", err)
+	}
+	for name, d := range map[string]Distribution{
+		"value": {Value: "5s"}, "mean": {Mean: "1s"}, "sigma": {Sigma: "1ms"},
+		"xm": {XM: "1s"}, "alpha": {Alpha: 2}, "beta": {Beta: 0.5},
+		"scale": {Scale: "1s"}, "mu": {Mu: 1}, "logSigma": {LogSigma: 0.5},
+		"min": {Min: "1s"}, "max": {Max: "10s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := d.Validate(true); err == nil || !strings.Contains(err.Error(), "model is required") {
+				t.Fatalf("configured distribution without model: %v", err)
+			}
+		})
+	}
+}
 
 func TestNormalSignedMeanAndZeroClipping(t *testing.T) {
 	for _, mean := range []string{"-2ms", "0s", "2ms"} {

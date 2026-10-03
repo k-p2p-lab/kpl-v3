@@ -109,3 +109,51 @@ func TestStorageRevisionTracksArchivingAndLateLocalWritesWithoutNASProbes(t *tes
 		t.Fatal("Controller restart reused an old storage revision")
 	}
 }
+
+func TestDeletionReleasesArchiveQueueAndNotifiesOtherBrowsers(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	s.archiveIOCheck = func() { t.Fatal("deletion performed a NAS operation") }
+	const removed, retained = "delete-pending", "keep-pending"
+	for _, id := range []string{removed, retained} {
+		resultFixture(t, s, id, "completed", time.Now())
+		s.state.markRunArchiveDirty(id)
+	}
+	before := archiveOverviewForTest(t, s).ResultsRevision
+	if err := s.deleteSavedResult(removed); err != nil {
+		t.Fatal(err)
+	}
+	if after := archiveOverviewForTest(t, s).ResultsRevision; after == before {
+		t.Error("deletion did not notify browsers polling storage revisions")
+	}
+	s.state.archiveQueueMu.Lock()
+	defer s.state.archiveQueueMu.Unlock()
+	if _, exists := s.state.archiveVersions[removed]; exists {
+		t.Error("deleted run retained its archive version")
+	}
+	if _, exists := s.state.archivePending[removed]; exists {
+		t.Error("deleted run retained its pending archive work")
+	}
+	if _, exists := s.state.archiveDirtyNotified[removed]; exists {
+		t.Error("deleted run retained its archive notification state")
+	}
+	if s.state.archiveVersions[retained] == 0 || !s.state.archivePending[retained] || !s.state.archiveDirtyNotified[retained] {
+		t.Error("deletion discarded another run's pending archive work")
+	}
+}
+
+func TestArchiveStartupDoesNotQueueTombstonedLocalRecords(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	const id = "partial-deletion"
+	resultFixture(t, s, id, "completed", time.Now())
+	// A crash can leave the local directory after the deletion fence is saved.
+	if err := s.markResultDeletedLocked(id); err != nil {
+		t.Fatal(err)
+	}
+	s = New(s.config, nil)
+	if err := s.archiveMaintenance(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := s.state.archiveVersions[id]; exists || s.state.archivePending[id] || s.state.archiveDirtyNotified[id] {
+		t.Fatal("archive startup recreated bookkeeping for a deleted result")
+	}
+}

@@ -112,8 +112,12 @@ func (s *Server) loadBatchAnalysis(id string) (*batchAnalysisJob, error) {
 		return nil, errors.New("batch analysis metadata is too large")
 	}
 	var status batchAnalysisStatus
-	if err = json.NewDecoder(io.NewSectionReader(file.file, 0, file.size)).Decode(&status); err != nil {
+	decoder := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size))
+	if err = decoder.Decode(&status); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("batch analysis metadata contains trailing data")
 	}
 	if status.Version != batchAnalysisVersion || status.BatchID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
 		return nil, errors.New("invalid batch analysis metadata")

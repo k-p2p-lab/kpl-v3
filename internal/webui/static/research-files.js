@@ -6,8 +6,7 @@
       : root.KPLResearch;
   const finite = (v) => typeof v === "number" && Number.isFinite(v),
     num = (v) =>
-      v !== null &&
-      v !== undefined &&
+      (typeof v === "number" || typeof v === "string") &&
       String(v).trim() !== "" &&
       Number.isFinite(Number(v))
         ? Number(v)
@@ -140,12 +139,16 @@
       add(objects[0], objects[0].result.name || name);
       return { entries, curves };
     }
-    for (const object of objects)
-      if (
-        object &&
-        Array.isArray(object.y) &&
-        (Array.isArray(object.x_case) || Array.isArray(object.x))
-      ) {
+    const xyRecords = objects.filter((object) =>
+      object &&
+      Array.isArray(object.y) &&
+      (Array.isArray(object.x_case) || Array.isArray(object.x)),
+    );
+    if (xyRecords.length) {
+      if (xyRecords.length !== objects.length)
+        throw new Error("Do not mix x/y series with other JSON records in one file.");
+      for (const [index, object] of xyRecords.entries()) {
+        const sourceName = xyRecords.length === 1 ? name : `${name} / record ${index + 1}`;
         const xs = object.x_case || object.x;
         if (xs.length !== object.y.length)
           throw new Error("v2 x/y arrays have different lengths.");
@@ -155,7 +158,7 @@
             sd = num(object.yerr?.[i]);
           if (y === null)
             throw new Error("v2 y values must be finite numbers.");
-          const a = analysis(`${name}:${xs[i]}`);
+          const a = analysis(`${sourceName}:${xs[i]}`);
           a.research.summary[key] = { average: y };
           a.importedSummaryStats = {
             [key]: { mean: y, sd: sd === null ? null : Math.abs(sd), n: null },
@@ -164,9 +167,10 @@
           if (num(xs[i]) !== null) points.push({ x: num(xs[i]), y, error: sd });
         }
         if (points.length)
-          curves.push({ name, xLabel: "x", yLabel: key, points });
-        return { entries, curves };
+          curves.push({ name: sourceName, xLabel: "x", yLabel: key, points });
       }
+      return { entries, curves };
+    }
     const a = analysis(name),
       samples = new Map(),
       messages = [],

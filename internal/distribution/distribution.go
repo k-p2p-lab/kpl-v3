@@ -26,7 +26,7 @@ type Distribution struct {
 
 func (d Distribution) Validate(optional bool) error {
 	if d.Model == "" {
-		if optional {
+		if optional && d == (Distribution{}) {
 			return nil
 		}
 		return fmt.Errorf("model is required")

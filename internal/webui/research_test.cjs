@@ -179,6 +179,51 @@ test("v2 imports retain decimal labels, imported errors, degree ratios, tree hop
   assert.throws(() => F.parseImport("x,y\n1,wrong", "x.csv"), /Non-numeric/);
   assert.throws(() => F.parseImport("not JSON", "x.json"), /Invalid JSON/);
 });
+
+test("v2 imports reject booleans and arrays as numeric measurements", () => {
+  for (const value of [true, false, [3], {value: 3}]) {
+    assert.throws(() => F.parseImport(JSON.stringify({x: [1], y: [value]}), "invalid.json"), /finite numbers/);
+  }
+  const parsed = F.parseImport('{"x":["1"],"y":["2.5"]}', "numeric.json");
+  assert.equal(parsed.curves[0].points[0].y, 2.5);
+  assert.throws(() => F.parseImport('{"m":{"id":"p","time":false,"children":[]}}', "tree.json"), /finite time/);
+});
+
+test("v2 x/y JSONL imports every record with distinct source identities", () => {
+  const text = [
+    {x_case: ["0.1"], y: [2], yerr: [0.2]},
+    {x_case: ["0.1"], y: [4], yerr: [0.4]},
+  ].map(JSON.stringify).join("\n");
+  const parsed = F.parseImport(text, "repeats.jsonl", "frt");
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(parsed.curves.length, 2);
+  assert.notEqual(parsed.curves[0].name, parsed.curves[1].name);
+  assert.notEqual(parsed.entries[0].analysis.result.id, parsed.entries[1].analysis.result.id);
+  const stat = C.metric(C.aggregate(parsed.entries)[0], "frt");
+  assert.equal(stat.n, 2);
+  close(stat.mean, 3);
+  close(stat.sd, Math.sqrt(2));
+});
+
+test("v2 imports reject mixed JSONL layouts instead of discarding records", () => {
+  const records = [{x: [1], y: [2]}, {m: {frt: {average: 9}}}].map(JSON.stringify);
+  for (const text of [records.join("\n"), records.reverse().join("\n")]) {
+    assert.throws(() => F.parseImport(text, "mixed.jsonl"), /mix.*x\/y/i);
+  }
+});
+
+test("score weights remain proportional at extreme finite scales", () => {
+  const rows = [
+    {frt: 2, drc: 2, reach: 0.5},
+    {frt: 1, drc: 1, reach: 1},
+    {frt: 3, drc: 3, reach: 0},
+  ];
+  const reference = C.scores(rows, [1, 1, 1]);
+  for (const scale of [1e308, Number.MIN_VALUE]) {
+    const result = C.scores(rows, [scale, scale, scale]);
+    for (let i = 0; i < result.length; i++) close(result[i].score, reference[i].score);
+  }
+});
 test("all chart families render finite escaped SVGs with unique download names", () => {
   const a = analysis("test<script>", {
       frt: 1,

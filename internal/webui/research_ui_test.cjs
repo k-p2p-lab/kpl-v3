@@ -83,6 +83,58 @@ test('clearing imports cancels a pending file read before it can restore cleared
   assert.equal(statuses.at(-1), 'Imported data cleared.');
 });
 
+test('an older saved-results response cannot replace the latest comparison selection', async () => {
+  const pending = [];
+  const { element, statuses } = fixture({ request: () => new Promise(resolve => pending.push(resolve)) });
+  element('#loadResearchRuns').listeners.click();
+  element('#loadResearchRuns').listeners.click();
+  pending[1]([{ id: 'new', name: 'Latest result', state: 'completed' }]);
+  await settled();
+  const rows = element('#researchRuns').innerHTML;
+  const count = statuses.length;
+  pending[0]([{ id: 'old', name: 'Old result', state: 'completed' }]);
+  await settled();
+  assert.equal(element('#researchRuns').innerHTML, rows);
+  assert.equal(statuses.length, count);
+});
+
+for (const pendingPhase of ['job', 'summary']) {
+  test(`closing comparison during ${pendingPhase} prevents late analysis or rendering`, async () => {
+    let resolve, rendered = 0;
+    const requests = [];
+    const job = { runId: 'run', id: 'cached', state: 'completed', stale: pendingPhase === 'job' };
+    const { element, ui } = fixture({
+      request: async (url, options) => {
+        requests.push([url, options.method || 'GET']);
+        if (url === '/api/v1/results') return [{ id: 'run', name: 'Run', state: 'completed' }];
+        if (url.includes('/summary?') || pendingPhase === 'job' && options.method !== 'POST')
+          return new Promise(yes => { resolve = yes; });
+        return job;
+      },
+      render: async () => { rendered++; },
+    });
+    element('#loadResearchRuns').listeners.click();
+    await settled();
+    element('#researchRuns').querySelectorAll = () => [{
+      dataset: { researchRow: '0' },
+      querySelector: selector => ({
+        'input[type="checkbox"]': { checked: true },
+        '[data-field="series"]': { value: 'Series' },
+        '[data-field="case"]': { value: 'Case' },
+        '[data-field="params"]': { value: '' },
+      })[selector],
+    }];
+    element('#drawResearchCompare').listeners.click();
+    await settled();
+    const requestCount = requests.length;
+    ui.cancel();
+    resolve(pendingPhase === 'job' ? job : { result: { id: 'run' }, analysisId: job.id });
+    await settled();
+    assert.equal(requests.length, requestCount, 'closed view issued another analysis request');
+    assert.equal(rendered, 0, 'closed view replaced the current images');
+  });
+}
+
 test('closing the image view cancels a pending import while completed imports remain usable', async () => {
   const { element, ui, parses } = fixture();
   element('#researchFiles').listeners.change({ target: { files: [

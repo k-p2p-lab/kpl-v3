@@ -271,14 +271,29 @@ func (s *Server) markResultDeletedLocked(id string) error {
 	defer markers.Close()
 	file, err := markers.OpenFile(id, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
-		_, err = s.state.resultDeletedLocked(id)
-		return err
+		// A previous attempt may have failed before syncing. Reopen only a
+		// regular file and make that fence durable before retrying deletion.
+		existing, openErr := openResultFile(markers, id)
+		if openErr != nil {
+			return openErr
+		}
+		file, err = existing.file, nil
+	} else if err == nil {
+		err = json.NewEncoder(file).Encode(map[string]any{"id": id, "deletedAt": time.Now().UTC()})
+	}
+	if file != nil {
+		err = errors.Join(err, file.Sync(), file.Close())
 	}
 	if err != nil {
 		return err
 	}
-	writeErr := json.NewEncoder(file).Encode(map[string]any{"id": id, "deletedAt": time.Now().UTC()})
-	return errors.Join(writeErr, file.Close())
+	// Persist both the marker name and its parent directory before removing
+	// source records. A crash must not let NAS import or late telemetry revive
+	// a result whose deletion has already been acknowledged.
+	if err := syncRunDirectory(markers); err != nil {
+		return err
+	}
+	return syncRunDirectory(data)
 }
 
 // Remove entries relative to held directory descriptors. Symlinks are unlinked,
@@ -415,6 +430,12 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 	clear(s.state.events[len(events):])
 	s.state.events = events
 	s.state.mu.Unlock()
+	s.state.archiveQueueMu.Lock()
+	delete(s.state.archiveVersions, id)
+	delete(s.state.archivePending, id)
+	delete(s.state.archiveDirtyNotified, id)
+	s.state.resultsRevision.Add(1)
+	s.state.archiveQueueMu.Unlock()
 	s.state.notify()
 	s.resultArchiveMu.Lock()
 	delete(s.resultArchives, id)

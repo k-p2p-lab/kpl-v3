@@ -112,6 +112,42 @@ func TestResultDeletionTombstonePreventsLateEventResurrectionAfterRestart(t *tes
 	}
 }
 
+func TestResultDeletionRetriesExistingMarkerAndRejectsUnsafeMarker(t *testing.T) {
+	for _, marker := range []string{"regular", "directory", "symlink"} {
+		t.Run(marker, func(t *testing.T) {
+			server := New(ServerConfig{DataDir: t.TempDir()}, nil)
+			run, _ := resultFixture(t, server, "delete-retry", "completed", time.Now())
+			markers := filepath.Join(server.config.DataDir, ".deleted-results")
+			if err := os.Mkdir(markers, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(markers, run.ID)
+			var err error
+			switch marker {
+			case "regular":
+				// Even a crash before writing the timestamp leaves a valid fence.
+				err = os.WriteFile(path, nil, 0600)
+			case "directory":
+				err = os.Mkdir(path, 0700)
+			case "symlink":
+				err = os.Symlink(filepath.Join("..", currentRunsDirectory, run.ID, "experiment.json"), path)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = server.deleteSavedResult(run.ID)
+			_, statErr := os.Stat(filepath.Join(server.config.DataDir, currentRunsDirectory, run.ID, "experiment.json"))
+			if marker == "regular" {
+				if err != nil || !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("deletion retry failed: delete=%v, source=%v", err, statErr)
+				}
+			} else if err == nil || statErr != nil {
+				t.Fatalf("unsafe marker must preserve source: delete=%v, source=%v", err, statErr)
+			}
+		})
+	}
+}
+
 func TestResultDeletionReleasesRunMetricsAndTiming(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	run, _ := resultFixture(t, server, "run-forget", "completed", time.Now().UTC())

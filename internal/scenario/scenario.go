@@ -374,7 +374,7 @@ func (s *Scenario) resolveNodeConfig(phase *Phase) error {
 	if phase.Profile != "" {
 		if hasProfile {
 			base = base.Merge(profile)
-		} else if !builtIn {
+		} else if _, known := model.BuiltInNodeConfig(phase.Profile); !known || !builtIn {
 			return fmt.Errorf("unknown profile %q", phase.Profile)
 		}
 	}

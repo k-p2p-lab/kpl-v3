@@ -115,6 +115,7 @@
         void action(async (signal) => {
           status("Loading saved results…");
           const result = await request("/api/v1/results", {}, signal);
+          if (signal.aborted) return;
           if (!Array.isArray(result))
             throw new Error("Unexpected saved results response.");
           saved = result.filter(
@@ -208,11 +209,13 @@
             if (!e.analysis) {
               const path = `/api/v1/analysis-jobs/${encodeURIComponent(e.id)}`;
               let job = await request(path, {}, signal);
+              if (signal.aborted) return;
               if (
                 !["queued", "running"].includes(job.state) &&
                 (job.state !== "completed" || job.stale)
               )
                 job = await request(path, { method: "POST" }, signal);
+              if (signal.aborted) return;
               onJob(job);
               e.job = job;
             }
@@ -226,6 +229,7 @@
                 );
                 await pause(signal);
                 job = await request(path, {}, signal);
+                if (signal.aborted) return;
                 onJob(job);
               }
               if (job.state !== "completed")
@@ -237,6 +241,7 @@
                 {},
                 signal,
               );
+              if (signal.aborted) return;
               if (
                 e.analysis.result?.id !== e.id ||
                 e.analysis.analysisId !== job.id

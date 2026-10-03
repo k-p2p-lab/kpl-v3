@@ -191,6 +191,28 @@ func TestBuiltInWorkerTypes(t *testing.T) {
 	}
 }
 
+func TestExplicitTypeDoesNotHideUnknownProfile(t *testing.T) {
+	for _, kind := range []string{"full", "worker", "publisher", "boot", "custom"} {
+		t.Run(kind, func(t *testing.T) {
+			_, err := Parse([]byte("version: 2\nname: typo\nphases:\n  - action: join\n    group: nodes\n    count: 1\n    type: " + kind + "\n    profile: missing-profile\n"))
+			if err == nil || !strings.Contains(err.Error(), `unknown profile "missing-profile"`) {
+				t.Fatalf("unknown profile with explicit type %q: %v", kind, err)
+			}
+		})
+	}
+}
+
+func TestJoinRejectsTimeDistributionWithoutModel(t *testing.T) {
+	for _, field := range []string{"interval", "lifetime"} {
+		t.Run(field, func(t *testing.T) {
+			_, err := Parse([]byte("version: 2\nname: missing-model\nphases:\n  - action: join\n    group: nodes\n    count: 1\n    " + field + ": {value: 5s}\n"))
+			if err == nil || !strings.Contains(err.Error(), field+": model is required") {
+				t.Fatalf("configured %s silently ignored: %v", field, err)
+			}
+		})
+	}
+}
+
 func TestWorkerTypeAliasIsCanonicalAcrossLifecycleActions(t *testing.T) {
 	s, err := Parse([]byte(`
 version: 2

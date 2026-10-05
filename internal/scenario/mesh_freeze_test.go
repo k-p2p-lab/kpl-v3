@@ -73,13 +73,13 @@ func TestMeshFreezeRejectsInvalidSchema(t *testing.T) {
 		})
 	}
 	for _, version := range []int{0, 1, 2} {
-		_, err := Parse([]byte(fmt.Sprintf("version: %d\nname: freeze\nphases: [{action: mesh-freeze, group: workers}]", version)))
+		_, err := Parse(fmt.Appendf(nil, "version: %d\nname: freeze\nphases: [{action: mesh-freeze, group: workers}]", version))
 		if err == nil || !strings.Contains(err.Error(), "requires version 3") {
 			t.Fatalf("version %d error = %v", version, err)
 		}
 	}
 	for _, version := range []int{1, 2, 3} {
-		_, err := Parse([]byte(fmt.Sprintf("version: %d\nname: freeze\nphases: [{action: wait, duration: 1s, nodeIds: [node]}]", version)))
+		_, err := Parse(fmt.Appendf(nil, "version: %d\nname: freeze\nphases: [{action: wait, duration: 1s, nodeIds: [node]}]", version))
 		if err == nil {
 			t.Fatalf("version %d accepted nodeIds on wait", version)
 		}
@@ -88,7 +88,7 @@ func TestMeshFreezeRejectsInvalidSchema(t *testing.T) {
 
 func TestLegacyScenarioVersionsRemainSupported(t *testing.T) {
 	for _, version := range []int{0, 1, 2, 3} {
-		spec, err := Parse([]byte(fmt.Sprintf("version: %d\nname: existing\nphases: [{action: wait, duration: 1s}]", version)))
+		spec, err := Parse(fmt.Appendf(nil, "version: %d\nname: existing\nphases: [{action: wait, duration: 1s}]", version))
 		if err != nil {
 			t.Fatalf("version %d: %v", version, err)
 		}

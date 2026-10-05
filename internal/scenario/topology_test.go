@@ -83,7 +83,7 @@ func TestTopologyRejectsInvalidSchema(t *testing.T) {
 		})
 	}
 	for _, version := range []int{0, 1, 2} {
-		_, err := Parse([]byte(fmt.Sprintf("version: %d\nname: graph\nphases: [{action: topology, %s}]", version, base)))
+		_, err := Parse(fmt.Appendf(nil, "version: %d\nname: graph\nphases: [{action: topology, %s}]", version, base))
 		if err == nil || !strings.Contains(err.Error(), "requires version 3") {
 			t.Fatalf("version %d error=%v", version, err)
 		}

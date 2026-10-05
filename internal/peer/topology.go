@@ -166,10 +166,7 @@ func (s *Server) connectTopologyPeers(ctx context.Context, infos []peer.AddrInfo
 			break
 		}
 		group.Go(func() error {
-			if err := s.host.Connect(connectCtx, info); err != nil {
-				return fmt.Errorf("connect topology neighbor %s: %w", info.ID, err)
-			}
-			return nil
+			return s.connectTopologyPeer(connectCtx, info)
 		})
 	}
 	if err := group.Wait(); err != nil {

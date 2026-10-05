@@ -194,8 +194,14 @@ func TestTopologyFormationPreflightAndPrepareFailuresDoNotApply(t *testing.T) {
 				node.State = model.NodeStarting
 			}
 			s.state.nodes[node.ID] = node
-			if err := s.runTopology(context.Background(), "run", 2, phase, 1001); err == nil {
+			err := s.runTopology(context.Background(), "run", 2, phase, 1001)
+			if err == nil {
 				t.Fatal("invalid topology formation succeeded")
+			}
+			if testCase == "prepare-error" || strings.Contains(testCase, "ack") {
+				if !strings.Contains(err.Error(), "apply was not started") || strings.Contains(err.Error(), "may have applied") {
+					t.Fatalf("prepare failure incorrectly described mesh application: %v", err)
+				}
 			}
 			if apply.Load() != 0 {
 				t.Fatal("preparation failure still applied a mesh")
@@ -230,6 +236,9 @@ func TestTopologyFormationCancellationStopsPrepare(t *testing.T) {
 	case err := <-done:
 		if err == nil || applied.Load() {
 			t.Fatalf("cancellation did not stop preparation: %v", err)
+		}
+		if !strings.Contains(err.Error(), "apply was not started") {
+			t.Fatalf("cancelled preparation incorrectly described mesh application: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancellation retained topology workers")
@@ -268,6 +277,13 @@ func TestTopologyFormationRejectsApplyFailureAndChangedIncarnation(t *testing.T)
 			}
 			if failure == "generation-change" && apply.Load() != 0 {
 				t.Fatal("a replacement incarnation received the prepared plan")
+			}
+			if failure == "generation-change" {
+				if !strings.Contains(err.Error(), "apply was not started") || strings.Contains(err.Error(), "may have applied") {
+					t.Fatalf("prepare failure incorrectly described mesh application: %v", err)
+				}
+			} else if !strings.Contains(err.Error(), "applied meshes remain frozen and unacknowledged requests may have applied") {
+				t.Fatalf("apply failure omitted possible partial application: %v", err)
 			}
 			for _, event := range server.state.recentEvents() {
 				if event.Type == "topology_stage" && event.Fields["stage"] == "apply" && event.Fields["error"] == nil {

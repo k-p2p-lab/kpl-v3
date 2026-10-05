@@ -128,6 +128,9 @@ func (s *Server) runTopology(ctx context.Context, runID string, generation uint6
 		}
 		persistErr := s.state.appendEvents(model.EventBatch{Events: []model.TraceEvent{{RunID: runID, Type: "topology_stage", Topic: phase.Topic, Fields: fields}}})
 		if err != nil || persistErr != nil {
+			if stage == "prepare" {
+				return fmt.Errorf("topology prepare acknowledged by %d/%d peers; apply was not started: %w", acknowledged.Load(), len(targets), errors.Join(err, persistErr))
+			}
 			return fmt.Errorf("topology %s acknowledged by %d/%d peers; applied meshes remain frozen and unacknowledged requests may have applied: %w", stage, acknowledged.Load(), len(targets), errors.Join(err, persistErr))
 		}
 	}

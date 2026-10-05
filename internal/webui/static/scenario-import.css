@@ -1,7 +1,15 @@
+.scenario-editor { container: scenario-editor / inline-size; }
+.scenario-editor-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; }
+.scenario-editor-heading > div { min-width: 0; }
+.scenario-editor-heading > button { align-self: center; }
+.scenario-editor-heading p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+#scenarioForm:has(.scenario-import-review:not([hidden])) { grid-template-rows: auto minmax(0, 1fr); }
+#scenarioForm:has(.scenario-import-review:not([hidden])) > :is(footer, #repetitionHelp) { display: none; }
 .scenario-editor:has(.scenario-import-review:not([hidden])) {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding-top: .85rem;
 }
-.scenario-editor:has(.scenario-import-review:not([hidden])) > :not(.scenario-editor-heading):not(.scenario-import-review) {
+.scenario-editor:has(.scenario-import-review:not([hidden])) > :not(.scenario-import-review) {
   display: none;
 }
 .scenario-import-review {
@@ -14,25 +22,35 @@
 }
 .scenario-import-review[hidden] { display: none; }
 .scenario-import-review p { margin: 0; overflow-wrap: anywhere; }
-.scenario-import-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem 1rem; }
-.scenario-import-heading p, #scenarioImportSummary { color: var(--muted); font-size: .75rem; }
-#scenarioImportList { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 5rem; flex: 1 1 auto; }
-.scenario-import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .6rem; padding: .7rem 0; border-bottom: 1px solid var(--line-soft); }
-.scenario-import-row > label { display: flex; align-items: flex-start; gap: .5rem; min-width: 0; cursor: pointer; }
-.scenario-import-row input[type="checkbox"] { flex: 0 0 auto; width: 1rem; height: 1rem; margin: .1rem 0 0; }
+.scenario-import-heading { display: grid; gap: .3rem; flex: 0 0 auto; min-width: 0; }
+.scenario-import-heading p, #scenarioImportSummary { color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.scenario-import-heading p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.scenario-import-review > .dialog-help { flex: 0 0 auto; font-size: .75rem; line-height: 1.5; }
+#scenarioImportSummary { flex: 0 0 auto; padding-bottom: .45rem; border-bottom: 1px solid var(--line-soft); }
+#scenarioImportList { list-style: none; margin: 0; padding: 0 .25rem .25rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; min-height: 5rem; flex: 1 1 auto; }
+.scenario-import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: .5rem .75rem; padding: .8rem 0; border-bottom: 1px solid var(--line-soft); }
+.scenario-import-row:last-child { border-bottom: 0; }
+.scenario-import-row > label { display: flex; align-items: flex-start; gap: .6rem; min-width: 0; cursor: pointer; }
+.scenario-import-row input[type="checkbox"] { flex: 0 0 auto; width: 1rem; height: 1rem; min-height: 1rem; margin: .1rem 0 0; }
 .scenario-import-row label span { min-width: 0; }
 .scenario-import-row strong, .scenario-import-row small { display: block; overflow-wrap: anywhere; }
-.scenario-import-row strong { font-size: .8rem; }
-.scenario-import-row small, .scenario-import-status { color: var(--muted); font-size: .7rem; }
-.scenario-import-row > p { grid-column: 1 / -1; color: var(--red); font-size: .75rem; line-height: 1.45; }
+.scenario-import-row strong { color: var(--text); font-size: .8rem; line-height: 1.45; }
+.scenario-import-row small { margin-top: .2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scenario-import-row small, .scenario-import-status { color: var(--muted); font-size: .7rem; line-height: 1.45; }
+.scenario-import-status { max-width: 10rem; padding: .1rem .4rem; border: 1px solid var(--line-soft); border-radius: .3rem; overflow-wrap: anywhere; }
+.scenario-import-row > p { grid-column: 1 / -1; max-height: 8rem; margin-left: 1.6rem; padding: .45rem .55rem; overflow-y: auto; border-left: 2px solid var(--red); background: rgba(255,123,114,.05); color: var(--red); font-size: .75rem; line-height: 1.5; white-space: pre-wrap; }
 .scenario-import-row[data-status="saved"] .scenario-import-status { color: var(--green); }
-.scenario-import-actions { display: flex; justify-content: flex-end; gap: .5rem; padding-top: .25rem; }
-@media (max-width: 860px) {
-  .scenario-editor:has(.scenario-import-review:not([hidden])) { min-height: 20rem; }
-  #scenarioImportList { max-height: 45dvh; }
-}
-@media (max-width: 420px) {
+.scenario-import-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; align-items: stretch; gap: .65rem; padding-top: .65rem; border-top: 1px solid var(--line-soft); }
+.scenario-import-actions > button { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+@container scenario-editor (max-width: 28rem) {
   .scenario-import-row { grid-template-columns: minmax(0, 1fr); }
-  .scenario-import-status { padding-left: 1.5rem; }
+  .scenario-import-status { justify-self: start; margin-left: 1.6rem; }
+}
+@container scenario-editor (max-width: 22rem) {
+  .scenario-import-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .scenario-import-actions > button { min-width: 0; padding-inline: .65rem; font-size: .75rem; }
+}
+@media (max-width: 860px), (max-height: 650px) {
+  .scenario-editor:has(.scenario-import-review:not([hidden])) { grid-template-rows: auto; min-height: 0; align-content: start; }
+  #scenarioImportList { max-height: 40dvh; }
 }

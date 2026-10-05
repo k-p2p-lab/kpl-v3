@@ -1089,6 +1089,7 @@ function renderScenarioImportReview() {
     : batch.saving ? "Importing files… " + saved + " of " + batch.rows.length + " saved."
     : saved + " saved · " + selected + " selected · " + batch.rows.length + " files";
   $("#scenarioImportDestination").textContent = batch.groupId ? "Group: " + batch.groupName : "Group: Ungrouped";
+  $("#scenarioImportDestination").title = $("#scenarioImportDestination").textContent;
   $("#confirmScenarioImport").disabled = batch.reading || batch.saving || selected === 0;
   $("#confirmScenarioImport").textContent = batch.saving ? "Importing…" : "Import selected";
   $("#cancelScenarioImport").textContent = batch.saving
@@ -1568,7 +1569,7 @@ function savedResultBatch(batch) {
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
-      <span class="saved-batch-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
+      <span class="saved-batch-heading"><span class="result-item-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong></span>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
         <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
@@ -1764,7 +1765,7 @@ function savedResultRow(run, inBatch = false) {
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name" data-label="Experiment">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong>${inBatch ? "" : globalThis.KPLLibraryGroups?.badgeMarkup(resultLibraryKey(run)) || ""}<span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
+    <td class="result-name" data-label="Experiment"><span class="result-item-heading">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong></span>${inBatch ? "" : globalThis.KPLLibraryGroups?.badgeMarkup(resultLibraryKey(run)) || ""}<span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>

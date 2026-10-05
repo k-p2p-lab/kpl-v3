@@ -157,7 +157,7 @@
       if (!unique.length) return Promise.resolve(snapshot);
       if (unique.length > maxSelection) return Promise.reject(new Error("Move up to 2,000 items at a time."));
       if (groupId && !getGroupName(groupId)) return Promise.reject(new Error("That group no longer exists. Choose another group."));
-      return mutate(endpoint + "/members", "PUT", {groupId, keys: unique}, "Items moved to " + (getGroupName(groupId) || "Ungrouped") + ".");
+      return mutate(endpoint + "/members", "PUT", {groupId, keys: unique}, "Moved " + unique.length + (unique.length === 1 ? " item." : " items."));
     }
 
     function setFilter(id) {
@@ -198,7 +198,7 @@
         }
         const selecting = selectionScope === scope;
         const disabled = ready() ? "" : " disabled";
-        const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !busy ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div>' +
+        const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !busy ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
           (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !busy ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button></div>' : "") +
           (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (busy ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
         const active = document.activeElement;

@@ -573,14 +573,14 @@
             <button class="secondary-button" id="chooseScenarioFile" type="button" title="Choose YAML files from your device (1 MiB each, up to 100 files and 16 MiB total)">Choose files</button>
             <input id="scenarioFile" type="file" accept=".yaml,.yml,application/yaml,text/yaml,application/x-yaml" aria-label="Choose YAML scenario files" multiple hidden>
           </div>
-          <section id="scenarioImportReview" class="scenario-import-review" aria-labelledby="scenarioImportHeading" hidden>
+          <section id="scenarioImportReview" class="scenario-import-review" aria-labelledby="scenarioImportHeading" aria-describedby="scenarioImportHelp" hidden>
             <div class="scenario-import-heading">
               <h3 id="scenarioImportHeading" tabindex="-1">Import scenarios</h3>
               <p id="scenarioImportDestination"></p>
             </div>
-            <p class="dialog-help">Saved names use filenames without their final extension. Each file is validated when saved.</p>
+            <p class="dialog-help" id="scenarioImportHelp">Names omit the extension. Files are validated when saved.</p>
             <p id="scenarioImportSummary" role="status" aria-live="polite"></p>
-            <ul id="scenarioImportList" aria-label="Selected scenario files"></ul>
+            <ul id="scenarioImportList" aria-label="Selected scenario files" tabindex="0"></ul>
             <div class="scenario-import-actions">
               <button class="secondary-button" id="cancelScenarioImport" type="button">Cancel</button>
               <button class="primary-button" id="confirmScenarioImport" type="button">Import selected</button>

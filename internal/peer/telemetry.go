@@ -242,7 +242,7 @@ func (t *telemetry) identifyLockedWithClock(event model.TraceEvent, reading cont
 		event.Timestamp = reading.timestamp
 	}
 	if reading.synchronized &&
-		(event.Type == "peer_score" || event.Type == "network_config_applied" || event.Type == "network_config_failed" || event.Type == "measurement_start" || event.Type == "measurement_checkpoint" || event.Type == "measurement_stop" ||
+		(event.Type == "peer_score" || event.Type == "topology_applied" || event.Type == "network_config_applied" || event.Type == "network_config_failed" || event.Type == "measurement_start" || event.Type == "measurement_checkpoint" || event.Type == "measurement_stop" ||
 			event.Type == "publish" || event.Type == "deliver" || event.Type == "duplicate" || event.Type == "bandwidth" ||
 			event.Type == "rpc_metadata" || event.Type == "pubsub_reject" || event.Type == "graft" || event.Type == "prune" || event.Type == "join" || event.Type == "leave" || event.Fields["rpcMetadataVersion"] == 1) {
 		if event.Fields == nil {

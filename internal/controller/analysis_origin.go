@@ -38,6 +38,16 @@ func (a *researchAccumulator) observeOriginMetadata(e model.TraceEvent) {
 		if e.PeerID != "" && e.RemotePeerID != "" && (e.Topic != "" || e.Type == "remove_peer") {
 			a.inference = append(a.inference, originMetadataEvent{at: e.Timestamp, from: e.PeerID, to: e.RemotePeerID, topic: e.Topic, kind: e.Type})
 		}
+	case "topology_applied":
+		// Manual mesh replacement has no wire GRAFT/PRUNE transition. Forget
+		// earlier evidence for this topic without manufacturing new mesh edges.
+		topic := e.Topic
+		if topic == "" {
+			topic, _ = e.Fields["topic"].(string)
+		}
+		if topic != "" {
+			a.inference = append(a.inference, originMetadataEvent{at: e.Timestamp, from: e.PeerID, node: e.NodeID, topic: topic, kind: e.Type})
+		}
 	case "leave", "measurement_stop", "measurement_terminated":
 		a.inference = append(a.inference, originMetadataEvent{at: e.Timestamp, from: e.PeerID, node: e.NodeID, topic: e.Topic, kind: e.Type})
 	case "rpc_metadata":
@@ -162,7 +172,7 @@ func newOriginMetadataIndex(events []originMetadataEvent, peers map[string]strin
 				ids = []string{e.from}
 			}
 			topic := e.topic
-			if e.kind != "leave" {
+			if e.kind != "leave" && e.kind != "topology_applied" {
 				topic = ""
 			}
 			for _, id := range ids {
@@ -237,6 +247,11 @@ func (a *originMetadataIndex) estimate(from, to, topic, wireID string, published
 	for _, event := range controls[start:] {
 		if !event.at.Before(received) {
 			break
+		}
+		// Equal-time records cannot establish whether the control preceded
+		// or followed a reset. Match the strict ordering used for mesh events.
+		if !reset.IsZero() && !event.at.After(reset) {
+			continue
 		}
 		if event.topic != "" && event.topic != topic {
 			continue

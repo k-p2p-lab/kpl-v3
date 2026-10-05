@@ -88,6 +88,13 @@ func (s *Server) recordDetailedPeerScores(sampledAt time.Time, scores map[peer.I
 	if !sampledAt.After(s.scoreObservedAt) {
 		return
 	}
+	// Keep the measured Controller time even when its offset moves backwards.
+	// The Agent uses this process-local inspection sequence for ordering, so a
+	// clock correction cannot retain an obsolete score (or hide an empty one).
+	sample.Sequence = 1
+	if s.scoreSample != nil {
+		sample.Sequence = s.scoreSample.Sequence + 1
+	}
 	s.scoreObservedAt, s.peerScores, s.scoreSample = sampledAt, totals, sample
 	// Emit only one bounded event per observer per inspection. The full matrix
 	// would scale with every observer-peer pair and distort busy experiments.

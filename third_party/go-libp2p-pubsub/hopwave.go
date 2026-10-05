@@ -11,6 +11,7 @@ import (
 // WithHopwave enables the Hopwave hop/propagation metadata extension to
 // GossipSub. Routing, mesh selection and scoring remain GossipSub's. All hops
 // in an experiment must support the extension for a complete hop count.
+// Message ID functions receive a copy without the mutable Hopwave fields.
 func WithHopwave() Option {
 	return func(p *PubSub) error {
 		if _, ok := p.rt.(*GossipSubRouter); !ok {

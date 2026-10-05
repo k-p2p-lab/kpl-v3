@@ -227,7 +227,7 @@ func cumulativePoints(counts map[float64]float64, denominator float64) []analysi
 }
 
 func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccumulator, observations []analysisObservation) (researchAnalysis, error) {
-	out := researchAnalysis{OriginMethod: "message-id-preferred-graft-ihave-iwant-estimate-v1", OriginWindowSeconds: originEvidenceWindow.Seconds(), Definition: "v2-corrected-observations-v1", PopulationBasis: "union of subscribed non-publisher nodes at first receipts; dispatch targets only when membership history is absent", Summary: map[string]analysisStatistic{}, Messages: []researchMessage{}, Controls: []researchControlBin{}, ControlBinSeconds: 5, DegreeDistribution: []analysisPoint{}, PropagationCDF: []analysisPoint{}, DuplicateCDF: []analysisPoint{}, HopPDF: []analysisPoint{}, HopCDF: []analysisPoint{}, EagerCDF: []analysisPoint{}, LazyCDF: []analysisPoint{}}
+	out := researchAnalysis{OriginMethod: "message-id-preferred-graft-ihave-iwant-estimate-v2", OriginWindowSeconds: originEvidenceWindow.Seconds(), Definition: "v2-corrected-observations-v1", PopulationBasis: "union of subscribed non-publisher nodes at first receipts; dispatch targets only when membership history is absent", Summary: map[string]analysisStatistic{}, Messages: []researchMessage{}, Controls: []researchControlBin{}, ControlBinSeconds: 5, DegreeDistribution: []analysisPoint{}, PropagationCDF: []analysisPoint{}, DuplicateCDF: []analysisPoint{}, HopPDF: []analysisPoint{}, HopCDF: []analysisPoint{}, EagerCDF: []analysisPoint{}, LazyCDF: []analysisPoint{}}
 	sort.Slice(a.graphEvents, func(i, j int) bool {
 		if a.graphEvents[i].at.Equal(a.graphEvents[j].at) {
 			return a.graphEvents[i].kind < a.graphEvents[j].kind

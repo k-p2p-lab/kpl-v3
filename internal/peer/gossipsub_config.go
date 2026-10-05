@@ -13,6 +13,9 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) (
 		return nil, err
 	}
 	options = append(options, pubsub.WithEventTracer(tracer))
+	if config.MeshFreeze != nil && *config.MeshFreeze {
+		options = append(options, pubsub.WithMeshFreeze())
+	}
 	if config.Hopwave != nil && *config.Hopwave {
 		options = append(options, pubsub.WithHopwavePublish(true))
 	}

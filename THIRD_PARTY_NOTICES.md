@@ -4,7 +4,7 @@ This file identifies third-party source included directly in K-P2PLab and select
 
 ## go-libp2p-pubsub
 
-K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation and optional HopWave forwarding.
+K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation, optional HopWave forwarding, and opt-in mesh freezing.
 
 - Upstream project: [libp2p/go-libp2p-pubsub](https://github.com/libp2p/go-libp2p-pubsub)
 - Upstream version: [v0.13.1](https://github.com/libp2p/go-libp2p-pubsub/tree/v0.13.1)
@@ -32,9 +32,13 @@ The [score.go](third_party/go-libp2p-pubsub/score.go) patch provides:
 
 The observation fields and timestamp are captured under the existing score lock; inspection callbacks remain asynchronous. Scoring arithmetic and decay are unchanged.
 
-The HopWave adaptation adds optional unsigned propagation/hop metadata and periodic full/fractional forwarding to GossipSub. It changes `pubsub.go`, `topic.go`, `gossipsub.go`, `sign.go`, `trace.go` and the RPC/trace protobuf schemas and generated bindings, and adds [hopwave.go](third_party/go-libp2p-pubsub/hopwave.go). Outgoing copies preserve cached/subscriber metadata. HopWave is disabled by default; existing GossipSub protocol IDs and default routing remain.
+The HopWave adaptation adds optional unsigned propagation/hop metadata and periodic full/fractional forwarding to GossipSub. It changes `pubsub.go`, `topic.go`, `gossipsub.go`, `midgen.go`, `sign.go`, `trace.go` and the RPC/trace protobuf schemas and generated bindings, and adds [hopwave.go](third_party/go-libp2p-pubsub/hopwave.go). Outgoing copies preserve cached/subscriber metadata. When HopWave is enabled, message ID callbacks exclude mutable metadata to preserve deduplication and lazy recovery. HopWave is disabled by default; existing GossipSub protocol IDs and default routing remain.
 
-The copy also bounds periodic direct-peer reconnect work, cancels initial timers and connection queue waits on shutdown, and releases resources when default GossipSub construction fails. These changes and their [lifecycle tests](third_party/go-libp2p-pubsub/kpl_lifecycle_test.go) affect `gossipsub.go` and `pubsub.go`.
+The copy also bounds periodic direct-peer reconnect work, cancels initial timers and connection queue waits on shutdown, and releases resources when default GossipSub construction fails. Address-book cleanup also survives failed/closed event subscriptions without polling a closed stream. These changes and their [lifecycle tests](third_party/go-libp2p-pubsub/kpl_lifecycle_test.go) affect `gossipsub.go` and `pubsub.go`.
+
+The optional mesh freeze patch adds `WithMeshFreeze()` and `PubSub.FreezeMesh(ctx)` to pin GossipSub mesh membership after a runtime command. It suppresses automatic and incoming GRAFT/PRUNE membership changes while retaining transport cleanup and ordinary message processing. The capability is disabled by default; its implementation and regression tests are recorded in the patch notes below.
+
+The related [explicit mesh plan extension](third_party/go-libp2p-pubsub/mesh_plan.go) adds `ValidateMeshPlan` and `SetMeshAndFreeze` under the same opt-in capability. It validates a supplied neighbor set, installs one topic's membership and freezes all local topic meshes in one event-loop operation, preserving existing score/connection accounting without synthetic wire controls. Graph generation itself lives in KPL's `internal/topology` package. This extension changes no protobuf schema, protocol ID or dependency version.
 
 K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go) and [HopWave](third_party/go-libp2p-pubsub/kpl_hopwave_test.go) regression tests, [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), a [SHA-256 manifest of the pristine upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json), and a [manifest of HopWave reference sources](third_party/go-libp2p-pubsub/KPL-HOPWAVE-SHA256.json). Original license files are unchanged; the reference fork retains the same licenses. The root [go.mod](go.mod) selects this local copy through a `replace` directive.
 

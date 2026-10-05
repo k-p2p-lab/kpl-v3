@@ -19,6 +19,7 @@ type GossipSubConfig struct {
 	Enabled                *bool                           `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Router                 string                          `json:"router,omitempty" yaml:"router,omitempty"`
 	Hopwave                *bool                           `json:"hopwave,omitempty" yaml:"hopwave,omitempty"`
+	MeshFreeze             *bool                           `json:"meshFreeze,omitempty" yaml:"meshFreeze,omitempty"`
 	TopicMode              string                          `json:"topicMode,omitempty" yaml:"topicMode,omitempty"`
 	RandomDegree           *int                            `json:"randomDegree,omitempty" yaml:"randomDegree,omitempty"`
 	RandomNetworkSize      *int                            `json:"randomNetworkSize,omitempty" yaml:"randomNetworkSize,omitempty"`

@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/distribution"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,34 +28,37 @@ type Scenario struct {
 }
 
 type Phase struct {
-	Name            string           `json:"name" yaml:"name"`
-	Job             string           `json:"job,omitempty" yaml:"job,omitempty"`
-	Jobs            []string         `json:"jobs,omitempty" yaml:"jobs,omitempty"`
-	Action          string           `json:"action" yaml:"action"`
-	OnError         string           `json:"onError,omitempty" yaml:"onError,omitempty"`
-	AgentID         string           `json:"agentId,omitempty" yaml:"agentId,omitempty"`
-	Placement       string           `json:"placement,omitempty" yaml:"placement,omitempty"`
-	Group           string           `json:"group" yaml:"group"`
-	Role            string           `json:"role" yaml:"role"`
-	Profile         string           `json:"profile,omitempty" yaml:"profile,omitempty"`
-	NodeType        string           `json:"type,omitempty" yaml:"type,omitempty"`
-	Count           int              `json:"count" yaml:"count"`
-	Repeat          int              `json:"repeat,omitempty" yaml:"repeat,omitempty"`
-	Parallel        bool             `json:"parallel,omitempty" yaml:"parallel,omitempty"`
-	Parallelism     int              `json:"parallelism,omitempty" yaml:"parallelism,omitempty"`
-	Await           *bool            `json:"await,omitempty" yaml:"await,omitempty"`
-	Duration        string           `json:"duration" yaml:"duration"`
-	Timeout         string           `json:"timeout" yaml:"timeout"`
-	Message         string           `json:"message,omitempty" yaml:"message,omitempty"`
-	ReadyRatio      float64          `json:"readyRatio" yaml:"readyRatio"`
-	MinCount        int              `json:"minCount,omitempty" yaml:"minCount,omitempty"`
-	PayloadSize     int              `json:"payloadSize" yaml:"payloadSize"`
-	PayloadEncoding string           `json:"payloadEncoding,omitempty" yaml:"payloadEncoding,omitempty"`
-	DeliveryWindow  string           `json:"deliveryWindow,omitempty" yaml:"deliveryWindow,omitempty"`
-	Topic           string           `json:"topic" yaml:"topic"`
-	Interval        Distribution     `json:"interval" yaml:"interval"`
-	Lifetime        Distribution     `json:"lifetime" yaml:"lifetime"`
-	Node            model.NodeConfig `json:"node" yaml:"node"`
+	Name            string                `json:"name" yaml:"name"`
+	Job             string                `json:"job,omitempty" yaml:"job,omitempty"`
+	Jobs            []string              `json:"jobs,omitempty" yaml:"jobs,omitempty"`
+	Action          string                `json:"action" yaml:"action"`
+	OnError         string                `json:"onError,omitempty" yaml:"onError,omitempty"`
+	AgentID         string                `json:"agentId,omitempty" yaml:"agentId,omitempty"`
+	Placement       string                `json:"placement,omitempty" yaml:"placement,omitempty"`
+	Group           string                `json:"group" yaml:"group"`
+	NodeIDs         []string              `json:"nodeIds,omitempty" yaml:"nodeIds,omitempty"`
+	PeerIDs         []string              `json:"peerIds,omitempty" yaml:"peerIds,omitempty"`
+	Role            string                `json:"role" yaml:"role"`
+	Profile         string                `json:"profile,omitempty" yaml:"profile,omitempty"`
+	NodeType        string                `json:"type,omitempty" yaml:"type,omitempty"`
+	Count           int                   `json:"count" yaml:"count"`
+	Repeat          int                   `json:"repeat,omitempty" yaml:"repeat,omitempty"`
+	Parallel        bool                  `json:"parallel,omitempty" yaml:"parallel,omitempty"`
+	Parallelism     int                   `json:"parallelism,omitempty" yaml:"parallelism,omitempty"`
+	Await           *bool                 `json:"await,omitempty" yaml:"await,omitempty"`
+	Duration        string                `json:"duration" yaml:"duration"`
+	Timeout         string                `json:"timeout" yaml:"timeout"`
+	Message         string                `json:"message,omitempty" yaml:"message,omitempty"`
+	ReadyRatio      float64               `json:"readyRatio" yaml:"readyRatio"`
+	MinCount        int                   `json:"minCount,omitempty" yaml:"minCount,omitempty"`
+	PayloadSize     int                   `json:"payloadSize" yaml:"payloadSize"`
+	PayloadEncoding string                `json:"payloadEncoding,omitempty" yaml:"payloadEncoding,omitempty"`
+	DeliveryWindow  string                `json:"deliveryWindow,omitempty" yaml:"deliveryWindow,omitempty"`
+	Topic           string                `json:"topic" yaml:"topic"`
+	Topology        *model.TopologyConfig `json:"topology,omitempty" yaml:"topology,omitempty"`
+	Interval        Distribution          `json:"interval" yaml:"interval"`
+	Lifetime        Distribution          `json:"lifetime" yaml:"lifetime"`
+	Node            model.NodeConfig      `json:"node" yaml:"node"`
 }
 
 type Distribution = distribution.Distribution
@@ -81,7 +87,7 @@ func (s *Scenario) Validate() error {
 	if s.Version == 0 {
 		s.Version = 1
 	}
-	if s.Version != 1 && s.Version != 2 {
+	if s.Version != 1 && s.Version != 2 && s.Version != 3 {
 		return fmt.Errorf("unsupported scenario version %d", s.Version)
 	}
 	if strings.TrimSpace(s.Name) == "" {
@@ -108,6 +114,7 @@ func (s *Scenario) Validate() error {
 	}
 	backgroundJoins := make(map[string]map[string]struct{})
 	knownJobs := make(map[string]struct{})
+	joinedGroups := make(map[string][]*Phase)
 	for i := range s.Phases {
 		p := &s.Phases[i]
 		if p.Action == "sleep" {
@@ -124,7 +131,7 @@ func (s *Scenario) Validate() error {
 				p.NodeType = preset.Type
 			}
 		}
-		if p.Job == "" {
+		if p.Job == "" && p.Action != "topology" {
 			p.Job = fmt.Sprintf("phase-%d", i+1)
 		}
 		if p.Repeat == 0 {
@@ -158,7 +165,30 @@ func (s *Scenario) Validate() error {
 		if p.Action != "publish" && p.DeliveryWindow != "" {
 			return fmt.Errorf("phase %q: deliveryWindow is only supported for publish", p.Name)
 		}
+		if (p.NodeIDs != nil || p.PeerIDs != nil) && (s.Version != 3 || p.Action != "mesh-freeze" && p.Action != "topology") {
+			return fmt.Errorf("phase %q: nodeIds and peerIds require version 3 mesh-freeze or topology", p.Name)
+		}
+		if p.Topology != nil && p.Action != "topology" {
+			return fmt.Errorf("phase %q: topology configuration is only supported for the topology action", p.Name)
+		}
 		switch p.Action {
+		case "topology":
+			if s.Version != 3 {
+				return fmt.Errorf("phase %q: topology requires version 3", p.Name)
+			}
+			if err := validateTopologyPhase(p); err != nil {
+				return fmt.Errorf("phase %q: %w", p.Name, err)
+			}
+			if err := validateTopologyGroup(p, joinedGroups[p.Group]); err != nil {
+				return fmt.Errorf("phase %q: %w", p.Name, err)
+			}
+		case "mesh-freeze":
+			if s.Version != 3 {
+				return fmt.Errorf("phase %q: mesh-freeze requires version 3", p.Name)
+			}
+			if err := validateMeshFreezePhase(p); err != nil {
+				return fmt.Errorf("phase %q: %w", p.Name, err)
+			}
 		case "join":
 			if p.Placement == "" {
 				p.Placement = "balanced"
@@ -187,6 +217,7 @@ func (s *Scenario) Validate() error {
 			if err := s.resolveNodeConfig(p); err != nil {
 				return fmt.Errorf("phase %q: %w", p.Name, err)
 			}
+			joinedGroups[p.Group] = append(joinedGroups[p.Group], p)
 			if !p.ShouldAwait() {
 				if backgroundJoins[p.Group] == nil {
 					backgroundJoins[p.Group] = make(map[string]struct{})
@@ -291,6 +322,7 @@ func (s *Scenario) Validate() error {
 			if p.Action == "stop-all" {
 				clear(backgroundJoins)
 				clear(knownJobs)
+				clear(joinedGroups)
 			}
 		default:
 			return fmt.Errorf("phase %q: unknown action %q", p.Name, p.Action)
@@ -307,6 +339,88 @@ func (s *Scenario) Validate() error {
 			}
 			knownJobs[p.Job] = struct{}{}
 		}
+	}
+	return nil
+}
+
+func validateMeshFreezePhase(p *Phase) error {
+	if err := validatePeerSelector(p); err != nil {
+		return err
+	}
+	if p.Count != 0 || p.Parallelism != 0 || p.Interval != (Distribution{}) || p.Lifetime != (Distribution{}) || p.Topic != "" {
+		return fmt.Errorf("mesh-freeze does not support count, parallelism, interval, lifetime, or topic; it freezes all selected peers and their joined topics")
+	}
+	if p.Timeout == "" {
+		p.Timeout = "30s"
+	}
+	timeout, err := time.ParseDuration(p.Timeout)
+	if err != nil || timeout <= 0 {
+		return fmt.Errorf("mesh-freeze timeout must be a positive duration")
+	}
+	return nil
+}
+
+func validatePeerSelector(p *Phase) error {
+	if p.Group == "" && len(p.NodeIDs) == 0 && len(p.PeerIDs) == 0 {
+		return fmt.Errorf("%s requires group, nodeIds, or peerIds", p.Action)
+	}
+	if strings.TrimSpace(p.Group) != p.Group {
+		return fmt.Errorf("%s group must not contain surrounding whitespace", p.Action)
+	}
+	for _, selector := range []struct {
+		name string
+		ids  []string
+	}{{"nodeIds", p.NodeIDs}, {"peerIds", p.PeerIDs}} {
+		if selector.ids != nil && len(selector.ids) == 0 {
+			return fmt.Errorf("%s %s must not be empty when specified", p.Action, selector.name)
+		}
+		seen := make(map[string]bool, len(selector.ids))
+		for _, id := range selector.ids {
+			if id == "" || id == "." || id == ".." || strings.IndexFunc(id, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 || strings.ContainsAny(id, "/\\?#") {
+				return fmt.Errorf("%s %s contains an invalid ID %q", p.Action, selector.name, id)
+			}
+			if selector.name == "peerIds" {
+				if _, err := peer.Decode(id); err != nil {
+					return fmt.Errorf("%s peerIds contains an invalid libp2p peer ID %q", p.Action, id)
+				}
+			}
+			if seen[id] {
+				return fmt.Errorf("%s %s contains duplicate ID %q", p.Action, selector.name, id)
+			}
+			seen[id] = true
+		}
+	}
+	if p.Role != "" && p.Role != "boot" && p.Role != "worker" {
+		return fmt.Errorf("%s role must be boot or worker", p.Action)
+	}
+	return nil
+}
+
+func validateTopologyPhase(p *Phase) error {
+	if err := validatePeerSelector(p); err != nil {
+		return err
+	}
+	if p.Topology == nil {
+		return fmt.Errorf("topology action requires topology configuration")
+	}
+	if p.Topic == "" || strings.TrimSpace(p.Topic) != p.Topic || p.Topic == "*" || len(p.Topic) > 1024 {
+		return fmt.Errorf("topology requires one explicit topic of at most 1024 bytes")
+	}
+	if p.Repeat != 1 || !p.ShouldAwait() || p.Parallel || p.Parallelism != 0 {
+		return fmt.Errorf("topology requires repeat: 1, await: true, and no parallel or parallelism")
+	}
+	if p.Job != "" || p.Profile != "" || p.Duration != "" || p.Message != "" || p.ReadyRatio != 0 || p.MinCount != 0 || p.PayloadSize != 0 || p.Interval != (Distribution{}) || p.Lifetime != (Distribution{}) || !reflect.DeepEqual(p.Node, model.NodeConfig{}) {
+		return fmt.Errorf("topology does not support job, profile, node, duration, message, readiness, payload, interval, or lifetime settings")
+	}
+	if err := p.Topology.Validate(p.Count); err != nil {
+		return err
+	}
+	if p.Timeout == "" {
+		p.Timeout = "2m"
+	}
+	timeout, err := time.ParseDuration(p.Timeout)
+	if err != nil || timeout <= 0 {
+		return fmt.Errorf("topology timeout must be a positive duration")
 	}
 	return nil
 }

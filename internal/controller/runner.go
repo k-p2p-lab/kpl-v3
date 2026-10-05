@@ -436,6 +436,13 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 		return jobs.wait(ctx, phase.Jobs, timeout)
 	case "publish":
 		return s.runPublish(ctx, runID, phase, rng)
+	case "mesh-freeze":
+		return s.runMeshFreeze(ctx, runID, generation, phase)
+	case "topology":
+		s.state.mu.RLock()
+		seed := s.state.experiments[runID].Seed
+		s.state.mu.RUnlock()
+		return s.runTopology(ctx, runID, generation, phase, seed)
 	case "leave":
 		return s.runLeave(ctx, runID, phase, rng)
 	case "stop-all":
@@ -931,16 +938,17 @@ func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID stri
 	}
 	if node.Metadata == nil {
 		node.Metadata = map[string]string{
-			"profile":       node.Profile,
-			"pubsubRouter":  config.GossipSub.Router,
-			"pubsubEnabled": strconv.FormatBool(config.GossipSub.Enabled != nil && *config.GossipSub.Enabled),
-			"scoreEnabled":  strconv.FormatBool(config.GossipSub.Enabled != nil && *config.GossipSub.Enabled && config.GossipSub.Router == "gossipsub" && config.GossipSub.Score != nil && config.GossipSub.Score.IsEnabled()),
-			"allowPublish":  strconv.FormatBool(config.PublishAllowed()),
-			"topicMode":     config.GossipSub.TopicMode,
-			"topics":        strings.Join(config.GossipSub.Topics, ","),
-			"topicsJSON":    encodeTopics(config.GossipSub.Topics),
-			"dhtEnabled":    strconv.FormatBool(config.Kademlia.Enabled != nil && *config.Kademlia.Enabled),
-			"dhtMode":       config.Kademlia.Mode,
+			"profile":           node.Profile,
+			"pubsubRouter":      config.GossipSub.Router,
+			"pubsubEnabled":     strconv.FormatBool(config.GossipSub.Enabled != nil && *config.GossipSub.Enabled),
+			"meshFreezeEnabled": strconv.FormatBool(config.GossipSub.Enabled != nil && *config.GossipSub.Enabled && config.GossipSub.Router == "gossipsub" && config.GossipSub.MeshFreeze != nil && *config.GossipSub.MeshFreeze),
+			"scoreEnabled":      strconv.FormatBool(config.GossipSub.Enabled != nil && *config.GossipSub.Enabled && config.GossipSub.Router == "gossipsub" && config.GossipSub.Score != nil && config.GossipSub.Score.IsEnabled()),
+			"allowPublish":      strconv.FormatBool(config.PublishAllowed()),
+			"topicMode":         config.GossipSub.TopicMode,
+			"topics":            strings.Join(config.GossipSub.Topics, ","),
+			"topicsJSON":        encodeTopics(config.GossipSub.Topics),
+			"dhtEnabled":        strconv.FormatBool(config.Kademlia.Enabled != nil && *config.Kademlia.Enabled),
+			"dhtMode":           config.Kademlia.Mode,
 		}
 	}
 	if node.StartedAt.IsZero() {
@@ -1364,6 +1372,12 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	client := s.client
+	if method == http.MethodPost && (strings.HasSuffix(path, "/mesh-freeze") || strings.HasSuffix(path, "/topology")) {
+		// Mesh control phases supply deadlines across their target peers.
+		freezeClient := *s.client
+		freezeClient.Timeout = 0
+		client = &freezeClient
+	}
 	if (method == http.MethodDelete && (strings.HasPrefix(path, "/api/v1/runs/") || path == "/api/v1/nodes")) || strings.HasSuffix(path, "/drain") {
 		// Removing Docker namespaces/filesystems can exceed the ordinary 10s
 		// control request timeout. The scenario context still bounds cleanup.
@@ -1387,6 +1401,23 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 	}
 	if output != nil {
+		if strings.HasSuffix(path, "/topology") {
+			data, err := io.ReadAll(io.LimitReader(resp.Body, model.MaxTopologyRequestBytes+1))
+			if err != nil {
+				return err
+			}
+			if len(data) > model.MaxTopologyRequestBytes {
+				return errors.New("topology acknowledgement exceeds body limit")
+			}
+			decoder := json.NewDecoder(bytes.NewReader(data))
+			if err := decoder.Decode(output); err != nil {
+				return err
+			}
+			if err := decoder.Decode(new(any)); err != io.EOF {
+				return errors.New("invalid topology acknowledgement: expected one JSON value")
+			}
+			return nil
+		}
 		return json.NewDecoder(resp.Body).Decode(output)
 	}
 	return nil

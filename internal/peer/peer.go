@@ -49,6 +49,8 @@ type Server struct {
 	logger            *slog.Logger
 	startedAt         time.Time
 	publishSeq        atomic.Uint64
+	meshFrozen        atomic.Bool
+	topology          topologyCommandState
 	publishGate       publicationGate
 	publishing        publicationBridge
 	mesh              meshTracker
@@ -287,6 +289,7 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 }
 
 func (s *Server) startPubSub(ctx context.Context) error {
+	s.topology.lifetime = ctx
 	config := s.config.NodeConfig.GossipSub
 	tracer := &gossipTracer{telemetry: s.telemetry, peerID: s.host.ID().String(), publishing: &s.publishing}
 	options, err := gossipSubOptions(config, tracer)
@@ -383,6 +386,8 @@ func (s *Server) handler() http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready", "nodeId": s.config.Node.ID, "peerId": s.host.ID().String()})
 	})
 	mux.HandleFunc("/publish", s.handlePublish)
+	mux.HandleFunc("/mesh-freeze", s.handleMeshFreeze)
+	mux.HandleFunc("/topology", s.handleTopology)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.config.Token != "" && r.Method != http.MethodGet && r.Header.Get("Authorization") != "Bearer "+s.config.Token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -616,6 +621,9 @@ func (s *Server) reportStatus(ctx context.Context, state, message string) error 
 	node.ScoreSample = s.scoreSample.Clone()
 	s.scoreMu.RUnlock()
 	node.RoutingPeers, node.MeshPeers, node.OverlayObservedAt = s.overlaySnapshot()
+	if err := s.observeMeshFreezeStatus(ctx, &node); err != nil {
+		return err
+	}
 	return s.telemetry.reportNode(ctx, node)
 }
 

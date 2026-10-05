@@ -504,17 +504,18 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		Profile:    profile,
 		State:      model.NodeStarting,
 		Metadata: map[string]string{
-			"runtime":       "docker",
-			"profile":       profile,
-			"pubsubRouter":  resolvedConfig.GossipSub.Router,
-			"pubsubEnabled": strconv.FormatBool(resolvedConfig.GossipSub.Enabled != nil && *resolvedConfig.GossipSub.Enabled),
-			"scoreEnabled":  strconv.FormatBool(resolvedConfig.GossipSub.Enabled != nil && *resolvedConfig.GossipSub.Enabled && resolvedConfig.GossipSub.Router == "gossipsub" && resolvedConfig.GossipSub.Score != nil && resolvedConfig.GossipSub.Score.IsEnabled()),
-			"allowPublish":  strconv.FormatBool(resolvedConfig.PublishAllowed()),
-			"topicMode":     resolvedConfig.GossipSub.TopicMode,
-			"topics":        strings.Join(resolvedConfig.GossipSub.Topics, ","),
-			"topicsJSON":    string(topicsJSON),
-			"dhtEnabled":    strconv.FormatBool(resolvedConfig.Kademlia.Enabled != nil && *resolvedConfig.Kademlia.Enabled),
-			"dhtMode":       resolvedConfig.Kademlia.Mode,
+			"runtime":           "docker",
+			"profile":           profile,
+			"pubsubRouter":      resolvedConfig.GossipSub.Router,
+			"pubsubEnabled":     strconv.FormatBool(resolvedConfig.GossipSub.Enabled != nil && *resolvedConfig.GossipSub.Enabled),
+			"meshFreezeEnabled": strconv.FormatBool(resolvedConfig.GossipSub.Enabled != nil && *resolvedConfig.GossipSub.Enabled && resolvedConfig.GossipSub.Router == "gossipsub" && resolvedConfig.GossipSub.MeshFreeze != nil && *resolvedConfig.GossipSub.MeshFreeze),
+			"scoreEnabled":      strconv.FormatBool(resolvedConfig.GossipSub.Enabled != nil && *resolvedConfig.GossipSub.Enabled && resolvedConfig.GossipSub.Router == "gossipsub" && resolvedConfig.GossipSub.Score != nil && resolvedConfig.GossipSub.Score.IsEnabled()),
+			"allowPublish":      strconv.FormatBool(resolvedConfig.PublishAllowed()),
+			"topicMode":         resolvedConfig.GossipSub.TopicMode,
+			"topics":            strings.Join(resolvedConfig.GossipSub.Topics, ","),
+			"topicsJSON":        string(topicsJSON),
+			"dhtEnabled":        strconv.FormatBool(resolvedConfig.Kademlia.Enabled != nil && *resolvedConfig.Kademlia.Enabled),
+			"dhtMode":           resolvedConfig.Kademlia.Mode,
 		},
 		StartedAt: now,
 		LastSeen:  now,
@@ -805,7 +806,7 @@ func (s *Server) updateNode(update model.Node) error {
 	proc.node.ConnectedPeers = slices.Clone(update.ConnectedPeers)
 	proc.node.TopicPeers = maps.Clone(update.TopicPeers)
 	proc.node.PeerScores = maps.Clone(update.PeerScores)
-	if update.ScoreSample.Valid() && (proc.node.ScoreSample == nil || update.ScoreSample.ObservedAt.After(proc.node.ScoreSample.ObservedAt)) {
+	if update.ScoreSample.Valid() && update.ScoreSample.NewerThan(proc.node.ScoreSample) {
 		proc.node.ScoreSample = update.ScoreSample.Clone()
 	}
 	// Observation time makes an empty routing/mesh snapshot authoritative.
@@ -817,6 +818,11 @@ func (s *Server) updateNode(update model.Node) error {
 		proc.node.OverlayObservedAt = update.OverlayObservedAt
 	}
 	updateProcessNetwork(proc, update.Metadata)
+	// Freeze is one-way. An older in-flight status must never undo a successful
+	// command acknowledgement, and a Peer cannot enable a disabled capability.
+	if proc.node.Metadata["meshFreezeEnabled"] == "true" && update.Metadata["meshFrozen"] == "true" {
+		setProcessMetadata(proc, "meshFrozen", "true")
+	}
 	proc.node.LastSeen = time.Now().UTC()
 	proc.node.Error = update.Error
 	return nil
@@ -863,7 +869,7 @@ func heartbeatNodeStatus(proc *process) model.Node {
 	node.OverlayObservedAt = time.Time{}
 	node.Metadata = make(map[string]string)
 	// Preserve lifecycle evidence and topic labels used by Controller metrics.
-	for _, key := range []string{"cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode"} {
+	for _, key := range []string{"cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode", "meshFreezeEnabled", "meshFrozen"} {
 		if value, exists := proc.node.Metadata[key]; exists {
 			node.Metadata[key] = value
 		}

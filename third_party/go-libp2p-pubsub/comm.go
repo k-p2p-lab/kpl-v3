@@ -180,6 +180,12 @@ func (p *PubSub) handleSendingMessages(ctx context.Context, s network.Stream, ou
 			log.Debugf("popping message from the queue to send to %s: %s", s.Conn().RemotePeer(), err)
 			return
 		}
+		if p.meshFrozen.Load() {
+			rpc = withoutMeshControl(rpc)
+			if rpc.Size() == 0 {
+				continue
+			}
+		}
 
 		err = writeRpc(rpc)
 		if err != nil {

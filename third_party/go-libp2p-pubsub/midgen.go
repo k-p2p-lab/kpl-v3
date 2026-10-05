@@ -10,6 +10,8 @@ import (
 // It allows setting custom generators(MsgIdFunction) per topic
 type msgIDGenerator struct {
 	Default MsgIdFunction
+	// Fixed during construction, before any message or tracer workers start.
+	hopwave bool
 
 	topicGensLk sync.RWMutex
 	topicGens   map[string]MsgIdFunction
@@ -48,5 +50,13 @@ func (m *msgIDGenerator) RawID(msg *pb.Message) string {
 		gen = m.Default
 	}
 
+	if m.hopwave && (msg.PropaType != nil || msg.HopCount != nil) {
+		// Forwarding changes these fields. Including them in a custom ID would
+		// give each hop a different identity, breaking deduplication and IWANT.
+		// Preserve the arrival message shared with subscribers and the cache.
+		stable := *msg
+		stable.PropaType, stable.HopCount = nil, nil
+		return gen(&stable)
+	}
 	return gen(msg)
 }

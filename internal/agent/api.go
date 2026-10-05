@@ -209,6 +209,10 @@ func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "mesh-freeze":
+		s.handleMeshFreeze(w, r, parts[0])
+	case "topology":
+		s.handleTopology(w, r, parts[0])
 	case "status":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w)

@@ -146,6 +146,9 @@ type PubSub struct {
 	// eval thunk in event loop
 	eval chan func()
 
+	// Read by stream writers to suppress queued mesh controls after freezing.
+	meshFrozen atomic.Bool
+
 	// peer blacklist
 	blacklist     Blacklist
 	blacklistPeer chan peer.ID
@@ -306,6 +309,7 @@ func NewPubSub(ctx context.Context, h host.Host, rt PubSubRouter, opts ...Option
 			return nil, err
 		}
 	}
+	ps.idGen.hopwave = ps.hopwave
 
 	if ps.signPolicy.mustSign() {
 		if ps.signID == "" {
@@ -571,6 +575,10 @@ func (p *PubSub) processLoop(ctx context.Context) {
 		}
 		p.peers = nil
 		p.topics = nil
+		if gs, ok := p.rt.(*GossipSubRouter); ok && gs.meshFrozen {
+			gs.mesh = nil
+			gs.frozenMeshActive = nil
+		}
 		p.seenMessages.Done()
 	}()
 
@@ -1067,6 +1075,9 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 
 			if _, ok = tmap[rpc.from]; !ok {
 				tmap[rpc.from] = struct{}{}
+				if gs, ok := p.rt.(*GossipSubRouter); ok && gs.meshFrozen {
+					gs.frozenMeshAccounting(rpc.from, t, gs.meshTopicActive(t) && gs.meshPeerActive(t, rpc.from))
+				}
 				if topic, ok := p.myTopics[t]; ok {
 					peer := rpc.from
 					topic.sendNotification(PeerEvent{PeerJoin, peer})
@@ -1080,6 +1091,9 @@ func (p *PubSub) handleIncomingRPC(rpc *RPC) {
 
 			if _, ok := tmap[rpc.from]; ok {
 				delete(tmap, rpc.from)
+				if gs, ok := p.rt.(*GossipSubRouter); ok && gs.meshFrozen {
+					gs.frozenMeshAccounting(rpc.from, t, false)
+				}
 				p.notifyLeave(t, rpc.from)
 			}
 		}

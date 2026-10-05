@@ -1,0 +1,38 @@
+# Requires Linux Swarm capacity for 500 workers plus one bootstrap Peer.
+# topology installs the selected graph and freezes the mesh in the same phase.
+version: 3
+name: er-500-frozen-mesh
+seed: 1001
+profiles:
+  graph-peer:
+    type: full
+    libp2p:
+      connectionLimit: 512
+      connectionManager: {lowWater: 500, highWater: 600, gracePeriod: 1m}
+    kademlia:
+      enabled: false
+    gossipsub:
+      meshFreeze: true
+      topics: [kpl/graph]
+      discovery: {mode: none}
+phases:
+  - {action: join, group: boot, role: boot, count: 1}
+  - {action: wait-ready, group: boot, timeout: 1m}
+  - {action: join, group: domain-a, profile: graph-peer, count: 500, parallel: true, parallelism: 16}
+  - {action: wait-ready, group: domain-a, minCount: 500, timeout: 10m}
+  - action: topology
+    group: domain-a
+    count: 500
+    topic: kpl/graph
+    timeout: 5m
+    topology: {model: er, p: 0.05, seed: 1001}
+    # Alternative graph configurations for the same selected 500 Peers:
+    # topology: {model: ws, k: 6, p: 0.1, seed: 1001}
+    # topology: {model: ba, m: 3, seed: 1001}
+    # topology: {model: rgg, radius: 0.08, seed: 1001}
+    # topology: {model: waxman, alpha: 0.4, beta: 0.5, seed: 1001}
+    # topology: {model: grid, rows: 20, columns: 25}
+    # topology: {model: triangular, rows: 20, columns: 25}
+  - {action: publish, group: domain-a, topic: kpl/graph, count: 1, repeat: 5, payloadSize: 1024, interval: {model: fixed, value: 1s}}
+  - {action: wait, duration: 15s}
+  - {action: stop-all}

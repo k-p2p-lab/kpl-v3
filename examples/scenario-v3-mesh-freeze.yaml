@@ -1,0 +1,23 @@
+# Run on Linux Swarm. meshFreeze enables the capability; the phase freezes
+# each selected peer's current joined-topic mesh after its acknowledgement.
+version: 3
+name: fixed-gossipsub-mesh
+seed: 1001
+profiles:
+  frozen-mesh:
+    type: full
+    gossipsub:
+      meshFreeze: true
+      topics: [kpl/fixed-mesh]
+phases:
+  - {action: join, group: boot, role: boot, count: 1}
+  - {action: wait-ready, group: boot, timeout: 1m}
+  - {action: join, group: workers, profile: frozen-mesh, count: 4}
+  - {action: wait-ready, group: workers, timeout: 2m}
+  - {action: wait, duration: 10s}
+  - {action: mesh-freeze, group: workers, timeout: 30s}
+  # For a running cohort, explicit alternatives can use nodeIds: [<KPL node ID>]
+  # or peerIds: [<libp2p peer ID>]. Any supplied filters are intersected.
+  - {action: publish, group: workers, topic: kpl/fixed-mesh, count: 4, repeat: 5, payloadSize: 1024, interval: {model: fixed, value: 1s}}
+  - {action: wait, duration: 15s}
+  - {action: stop-all}

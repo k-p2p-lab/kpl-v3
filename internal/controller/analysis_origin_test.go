@@ -126,3 +126,99 @@ func TestOriginIncompleteMetadataDoesNotProveEager(t *testing.T) {
 		t.Fatal("missing IDs incorrectly treated as no pull request")
 	}
 }
+
+func TestOriginTopologyApplicationResetsOnlyObservedTopic(t *testing.T) {
+	epoch := time.Unix(100, 0)
+	event := func(kind, from, to, topic string, seconds float64) model.TraceEvent {
+		return model.TraceEvent{Type: kind, PeerID: from, NodeID: from, RemotePeerID: to, Topic: topic,
+			Timestamp: epoch.Add(time.Duration(seconds * float64(time.Second))), Fields: map[string]any{"messageIdCount": 1}}
+	}
+	graft := event("graft", "sender", "receiver", "t", 0)
+	otherGraft := event("graft", "sender", "receiver", "other", 0)
+	applied := event("topology_applied", "receiver", "", "t", 2)
+	applied.Fields = map[string]any{"frozen": true, "neighbors": []string{"sender"}, "topologyId": "applied-plan"}
+	legacyApplied := applied
+	legacyApplied.Topic = ""
+	legacyApplied.Fields = map[string]any{"frozen": true, "topic": "t", "neighbors": []string{"sender"}}
+	planned := event("topology_assignment", "receiver", "", "t", 2)
+	planned.Fields = map[string]any{"evidence": "planned", "neighbors": []string{}}
+	cases := []struct {
+		name   string
+		events []model.TraceEvent
+		topic  string
+		at     float64
+		want   string
+	}{
+		{"applied discards old graft", []model.TraceEvent{graft, applied}, "t", 3, "unknown"},
+		{"applied preserves other topics", []model.TraceEvent{graft, otherGraft, applied}, "other", 3, "eager"},
+		{"planned graph does not invalidate observed graft", []model.TraceEvent{graft, planned}, "t", 3, "eager"},
+		{"planned graph does not manufacture graft", []model.TraceEvent{planned}, "t", 3, "unknown"},
+		{"applied neighbors do not manufacture graft", []model.TraceEvent{applied}, "t", 3, "unknown"},
+		{"legacy topic field reset", []model.TraceEvent{graft, legacyApplied}, "t", 3, "unknown"},
+		{"legacy topic field preserves other topics", []model.TraceEvent{otherGraft, legacyApplied}, "other", 3, "eager"},
+		{"future application preserves earlier observation", []model.TraceEvent{graft, applied}, "t", 1, "eager"},
+		{"equal-time graft is discarded", []model.TraceEvent{event("graft", "sender", "receiver", "t", 2), applied}, "t", 3, "unknown"},
+		{"old pull sequence is discarded", []model.TraceEvent{event("send_ihave", "sender", "receiver", "t", 1), event("recv_iwant", "sender", "receiver", "t", 1.5), applied}, "t", 3, "unknown"},
+		{"pull split across application is discarded", []model.TraceEvent{event("send_ihave", "sender", "receiver", "t", 1), applied, event("recv_iwant", "sender", "receiver", "t", 2.5)}, "t", 3, "unknown"},
+		{"equal-time advertisement is discarded", []model.TraceEvent{applied, event("send_ihave", "sender", "receiver", "t", 2), event("recv_iwant", "sender", "receiver", "t", 2.5)}, "t", 3, "unknown"},
+		{"new pull sequence is retained", []model.TraceEvent{graft, applied, event("send_ihave", "sender", "receiver", "t", 2.25), event("recv_iwant", "sender", "receiver", "t", 2.5)}, "t", 3, "lazy"},
+		{"other topic pull sequence is retained", []model.TraceEvent{event("send_ihave", "sender", "receiver", "other", 1), event("recv_iwant", "sender", "receiver", "other", 1.5), applied}, "other", 3, "lazy"},
+		{"unrelated peer application preserves graft", []model.TraceEvent{graft, event("topology_applied", "unrelated", "", "t", 2)}, "t", 3, "eager"},
+		{"later actual graft can establish evidence", []model.TraceEvent{applied, event("graft", "sender", "receiver", "t", 2.5)}, "t", 3, "eager"},
+		{"missing topic does not invent a global reset", []model.TraceEvent{graft, event("topology_applied", "receiver", "", "", 2)}, "t", 3, "eager"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var wantEvidence []string
+			for _, reverse := range []bool{false, true} {
+				for _, decoded := range []bool{false, true} {
+					accumulator := newResearchAccumulator()
+					for i := range tc.events {
+						j := i
+						if reverse {
+							j = len(tc.events) - 1 - i
+						}
+						e := tc.events[j]
+						if decoded {
+							data, err := json.Marshal(e)
+							if err != nil || json.Unmarshal(data, &e) != nil {
+								t.Fatal("event failed JSON archive round trip")
+							}
+						}
+						accumulator.observe(e)
+					}
+					index := newOriginMetadataIndex(accumulator.inference, accumulator.peers)
+					kind, evidence := index.estimate("sender", "receiver", tc.topic, "", epoch, epoch.Add(time.Duration(tc.at*float64(time.Second))))
+					if kind != tc.want {
+						t.Fatalf("kind=%s evidence=%v, want %s", kind, evidence, tc.want)
+					}
+					if wantEvidence == nil {
+						wantEvidence = evidence
+					} else if !reflect.DeepEqual(wantEvidence, evidence) {
+						t.Fatal("archive decoding or event order changed reset inference")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestOriginResetCannotUseEqualTimeControlEvidence(t *testing.T) {
+	epoch := time.Unix(100, 0)
+	for _, resetType := range []string{"leave", "measurement_stop", "measurement_terminated", "remove_peer", "topology_applied"} {
+		t.Run(resetType, func(t *testing.T) {
+			a := newResearchAccumulator()
+			resetTopic := "t"
+			if resetType == "remove_peer" {
+				resetTopic = ""
+			}
+			a.observe(model.TraceEvent{Type: resetType, PeerID: "sender", RemotePeerID: "receiver", NodeID: "sender", Topic: resetTopic, Timestamp: epoch.Add(time.Second)})
+			a.observe(model.TraceEvent{Type: "send_ihave", PeerID: "sender", RemotePeerID: "receiver", Topic: "t", Timestamp: epoch.Add(time.Second), Fields: map[string]any{"messageIdCount": 1}})
+			a.observe(model.TraceEvent{Type: "recv_iwant", PeerID: "sender", RemotePeerID: "receiver", Topic: "t", Timestamp: epoch.Add(2 * time.Second), Fields: map[string]any{"messageIdCount": 1}})
+			index := newOriginMetadataIndex(a.inference, a.peers)
+			if kind, evidence := index.estimate("sender", "receiver", "t", "", epoch, epoch.Add(3*time.Second)); kind != "unknown" {
+				t.Fatalf("same-time control crossed reset: %s %v", kind, evidence)
+			}
+		})
+	}
+}

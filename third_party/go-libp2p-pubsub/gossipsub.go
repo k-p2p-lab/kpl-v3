@@ -543,6 +543,11 @@ type GossipSubRouter struct {
 	// Whether to apply periodic full/fractional forwarding to publications.
 	hopwavePublish bool
 
+	meshFreezeEnabled    bool
+	meshFrozen           bool
+	meshFreezeObservedAt time.Time
+	frozenMeshActive     map[string]map[peer.ID]bool
+
 	// number of heartbeats since the beginning of time; this allows us to amortize some resource
 	// clean up -- eg backoff clean up.
 	heartbeatTicks uint64
@@ -611,28 +616,37 @@ func (gs *GossipSubRouter) initialDirectConnect() {
 }
 
 func (gs *GossipSubRouter) manageAddrBook() {
+	defer func() {
+		if closer, ok := gs.cab.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				log.Warnf("failed to close addr book: %v", err)
+			}
+		}
+	}()
 	sub, err := gs.p.host.EventBus().Subscribe([]interface{}{
 		&event.EvtPeerIdentificationCompleted{},
 		&event.EvtPeerConnectednessChanged{},
 	})
 	if err != nil {
 		log.Errorf("failed to subscribe to peer identification events: %v", err)
+		// The router can still use the book without event updates. Keep its
+		// lifetime tied to PubSub even when the subscription cannot start.
+		<-gs.p.ctx.Done()
 		return
 	}
 	defer sub.Close()
+	events := sub.Out()
 
 	for {
 		select {
 		case <-gs.p.ctx.Done():
-			cabCloser, ok := gs.cab.(io.Closer)
-			if ok {
-				errClose := cabCloser.Close()
-				if errClose != nil {
-					log.Warnf("failed to close addr book: %v", errClose)
-				}
-			}
 			return
-		case ev := <-sub.Out():
+		case ev, ok := <-events:
+			if !ok {
+				// A closed subscription must not spin while PubSub is alive.
+				events = nil
+				continue
+			}
 			switch ev := ev.(type) {
 			case event.EvtPeerIdentificationCompleted:
 				if ev.SignedPeerRecord != nil {
@@ -684,14 +698,35 @@ loop:
 		}
 	}
 	gs.outbound[p] = outbound
+	if gs.meshFrozen {
+		for topic, peers := range gs.mesh {
+			if _, pinned := peers[p]; pinned {
+				gs.frozenMeshAccounting(p, topic, gs.meshTopicActive(topic) && gs.meshPeerActive(topic, p))
+			}
+		}
+	}
 }
 
 func (gs *GossipSubRouter) RemovePeer(p peer.ID) {
 	log.Debugf("PEERDOWN: Remove disconnected peer %s", p)
+	// Preserve the upstream score retention decision before changing mesh
+	// accounting. RemovePeer itself applies any retained delivery penalty.
 	gs.tracer.RemovePeer(p)
+	if gs.meshFrozen {
+		for topic := range gs.mesh {
+			if gs.frozenMeshActive[topic][p] {
+				gs.frozenMeshActive[topic][p] = false
+				if gs.tagTracer != nil {
+					gs.tagTracer.Prune(p, topic)
+				}
+			}
+		}
+	}
 	delete(gs.peers, p)
 	for _, peers := range gs.mesh {
-		delete(peers, p)
+		if !gs.meshFrozen {
+			delete(peers, p)
+		}
 	}
 	for _, peers := range gs.fanout {
 		delete(peers, p)
@@ -718,6 +753,16 @@ func (gs *GossipSubRouter) EnoughPeers(topic string, suggested int) bool {
 
 	// gossipsub peers
 	gsPeers = len(gs.mesh[topic])
+	if gs.meshFrozen {
+		gsPeers = 0
+		if gs.meshTopicActive(topic) {
+			for pid := range gs.mesh[topic] {
+				if gs.meshPeerActive(topic, pid) {
+					gsPeers++
+				}
+			}
+		}
+	}
 
 	if suggested == 0 {
 		suggested = gs.params.Dlo
@@ -756,6 +801,9 @@ func (gs *GossipSubRouter) PreValidation(msgs []*Message) {
 		tmids[topic] = append(tmids[topic], gs.p.idGen.ID(msg))
 	}
 	for topic, mids := range tmids {
+		if gs.meshFrozen && !gs.meshTopicActive(topic) {
+			continue
+		}
 		if len(mids) == 0 {
 			continue
 		}
@@ -763,6 +811,9 @@ func (gs *GossipSubRouter) PreValidation(msgs []*Message) {
 		shuffleStrings(mids)
 		// send IDONTWANT to all the mesh peers
 		for p := range gs.mesh[topic] {
+			if gs.meshFrozen && !gs.meshPeerActive(topic, p) {
+				continue
+			}
 			// send to only peers that support IDONTWANT
 			if gs.feature(GossipSubFeatureIdontwant, gs.peers[p]) {
 				idontwant := []*pb.ControlIDontWant{{MessageIDs: mids}}
@@ -816,6 +867,11 @@ func (gs *GossipSubRouter) handleIHave(p peer.ID, ctl *pb.ControlMessage) []*pb.
 	for _, ihave := range ctl.GetIhave() {
 		topic := ihave.GetTopicID()
 		_, ok := gs.mesh[topic]
+		if gs.meshFrozen {
+			// Local participation still requests gossip, even for a topic
+			// joined after freezing that has no pinned mesh entry.
+			ok = gs.meshTopicActive(topic)
+		}
 		if !ok {
 			continue
 		}
@@ -920,6 +976,9 @@ func (gs *GossipSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb.
 }
 
 func (gs *GossipSubRouter) handleGraft(p peer.ID, ctl *pb.ControlMessage) []*pb.ControlPrune {
+	if gs.meshFrozen {
+		return nil
+	}
 	var prune []string
 
 	doPX := gs.doPX
@@ -1018,6 +1077,9 @@ func (gs *GossipSubRouter) handleGraft(p peer.ID, ctl *pb.ControlMessage) []*pb.
 }
 
 func (gs *GossipSubRouter) handlePrune(p peer.ID, ctl *pb.ControlMessage) {
+	if gs.meshFrozen {
+		return
+	}
 	score := gs.score.Score(p)
 
 	for _, prune := range ctl.GetPrune() {
@@ -1221,6 +1283,16 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 
 		// gossipsub peers
 		gmap, ok := gs.mesh[topic]
+		if gs.meshFrozen {
+			// A subscribed/relay topic with no pinned members has an empty
+			// mesh, not a publication-only fanout. Participation is independent
+			// of whether the topic existed at freeze time.
+			ok = gs.meshTopicActive(topic)
+			if !ok {
+				gmap = nil
+			}
+		}
+		inMesh := ok
 		if !ok {
 			// we are not in the mesh for topic, use fanout peers
 			gmap, ok = gs.fanout[topic]
@@ -1241,6 +1313,9 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 
 		csum := computeChecksum(gs.p.idGen.ID(msg))
 		for p := range gmap {
+			if gs.meshFrozen && inMesh && !gs.meshPeerActive(topic, p) {
+				continue
+			}
 			// Check if it has already received an IDONTWANT for the message.
 			// If so, don't send it to the peer
 			if _, ok := gs.unwanted[p][csum]; ok {
@@ -1266,6 +1341,19 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 }
 
 func (gs *GossipSubRouter) Join(topic string) {
+	if gs.meshFrozen {
+		// Joining ends publication-only fanout just as it does upstream.
+		// Do not promote its peers into the immutable mesh.
+		delete(gs.fanout, topic)
+		delete(gs.lastpub, topic)
+		gs.tracer.Join(topic)
+		for pid := range gs.mesh[topic] {
+			if gs.meshPeerActive(topic, pid) {
+				gs.frozenMeshAccounting(pid, topic, true)
+			}
+		}
+		return
+	}
 	gmap, ok := gs.mesh[topic]
 	if ok {
 		return
@@ -1323,6 +1411,13 @@ func (gs *GossipSubRouter) Join(topic string) {
 }
 
 func (gs *GossipSubRouter) Leave(topic string) {
+	if gs.meshFrozen {
+		gs.tracer.Leave(topic)
+		for pid := range gs.mesh[topic] {
+			gs.frozenMeshAccounting(pid, topic, false)
+		}
+		return
+	}
 	gmap, ok := gs.mesh[topic]
 	if !ok {
 		return
@@ -1383,6 +1478,12 @@ func (gs *GossipSubRouter) sendRPC(p peer.ID, out *RPC, urgent bool) {
 	q, ok := gs.p.peers[p]
 	if !ok {
 		return
+	}
+	if gs.meshFrozen {
+		out = withoutMeshControl(out)
+		if out.Size() == 0 {
+			return
+		}
 	}
 
 	// If we're below the max message size, go ahead and send
@@ -1639,6 +1740,12 @@ func (gs *GossipSubRouter) heartbeat() {
 
 	// maintain the mesh for topics we have joined
 	for topic, peers := range gs.mesh {
+		if gs.meshFrozen {
+			if gs.meshTopicActive(topic) {
+				gs.emitGossip(topic, peers)
+			}
+			continue
+		}
 		prunePeer := func(p peer.ID) {
 			gs.tracer.Prune(p, topic)
 			delete(peers, p)
@@ -1809,6 +1916,10 @@ func (gs *GossipSubRouter) heartbeat() {
 		// 2nd arg are mesh peers excluded from gossip. We already push
 		// messages to them, so its redundant to gossip IHAVEs.
 		gs.emitGossip(topic, peers)
+	}
+
+	if gs.meshFrozen {
+		gs.emitGossipForUnpinnedTopics()
 	}
 
 	// expire fanout for topics we haven't published to in a while
@@ -2074,6 +2185,9 @@ func (gs *GossipSubRouter) piggybackGossip(p peer.ID, out *RPC, ihave []*pb.Cont
 }
 
 func (gs *GossipSubRouter) pushControl(p peer.ID, ctl *pb.ControlMessage) {
+	if gs.meshFrozen {
+		return
+	}
 	// remove IHAVE/IWANT/IDONTWANT from control message, gossip is not retried
 	ctl.Ihave = nil
 	ctl.Iwant = nil

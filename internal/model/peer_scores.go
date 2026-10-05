@@ -49,8 +49,24 @@ func (s *ScoreStatistic) Merge(other ScoreStatistic) {
 // of peer/topic pairs. Retained scores are included, as in libp2p's inspector.
 type PeerScoreSample struct {
 	ObservedAt      time.Time                 `json:"observedAt"`
+	Sequence        uint64                    `json:"sequence,omitempty"`
 	IntervalSeconds float64                   `json:"intervalSeconds"`
 	Components      map[string]ScoreStatistic `json:"components"`
+}
+
+// NewerThan orders inspections within one Peer process independently of clock
+// corrections. Legacy samples have no sequence and retain timestamp ordering.
+func (s *PeerScoreSample) NewerThan(previous *PeerScoreSample) bool {
+	if s == nil {
+		return false
+	}
+	if previous == nil {
+		return true
+	}
+	if s.Sequence != 0 || previous.Sequence != 0 {
+		return s.Sequence > previous.Sequence
+	}
+	return s.ObservedAt.After(previous.ObservedAt)
 }
 
 func (s *PeerScoreSample) Clone() *PeerScoreSample {

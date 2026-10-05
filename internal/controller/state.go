@@ -444,10 +444,10 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 	for _, event := range accepted {
 		accumulator.observe(event)
 	}
-	// Periodic component measurements belong in saved logs and analysis. Keep
-	// them from displacing actual network events in the bounded live feed.
+	// Component samples and full topology adjacency belong in saved logs. Keep
+	// them from displacing network events or retaining large lists in live SSE.
 	for _, event := range accepted {
-		if event.Type != "peer_score" {
+		if event.Type != "peer_score" && event.Type != "topology_assignment" && event.Type != "topology_applied" {
 			s.events = append(s.events, event)
 		}
 	}

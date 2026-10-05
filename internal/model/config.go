@@ -387,6 +387,9 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 
 func (c NodeConfig) Validate() error {
 	c = c.WithDefaults()
+	if c.GossipSub.MeshFreeze != nil && *c.GossipSub.MeshFreeze && (c.GossipSub.Enabled == nil || !*c.GossipSub.Enabled) {
+		return fmt.Errorf("meshFreeze requires enabled GossipSub")
+	}
 	if err := c.Network.Validate(); err != nil {
 		return fmt.Errorf("network: %w", err)
 	}

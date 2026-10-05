@@ -54,9 +54,9 @@ func newTimingPlan(spec scenario.Scenario) *timingPlan {
 		case "wait":
 			duration, _ := time.ParseDuration(phase.Duration)
 			seconds = duration.Seconds()
-		case "wait-ready":
-			// Readiness is not predictable before observing a run. Use its
-			// configured allowance, then replace it with observed phase times.
+		case "wait-ready", "mesh-freeze", "topology":
+			// Use the phase's configured allowance until actual execution
+			// provides an observed duration for readiness or freeze commands.
 			duration, _ := time.ParseDuration(phase.Timeout)
 			seconds = duration.Seconds()
 		case "join", "publish", "leave":

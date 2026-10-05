@@ -278,6 +278,53 @@ test("all chart families render finite escaped SVGs with unique download names",
   });
   assert.doesNotMatch(log, /NaN|Infinity/);
 });
+test("CSV score gaps survive export, import and curve rendering",()=>{
+  const points=[{x:0,y:0},{x:5,y:-3,breakBefore:true},{x:10,y:2}];
+  const csv=F.chartCSV({title:'Scores',series:[{name:'workers',points}]});
+  const imported=F.parseImport(csv,'scores.csv');
+  assert.deepEqual(imported.curves[0].points,points);
+  for(const chart of F.curveCharts(imported.curves)) {
+    assert.equal(chart.series[0].points[1].breakBefore,true);
+    const path=I.chartSVG(chart).match(/<path d="([^"]+)"[^>]+stroke-width="2"/)[1];
+    assert.equal((path.match(/M/g)||[]).length,2);
+  }
+  for(const invalid of ['yes','1',''])
+    assert.throws(()=>F.parseImport(`x,y,break_before\n0,1,${invalid}\n`,'bad.csv'),/Invalid break_before/);
+  assert.deepEqual(F.parseImport('x,y\n0,1\n','legacy.csv').curves[0].points,[{x:0,y:1}]);
+});
+
+test("partial score CSV preserves missing values through raw and peak-normalized curves",()=>{
+  const points=[{x:0,y:0},{x:5,y:null,breakBefore:true},{x:10,y:-3,breakBefore:true},{x:15,y:2}];
+  const csv=F.chartCSV({title:'Partial score evidence',series:[{name:'workers',points}]});
+  const imported=F.parseImport(csv,'partial-scores.csv');
+  assert.deepEqual(imported.curves[0].points,points);
+  const [raw,peak]=F.curveCharts(imported.curves);
+  assert.deepEqual(raw.series[0].points,points);
+  assert.deepEqual(peak.series[0].points.map(p=>p.y),[0,null,-1.5,1]);
+  for(const chart of [raw,peak]) {
+    assert.deepEqual(chart.series[0].points.map(p=>Boolean(p.breakBefore)),[false,true,true,false]);
+    const svg=I.chartSVG(chart);
+    const path=svg.match(/<path d="([^"]+)"[^>]+stroke-width="2"/)[1];
+    assert.equal((path.match(/M/g)||[]).length,2);
+    assert.equal((svg.match(/<circle /g)||[]).length,3,'a missing component must not become a measured zero');
+    assert.doesNotMatch(svg,/NaN|Infinity/);
+  }
+  assert.deepEqual(F.parseImport(F.chartCSV(peak),'normalized.csv').curves[0].points,peak.series[0].points);
+  const missing=F.parseImport('x,y\n0,\n5, \n','missing.csv');
+  for(const chart of F.curveCharts(missing.curves)) {
+    assert.deepEqual(chart.series[0].points.map(p=>p.y),[null,null]);
+    assert.match(I.chartSVG(chart),/No eligible observations available/);
+    assert.doesNotMatch(I.chartSVG(chart),/NaN|Infinity/);
+  }
+});
+
+test("CSV gaps accept only explicit empty y cells and keep numeric validation strict",()=>{
+  for(const csv of ['x,y\n0,abc\n','x,y\n0,NaN\n','x,y\n0,Infinity\n','x,y\n0,null\n','x,y\n0\n','x,y\n,1\n','x,y\nNaN,1\n']) {
+    assert.throws(()=>F.parseImport(csv,'invalid.csv'),/Non-numeric CSV value/);
+  }
+  assert.deepEqual(F.parseImport('x,y\n0,0\n1,-3\n2, \n','values.csv').curves[0].points,[{x:0,y:0},{x:1,y:-3},{x:2,y:null}]);
+});
+
 test("CSV and ZIP downloads preserve exact graph values and valid signatures", async () => {
   const csv = F.chartCSV({
     title: "title",

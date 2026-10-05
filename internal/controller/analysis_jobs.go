@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const currentAnalysisVersion = 7
+const currentAnalysisVersion = 8
 const analysisJobLimit = 32
 const analysisJobFile = "analysis-job.json"
 const analysisResultFile = "analysis-result.json"
@@ -385,6 +385,7 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 		analysis.AnalysisID = job.status.ID
 		compact := analysis
 		compact.Observations = []analysisObservation{}
+		compact.ScoreTimeline = []analysisScoreSeries{}
 		compact.Timeline = []analysisBin{}
 		compact.BandwidthTimeline = []bandwidthBin{}
 		if analysis.Research != nil {

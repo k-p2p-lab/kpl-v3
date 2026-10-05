@@ -563,7 +563,94 @@ test("score component charts keep observer groups, negative penalties and missin
  assert.equal(p1.category,'gossipsub');assert.deepEqual(p1.series.map(s=>s.name),['boot','workers']);
  assert.equal(p1.series[1].points[0].y,4);assert.equal(p1.series[1].points[1].y,null);
  assert.equal(p3b.series[0].points[0].y,-3);
- assert.ok(!charts.some(c=>c.id==='peer-score-p7'));
+ const p7=charts.find(c=>c.id==='peer-score-p7');
+ assert.deepEqual(p7.series,[]);
+ assert.match(images.chartSVG(p7),/N\/A · No recorded score component samples/);
+});
+
+test("independent score timelines retain measured groups and gaps without topology observations",()=>{
+ const a=sample();a.result.startedAt=a.asOf;a.observations=[];
+ a.scoreTimeline=[{group:"workers",points:[
+  {at:"2026-09-09T00:00:05Z",components:{p1:{count:2,mean:0},p7:{count:2,mean:-3}}},
+  {at:"2026-09-09T00:00:15Z",components:{p1:{count:2,mean:12},p7:{count:2,mean:-5}},breakBefore:true},
+  {at:"2026-09-09T00:00:20Z",components:{p1:{count:0,mean:0},p7:{count:2,mean:-2}}},
+ ]}];
+ const charts=images.buildCharts(a),p1=charts.find(c=>c.id==='peer-score-p1');
+ assert.deepEqual(p1.series.map(s=>s.name),['workers']);
+ assert.deepEqual(p1.series[0].points,[{x:5,y:0},{x:15,y:12,breakBefore:true},{x:20,y:null}]);
+ assert.deepEqual(charts.find(c=>c.id==='peer-score-p7').series[0].points.map(p=>p.y),[-3,-5,-2]);
+ assert.equal(images.filterMetricGroups(images.groupCharts(charts),{category:'gossipsub',type:'scores',query:'P1'}).length,1);
+});
+
+test("score timelines are authoritative and use one origin across their groups",()=>{
+ const a=sample();a.observations=[{at:a.asOf,groups:[{group:"old",layers:[],scoreComponents:{p1:{count:1,mean:999}}}]}];
+ a.scoreTimeline=[];
+ assert.deepEqual(images.buildCharts(a).find(c=>c.id==='peer-score-p1').series,[]);
+ a.scoreTimeline=[
+  {group:"later",points:[{at:"2026-09-09T00:00:10Z",components:{p1:{count:1,mean:8}}}]},
+  {group:"earlier",points:[{at:"2026-09-09T00:00:05Z",components:{p1:{count:1,mean:4}}}]},
+ ];
+ let series=images.buildCharts(a).find(c=>c.id==='peer-score-p1').series;
+ assert.deepEqual(series.map(s=>[s.name,s.points[0]]),[['earlier',{x:0,y:4}],['later',{x:5,y:8}]]);
+ a.timeOrigin="2026-09-09T00:00:00Z";
+ series=images.buildCharts(a).find(c=>c.id==='peer-score-p1').series;
+ assert.deepEqual(series.map(s=>s.points[0].x),[5,10]);
+});
+
+test("score timelines preserve overall measurements when named groups only measure other components",()=>{
+ const a=sample();a.scoreTimeline=[
+  {group:"",points:[{at:a.asOf,components:{p1:{count:1,mean:12},p2:{count:1,mean:4}}}]},
+  {group:"workers",points:[{at:a.asOf,components:{p2:{count:1,mean:0}}}]},
+ ];
+ const charts=images.buildCharts(a);
+ assert.deepEqual(charts.find(c=>c.id==='peer-score-p1').series,[{name:'All peers',points:[{x:0,y:12}]}]);
+ assert.deepEqual(charts.find(c=>c.id==='peer-score-p2').series,[{name:'workers',points:[{x:0,y:0}]}]);
+});
+
+test("score timelines reject invalid timestamps and malformed gap flags",()=>{
+ for(const point of [
+  {at:"invalid",components:{}},
+  {at:sample().asOf,components:{},breakBefore:"yes"},
+  {at:sample().asOf,components:[]},
+ ]) assert.throws(()=>images.buildCharts({...sample(),scoreTimeline:[{group:'workers',points:[point]}]}),/invalid chart data/);
+});
+
+test("score components use overall measurements only when named groups lack that component",()=>{
+ const a=sample();a.observations=[
+  {at:a.asOf,groups:[
+   {group:"",layers:[],scoreComponents:{p1:{count:2,mean:12},p2:{count:2,mean:4}}},
+   {group:"workers",layers:[],scoreComponents:{p1:{count:0,mean:0},p2:{count:1,mean:0}}},
+  ]},
+  {at:"2026-09-09T00:00:05Z",groups:[{group:"",layers:[]},{group:"workers",layers:[]}]},
+ ];
+ let charts=images.buildCharts(a);
+ const p1=charts.find(c=>c.id==='peer-score-p1');
+ assert.deepEqual(p1.series.map(s=>s.name),['All peers']);
+ assert.deepEqual(p1.series[0].points.map(p=>p.y),[12,null]);
+ const p2=charts.find(c=>c.id==='peer-score-p2');
+ assert.deepEqual(p2.series.map(s=>s.name),['workers']);
+ assert.deepEqual(p2.series[0].points.map(p=>p.y),[0,null]);
+ a.observations[0].groups[1].scoreComponents.p1={count:1,mean:-3};
+ charts=images.buildCharts(a);
+ assert.deepEqual(charts.find(c=>c.id==='peer-score-p1').series.map(s=>s.name),['workers']);
+ assert.equal(charts.find(c=>c.id==='peer-score-p1').series[0].points[0].y,-3);
+});
+
+test("missing score components stay searchable without turning missing or empty samples into zero",()=>{
+ for (const components of [undefined,{p1:{count:0,mean:0}}]) {
+  const a=sample();a.observations=[{at:a.asOf,groups:[{group:"workers",layers:[],scoreMean:5,scoreComponents:components}]}];
+  const charts=images.buildCharts(a);
+  const componentsOnly=charts.filter(c=>c.id.startsWith('peer-score-'));
+  assert.equal(componentsOnly.length,10);
+  assert.ok(componentsOnly.every(c=>c.series.length===0));
+  const matches=images.filterMetricGroups(images.groupCharts(charts),{category:'gossipsub',type:'scores',query:'P1'});
+  assert.equal(matches.length,1);
+  assert.equal(matches[0].id,'peer-score-p1');
+ }
+ const a=sample();a.observations=[{at:a.asOf,groups:[{group:"workers",layers:[],scoreComponents:{p1:{count:1,mean:0}}}]}];
+ const measured=images.buildCharts(a).find(c=>c.id==='peer-score-p1');
+ assert.equal(measured.series[0].points[0].y,0);
+ assert.doesNotMatch(images.chartSVG(measured),/No recorded score component samples/);
 });
 
 for (const outcome of ['unchanged', 'changed', 'failed']) {

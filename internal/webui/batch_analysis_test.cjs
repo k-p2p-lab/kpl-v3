@@ -37,6 +37,36 @@ test('run-start alignment interpolates observed time segments without extrapolat
   assert.equal(values.find(p => p.x === 20).error, null);
 });
 
+test('batch score components keep unavailable metrics and exclude unmeasured runs from means', () => {
+  const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T01:00:00Z', 20);
+  let charts = batch.build(data([a, b]), images.buildCharts);
+  const missing = charts.find(c => c.id === 'peer-score-p1');
+  assert.deepEqual(missing.series, []);
+  assert.match(images.chartSVG(missing), /N\/A · No recorded score component samples/);
+  a.observations = [{at:a.result.startedAt,groups:[{group:'workers',layers:[],scoreComponents:{p1:{count:2,mean:4},p7:{count:2,mean:0}}}]}];
+  charts = batch.build(data([a, b]), images.buildCharts);
+  for (const [key, expected] of [['p1',4],['p7',0]]) {
+    const chart = charts.find(c => c.id === 'peer-score-' + key);
+    assert.equal(chart.series[0].points[0].y, expected);
+    assert.equal(chart.series[0].points[0].n, 1);
+    assert.equal(chart.series[0].points[0].error, null);
+    assert.doesNotMatch(images.chartSVG(chart), /No recorded score component samples/);
+  }
+});
+
+test('batch score timelines reach exported curves with run counts and explicit gaps', () => {
+  const a=run('a','2026-09-10T00:00:00Z',10),b=run('b','2026-09-10T01:00:00Z',20);
+  for(const [input,values] of [[a,[[0,2],[10,8,true]]],[b,[[0,0],[5,-4],[10,0]]]])
+    input.scoreTimeline=[{group:'workers',points:values.map(([second,mean,breakBefore])=>({at:at(input.result.startedAt,second),components:{p1:{count:2,mean}},...(breakBefore?{breakBefore:true}:{})}))}];
+  const chart=batch.build(data([a,b]),images.buildCharts).find(c=>c.id==='peer-score-p1');
+  assert.deepEqual(chart.series[0].points.map(p=>[p.x,p.y,p.n]),[[0,1,2],[5,-4,1],[10,4,2]]);
+  assert.deepEqual(chart.series[0].points.map(p=>Boolean(p.breakBefore)),[false,true,true]);
+  const path=images.chartSVG(chart).match(/<path d="([^"]+)"[^>]+stroke-width="2"/)[1];
+  assert.equal((path.match(/M/g)||[]).length,3);
+  const csv=files.csvRows(files.chartCSV(chart)),column=csv[0].indexOf('break_before');
+  assert.deepEqual(csv.slice(1).map(row=>row[column]),['false','true','true']);
+});
+
 test('batch bandwidth averages measured rates, retains gaps, and excludes absent collection', () => {
   const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T02:00:00Z', 20), c = run('c', '2026-09-10T05:00:00Z', 30);
   for (const [r, bytes, protocol] of [[a, 1000, 'gossip'], [b, 3000, 'kad']]) {
@@ -50,6 +80,94 @@ test('batch bandwidth averages measured rates, retains gaps, and excludes absent
   assert.equal(protocol.y, 4); assert.equal(protocol.n, 2, 'an absent protocol within measured traffic is zero, not missing collection');
   const gap = batch.average([[{ x: 0, y: 2 }, { x: 1, y: null }, { x: 3, y: 6 }], [{ x: 2, y: 10 }]], 'step').find(p => p.x === 2);
   assert.equal(gap.y, 10); assert.equal(gap.n, 1);
+});
+
+test('line and step batch means exclude unobserved score segments while retaining measured endpoints', () => {
+  const curves = [
+    [{ x: 0, y: 2 }, { x: 10, y: 8, breakBefore: true }],
+    [{ x: 0, y: 0 }, { x: 5, y: -4 }, { x: 10, y: 0 }],
+  ];
+  const original = JSON.stringify(curves);
+  for (const mode of ['line', 'step']) {
+    assert.equal(batch.valueAt(curves[0], 0, mode), 2);
+    assert.equal(batch.valueAt(curves[0], 5, mode), null);
+    assert.equal(batch.valueAt(curves[0], 10, mode), 8);
+    const means = batch.average(curves, mode);
+    assert.deepEqual(means.map(p => [p.x, p.y, p.n]), [[0, 1, 2], [5, -4, 1], [10, 4, 2]]);
+    assert.equal(means[0].breakBefore, undefined);
+    assert.equal(means[1].breakBefore, true);
+    assert.equal(means[2].breakBefore, true);
+    assert.equal(means[1].error, null);
+  }
+  assert.equal(JSON.stringify(curves), original, 'normalization must preserve source samples');
+});
+
+test('batch means preserve score breaks without interior samples and resume after the gap', () => {
+  for (const mode of ['line', 'step']) {
+    const means = batch.average([
+      [{ x: 0, y: 2 }, { x: 10, y: 8, breakBefore: true }, { x: 20, y: 0 }],
+      [{ x: 0, y: -2 }, { x: 10, y: 0 }, { x: 20, y: 0 }],
+    ], mode);
+    assert.deepEqual(means.map(p => [p.x, p.y, p.n]), [[0, 0, 2], [10, 4, 2], [20, 0, 2]]);
+    assert.deepEqual(means.map(p => Boolean(p.breakBefore)), [false, true, false]);
+  }
+});
+
+test('score breaks remain visible when the line preview omits their recorded endpoints', () => {
+  const curve = Array.from({ length: 1440 }, (_, x) => ({ x, y: x, ...(x === 3 ? { breakBefore: true } : {}) }));
+  for (const mode of ['line', 'step']) {
+    const means = batch.average([curve], mode);
+    assert.ok(!means.some(p => p.x === 2), 'the bounded preview skips the gap start');
+    assert.equal(means.find(p => p.x === 3).breakBefore, true);
+    assert.equal(means.find(p => p.x === 6).breakBefore, undefined);
+    const entirelySkipped = curve.map(p => ({ ...p, breakBefore: p.x === 2 }));
+    assert.equal(batch.average([entirelySkipped], mode).find(p => p.x === 3).breakBefore, true);
+  }
+});
+
+test('CDF and discrete batch summaries keep their previous support rules despite score-style break flags', () => {
+  const curve = [{ x: 0, y: 2 }, { x: 10, y: 8, breakBefore: true }];
+  assert.equal(batch.valueAt(curve, 5, 'cdf'), 2);
+  assert.equal(batch.valueAt(curve, 5, 'discrete'), 0);
+  for (const mode of ['cdf', 'discrete']) {
+    const means = batch.average([curve], mode);
+    assert.deepEqual(means.map(p => [p.x, p.y, p.n]), [[0, 2, 1], [10, 8, 1]]);
+    assert.ok(means.every(p => !p.breakBefore));
+  }
+});
+
+test('duplicate sample times retain the last measured value and every recorded gap boundary', () => {
+  for (const values of [[2, null], [null, 2], [2, null, 0], [-3, null], [2, 6, null]]) {
+    const curve = values.map(y => ({ x: 0, y }));
+    const expected = values.filter(y => y !== null).at(-1);
+    const mean = batch.average([curve, [{ x: 0, y: 4 }]], 'line')[0];
+    assert.equal(mean.n, 2);
+    assert.equal(mean.y, (expected + 4) / 2);
+  }
+  for (const duplicates of [
+    [{ x: 0, y: 2, breakBefore: true }, { x: 0, y: null }],
+    [{ x: 0, y: null, breakBefore: true }, { x: 0, y: 2 }],
+    [{ x: 0, y: 2 }, { x: 0, y: null, breakBefore: true }],
+  ]) {
+    const curve = [{ x: -1, y: 1 }, ...duplicates];
+    const before = JSON.stringify(curve);
+    for (const mode of ['line', 'step']) {
+      const means = batch.average([curve], mode);
+      assert.equal(means[1].y, 2);
+      assert.equal(means[1].n, 1);
+      assert.equal(means[1].breakBefore, true);
+    }
+    assert.equal(JSON.stringify(curve), before);
+  }
+  const unmeasured = [{ x: 0, y: null }, { x: 0, y: null, breakBefore: true }];
+  assert.deepEqual(batch.average([unmeasured], 'line'), []);
+  const measuredRunOnly = batch.average([unmeasured, [{ x: 0, y: 4 }]], 'line')[0];
+  assert.equal(measuredRunOnly.n, 1);
+  assert.equal(measuredRunOnly.y, 4);
+  const gap = batch.average([[{ x: -1, y: 2 }, ...unmeasured]], 'line')[1];
+  assert.equal(gap.y, null);
+  assert.equal(gap.n, 0);
+  assert.equal(gap.breakBefore, true);
 });
 
 test('compact batch inputs preserve message time curves and origin estimates', () => {

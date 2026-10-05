@@ -623,7 +623,7 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .results-status-options label:hover span { color: var(--text); background: rgba(154, 178, 201, .06); }
 .results-status-options input:checked + span { color: var(--cyan); border-color: rgba(57, 214, 208, .28); background: rgba(57, 214, 208, .1); }
 .results-status-options input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }
-.results-filter-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .35rem 1rem; padding: 0 1.2rem .6rem; color: var(--muted); font-size: .75rem; }
+.results-filter-meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .55rem 1rem; padding: .7rem 1.2rem .6rem; color: var(--muted); font-size: .75rem; }
 .results-guide { margin: 0 1.2rem 1rem; color: var(--muted); font-size: .8125rem; }
 .results-guide summary { width: fit-content; min-height: var(--control-height); padding: var(--control-padding-y) 0; cursor: pointer; }
 .results-guide p { max-width: 70rem; padding: .5rem .8rem; border-left: 2px solid var(--line); line-height: 1.7; }

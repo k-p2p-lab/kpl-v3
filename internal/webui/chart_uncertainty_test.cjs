@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { chartSVG } = require('./static/result-images.js');
-const { chartCSV } = require('./static/research-files.js');
+const { chartCSV, csvRows } = require('./static/research-files.js');
 
 const chart = (series, extra = {}) => ({ title: 'Group variability', xLabel: 'Time', yLabel: 'Mean', series, ...extra });
 const shades = svg => svg.match(/<svg class="chart-uncertainty"[^>]*>([\s\S]*?)<\/svg>/)?.[1] || '';
@@ -46,6 +46,31 @@ test('step shading holds the same intervals on upper and lower boundaries', () =
   assert.equal(x1, x4); assert.equal(x2, x3);
   assert.ok(top1 < bottom1 && top2 < bottom2);
   assert.match(data(svg), /d="M[\d.]+ [\d.]+H[\d.]+V[\d.]+"/);
+});
+
+test('explicit sampling gaps stop both mean lines and uncertainty bands', () => {
+  for (const mode of ['line', 'step']) {
+    const input = chart([{ name: 'Measured intervals', points: [
+      {x:0,y:0,error:1}, {x:1,y:-2,error:1},
+      {x:10,y:3,error:1,breakBefore:true}, {x:11,y:4,error:1},
+    ] }], { mode });
+    const before = JSON.stringify(input), svg = chartSVG(input);
+    const path = data(svg).match(/<path d="([^"]+)"[^>]+stroke-width="2"/)[1];
+    assert.equal((path.match(/M/g) || []).length,2);
+    assert.equal((shades(svg).match(/<path /g) || []).length,2);
+    assert.equal((data(svg).match(/<circle /g) || []).length,4);
+    assert.equal(JSON.stringify(input),before);
+  }
+});
+
+test('CSV exports disclose gap boundaries only when present and keep exact measured values', () => {
+  const continuous = chart([{name:'Continuous',points:[{x:0,y:0},{x:1,y:-2}]}]);
+  assert.equal(csvRows(chartCSV(continuous))[0].includes('break_before'),false);
+  const broken = chart([{name:'Interrupted',points:[{x:0,y:0},{x:10,y:-3,breakBefore:true}]}]);
+  const rows = csvRows(chartCSV({panels:[continuous,broken]})), column = rows[0].indexOf('break_before');
+  assert.equal(column,9);
+  assert.deepEqual(rows.slice(1).map(row=>row[column]),['false','false','false','true']);
+  assert.deepEqual(rows.slice(1).map(row=>row[3]),['0','-2','0','-3']);
 });
 
 test('isolated, bar and scatter ranges stay shaded; log and clipped panels remain finite', () => {

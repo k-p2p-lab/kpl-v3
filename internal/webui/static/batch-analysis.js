@@ -14,7 +14,12 @@
   }
   function points(input) {
     const map = new Map();
-    for (const p of input || []) if (finite(p.x)) map.set(p.x, { x: p.x, y: finite(p.y) ? p.y : null });
+    for (const p of input || []) if (finite(p.x)) {
+      const previous = map.get(p.x);
+      const y = finite(p.y) ? p.y : previous?.y ?? null;
+      const breakBefore = p.breakBefore === true || previous?.breakBefore === true;
+      map.set(p.x, { x: p.x, y, ...(breakBefore ? { breakBefore: true } : {}) });
+    }
     return [...map.values()].sort((a, b) => a.x - b.x);
   }
   function valueAt(curve, x, mode) {
@@ -25,19 +30,34 @@
     if (mode === "discrete") return left?.x === x ? left.y : 0;
     if (mode === "cdf") return left ? left.y : 0;
     if (!left || x > curve.at(-1).x) return null;
-    if (left.x === x || mode === "step") return left.y;
+    if (left.x === x) return left.y;
+    if ((mode === "line" || mode === "step") && right?.breakBefore) return null;
+    if (mode === "step") return left.y;
     if (!right || !finite(left.y) || !finite(right.y)) return null;
     return left.y + (right.y - left.y) * (x - left.x) / (right.x - left.x);
   }
   function average(curves, mode) {
     curves = curves.map(points).filter(c => c.some(p => finite(p.y)));
     const xs = [...new Set(curves.flatMap(c => c.map(p => p.x)))].sort((a, b) => a - b);
+    const gaps = [];
+    if (mode === "line" || mode === "step") {
+      for (const curve of curves) for (let i = 1; i < curve.length; i++) {
+        if (curve[i].breakBefore) gaps.push({ start: curve[i - 1].x, end: curve[i].x });
+      }
+      gaps.sort((a, b) => a.start - b.start);
+    }
+    let gapIndex = 0, gapEnd = -Infinity, previousX = null;
     // Discrete probabilities/counts retain their whole support. Sampling them
     // would silently remove probability mass. Line/step previews are bounded.
     const stride = mode === "discrete" ? 1 : Math.max(1, Math.ceil((xs.length - 1) / 719));
     return xs.filter((_, i) => i % stride === 0 || i === xs.length - 1).map(x => {
       const stat = R.stats(curves.map(c => valueAt(c, x, mode)));
-      return { x, y: stat.mean, error: stat.sd, n: stat.n, label: `n=${stat.n} runs` };
+      // Keep any input gap crossed by this output segment, including gaps whose
+      // endpoints were omitted by the bounded preview grid.
+      while (gapIndex < gaps.length && gaps[gapIndex].start < x) gapEnd = Math.max(gapEnd, gaps[gapIndex++].end);
+      const breakBefore = previousX !== null && gapEnd > previousX;
+      previousX = x;
+      return { x, y: stat.mean, error: stat.sd, n: stat.n, label: `n=${stat.n} runs`, ...(breakBefore ? { breakBefore: true } : {}) };
     });
   }
   function commonHistograms(runs) {

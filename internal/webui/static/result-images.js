@@ -246,7 +246,7 @@
     if (!valid.length)
       return (
         begin +
-        '<text x="320" y="160" text-anchor="middle" fill="#536575">No eligible observations available</text>' +
+        `<text x="320" y="160" text-anchor="middle" fill="#536575">${escape(chart.emptyMessage || "No eligible observations available")}</text>` +
         foot +
         "</svg>"
       );
@@ -352,6 +352,10 @@
           previous = null;
           flushBand();
           continue;
+        }
+        if (p.breakBefore) {
+          previous = null;
+          flushBand();
         }
         const description = `${p.label || s.name}: ${number(p.x)} ${xLabel}, ${number(p.y)} ${yLabel}`;
         const pointColor = finite(p.colorValue)
@@ -536,6 +540,27 @@
         series: scores,
         note: "Mean of observer-to-peer scores reported by fresh peers in each group. Missing samples are gaps; observers can score the same peer differently.",
       });
+    // Component evidence is retained independently of the thinned topology
+    // observations. An explicit empty timeline means no measured components.
+    const componentTimeline = Array.isArray(a.scoreTimeline)
+      ? new Map(a.scoreTimeline.map(group => [group.group, group.points])) : null;
+    const componentGroups = componentTimeline ? [...componentTimeline.keys()].filter(Boolean).sort() : groups;
+    if (!componentGroups.length) componentGroups.push("");
+    let componentOrigin = Date.parse(a.timeOrigin || a.result.startedAt);
+    if (componentTimeline && !finite(componentOrigin)) {
+      componentOrigin = Infinity;
+      for (const points of componentTimeline.values())
+        for (const point of points) componentOrigin = Math.min(componentOrigin, Date.parse(point.at));
+    }
+    const componentPoints = (group, key) => {
+      const read = components => components?.[key]?.count > 0 ? components[key].mean : null;
+      if (!componentTimeline) return observationPoints(a, group, value => read(value.scoreComponents));
+      return (componentTimeline.get(group) || []).map(point => ({
+        x: (Date.parse(point.at) - componentOrigin) / 1000,
+        y: read(point.components),
+        ...(point.breakBefore ? { breakBefore: true } : {}),
+      }));
+    };
     for (const [key, label] of [
       ["p1", "P1 · Time in mesh"], ["p2", "P2 · First message deliveries"],
       ["p3", "P3 · Mesh delivery deficit"], ["p3b", "P3b · Mesh failure penalty"],
@@ -543,10 +568,21 @@
       ["p6", "P6 · IP colocation"], ["p7", "P7 · Behaviour penalty"],
       ["topicCap", "Topic score cap adjustment"], ["total", "Total · Component measurements"],
     ]) {
-      const series = byGroup(g => g.scoreComponents?.[key]?.count > 0 ? g.scoreComponents[key].mean : null);
-      if (series.length) charts.push({
+      const series = componentGroups.map(group => ({
+        name: group || "All peers", points: componentPoints(group, key),
+      })).filter(value => value.points.some(pointOK));
+      // The overall row can hold measurements from observers without a named
+      // group. Preserve it when named groups have no samples for this component.
+      if (!series.length) {
+        const points = componentPoints("", key);
+        if (points.some(pointOK)) series.push({ name: "All peers", points });
+      }
+      // Keep component names discoverable in old or unmeasured results. An
+      // empty series renders N/A; it must never become a measured zero.
+      charts.push({
         id: `peer-score-${key}`, title: label, category: "gossipsub",
         xLabel: "Elapsed time (s)", yLabel: "Mean weighted contribution", series,
+        emptyMessage: "N/A · No recorded score component samples",
         note: "Weighted score contribution across observer-to-peer pairs, grouped by observer. Topic weights are included; P3b and the topic cap adjustment are separate. Retained disconnected-peer scores are included. Missing measurements remain gaps. All components plus the cap adjustment sum to the corresponding total.",
       });
     }
@@ -605,6 +641,10 @@
         data.bandwidthTimeline,
         (b) => timed(b) && finite(b.sentBytes) && finite(b.receivedBytes),
       ) ||
+      !optionalList(data.scoreTimeline, group =>
+        record(group) && typeof group.group === "string" && list(group.points, point =>
+          timed(point) && record(point.components) &&
+          (point.breakBefore === undefined || typeof point.breakBefore === "boolean"))) ||
       !list(
         data.observations,
         (o) =>

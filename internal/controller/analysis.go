@@ -50,6 +50,7 @@ type resultAnalysis struct {
 	Timeline            []analysisBin         `json:"timeline"`
 	BinSeconds          int64                 `json:"binSeconds"`
 	Observations        []analysisObservation `json:"observations"`
+	ScoreTimeline       []analysisScoreSeries `json:"scoreTimeline"`
 	ObservationCount    int                   `json:"observationCount"`
 }
 
@@ -162,6 +163,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 	width := int64(1)
 	stride := 1
 	var latestObservation analysisObservation
+	var scores scoreTimeline
 	for _, file := range snapshot.files {
 		switch file.name {
 		case "events.jsonl":
@@ -246,6 +248,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 					latestObservation = observation
 				}
 				accumulator.research.observeGroups(observation)
+				scores.observe(observation)
 				result.ObservationCount++
 				if (result.ObservationCount-1)%stride != 0 {
 					return nil
@@ -269,6 +272,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 		return result, err
 	}
 	result.BandwidthTimeline, result.BandwidthBinSeconds = bandwidth.result()
+	result.ScoreTimeline = scores.result()
 	// Preserve the latest sample even when older observations are downsampled.
 	if !latestObservation.At.IsZero() {
 		found := false

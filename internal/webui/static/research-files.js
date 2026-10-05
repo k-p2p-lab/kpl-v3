@@ -96,15 +96,20 @@
       const labelIndex = normalized.findIndex((v) =>
           ["series", "label", "folder", "case", "file"].includes(v),
         ),
+        breakIndex = normalized.indexOf("break_before"),
         grouped = new Map();
       for (const row of rows) {
         const label = labelIndex >= 0 ? row[labelIndex] : name;
         if (!grouped.has(label)) grouped.set(label, []);
         const x = num(row[xi]),
           y = num(row[yi]);
-        if (x === null || y === null)
+        const missingY = typeof row[yi] === "string" && row[yi].trim() === "";
+        if (x === null || (y === null && !missingY))
           throw new Error(`Non-numeric CSV value in ${name}.`);
-        grouped.get(label).push({ x, y });
+        const breakValue = breakIndex < 0 ? "false" : String(row[breakIndex] ?? "").trim().toLowerCase();
+        if (!["true", "false"].includes(breakValue))
+          throw new Error(`Invalid break_before value in ${name}; use true or false.`);
+        grouped.get(label).push({ x, y, ...(breakValue === "true" ? { breakBefore: true } : {}) });
       }
       for (const [label, points] of grouped)
         curves.push({
@@ -296,15 +301,15 @@
       xLabel: curves[0]?.xLabel || "x",
       yLabel: peak ? "Relative peak" : curves[0]?.yLabel || "y",
       series: curves.map((c) => {
-        const max = c.points.reduce((m, p) => Math.max(m, p.y), 0);
+        const max = c.points.reduce((m, p) => finite(p.y) ? Math.max(m, p.y) : m, 0);
         return {
           name: c.name,
           points: peak
             ? c.points.map((p) => ({
                 ...p,
-                y: max > 0 ? p.y / max : null,
+                y: finite(p.y) && max > 0 ? p.y / max : null,
                 ...(finite(p.error)
-                  ? { error: max > 0 ? Math.abs(p.error) / max : null }
+                  ? { error: finite(p.y) && max > 0 ? Math.abs(p.error) / max : null }
                   : {}),
               }))
             : c.points,
@@ -316,11 +321,14 @@
     }));
   }
   function chartCSV(chart) {
+    const panels = chart.panels || [chart];
+    const hasBreaks = panels.some(panel => (panel.series || []).some(series =>
+      (series.points || []).some(point => point.breakBefore)));
     const quote = (v) => '"' + String(v ?? "").replace(/"/g, '""') + '"',
       rows = [
-        ["panel", "series", "x", "y", "y_sd", "x_sd", "color_value", "label", "n"],
+        ["panel", "series", "x", "y", "y_sd", "x_sd", "color_value", "label", "n", ...(hasBreaks ? ["break_before"] : [])],
       ];
-    for (const panel of chart.panels || [chart])
+    for (const panel of panels)
       for (const s of panel.series || [])
         for (const p of s.points || [])
           rows.push([
@@ -333,6 +341,7 @@
             p.colorValue,
             p.label,
             p.n,
+            ...(hasBreaks ? [Boolean(p.breakBefore)] : []),
           ]);
     if (chart.tree) {
       rows.push([

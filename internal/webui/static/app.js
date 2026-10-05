@@ -9,7 +9,7 @@ const state = {
   resultsStorageRevision: null, resultsLoadedStorageRevision: null,
   scenarioQuery: "", scenarioActionScope: "editor",
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
-  selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false,
+  selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false, scenarioImporting: null,
   scenarioValidating: false, scenarioValidation: null, scenarioValidationVersion: 0,
   scenarioDeletingId: null, pendingScenarioDeleteId: null, scenarioLoadVersion: 0, scenarioSubmitting: false, scenarioEditorVersion: 0,
   agentNumbers: loadAgentNumbers(),
@@ -782,7 +782,7 @@ function validateSavedScenario(value, requireYAML = false) {
 
 function scenarioOperationBusy() {
   return state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
-    || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId);
+    || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId) || Boolean(state.scenarioImporting);
 }
 
 function renderScenarioValidation() {
@@ -882,6 +882,9 @@ function renderSavedScenarios() {
   $("#refreshScenarios").disabled = busy;
   $("#refreshScenarios").setAttribute("aria-label", state.scenariosLoading ? "Refreshing saved scenarios" : "Refresh saved scenarios");
   $("#newScenario").disabled = busy;
+  $("#chooseScenarioFile").disabled = busy;
+  $("#chooseScenarioFile").textContent = state.scenarioImporting ? "Reading…" : "Choose file";
+  $("#scenarioFile").disabled = busy;
   $("#saveScenario").disabled = busy;
   $("#saveScenario").textContent = state.scenarioSaving ? "Saving…"
     : state.selectedScenarioId ? "Save changes" : "Save scenario";
@@ -1003,6 +1006,59 @@ function startNewScenario() {
   resetScenarioValidation();
   renderSavedScenarios();
   $("#scenarioName").focus();
+}
+
+function cancelScenarioFileImport() {
+  if (!state.scenarioImporting) return;
+  state.scenarioImporting = null;
+  renderSavedScenarios();
+}
+
+async function importScenarioFile(file) {
+  if (!file || scenarioOperationBusy() || !$("#scenarioDialog").open) return;
+  const pending = { editorVersion: state.scenarioEditorVersion };
+  const current = () => state.scenarioImporting === pending
+    && state.scenarioEditorVersion === pending.editorVersion && $("#scenarioDialog").open;
+  state.scenarioImporting = pending;
+  state.scenarioActionScope = "editor";
+  state.scenarioActionError = "";
+  renderSavedScenarios();
+  let loaded = false;
+  try {
+    // Match the Controller's scenarioYAMLLimit before reading into memory.
+    if (file.size > (1 << 20)) throw new Error("Scenario files must be 1 MiB or smaller.");
+    const bytes = await file.arrayBuffer();
+    if (!current()) return;
+    let yaml;
+    try {
+      yaml = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("Use a UTF-8 YAML file.");
+    }
+    if (!yaml.trim()) throw new Error("The selected file is empty.");
+    const extension = file.name.lastIndexOf(".");
+    $("#scenarioName").value = extension > 0 ? file.name.slice(0, extension) : file.name;
+    $("#scenarioText").value = yaml;
+    state.selectedScenarioId = null;
+    state.pendingScenarioDeleteId = null;
+    $("#scenarioError").textContent = "";
+    resetScenarioValidation();
+    setScenarioView("editor");
+    loaded = true;
+    showToast("File loaded. Review and save the scenario.");
+  } catch (error) {
+    if (current()) state.scenarioActionError = `Could not read the scenario file: ${error.message}`;
+  } finally {
+    if (state.scenarioImporting === pending) {
+      state.scenarioImporting = null;
+      renderSavedScenarios();
+      if (loaded && $("#scenarioDialog").open) {
+        $(window.matchMedia("(max-width: 860px)").matches ? "#scenarioEditorHeading" : "#scenarioName").focus();
+      } else if (state.scenarioActionError && $("#scenarioDialog").open) {
+        $("#scenarioLibraryError").focus();
+      }
+    }
+  }
 }
 
 function upsertSavedScenario(item) {
@@ -2198,6 +2254,7 @@ async function submitScenarioRun() {
 }
 
 function openScenarioEditor() {
+  cancelScenarioFileImport();
   state.scenarioEditorVersion++;
   $("#scenarioDialog").showModal();
   renderSavedScenarios();
@@ -2205,6 +2262,7 @@ function openScenarioEditor() {
 }
 
 function closeScenarioEditor() {
+  cancelScenarioFileImport();
   $("#scenarioDialog").close("cancel");
 }
 
@@ -2249,6 +2307,15 @@ $("#clearResultSearch").addEventListener("click", clearResultSearch);
 $("#openScenario").addEventListener("click", openScenarioEditor);
 $("#refreshScenarios").addEventListener("click", refreshSavedScenarios);
 $("#newScenario").addEventListener("click", startNewScenario);
+$("#chooseScenarioFile").addEventListener("click", () => {
+  if (!scenarioOperationBusy()) $("#scenarioFile").click();
+});
+$("#scenarioFile").addEventListener("change", event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  void importScenarioFile(file);
+});
+$("#scenarioDialog").addEventListener("close", cancelScenarioFileImport);
 for (const button of document.querySelectorAll("button[data-scenario-view]")) button.addEventListener("click", () => setScenarioView(button.dataset.scenarioView));
 $("#scenarioEditor").addEventListener("focusin", () => setScenarioView("editor"));
 $("#scenarioLibrary").addEventListener("focusin", () => setScenarioView("library"));

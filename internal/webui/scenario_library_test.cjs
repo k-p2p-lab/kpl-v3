@@ -50,7 +50,7 @@ function fixture(fetch) {
   const elements = new Map();
   for (const id of [
     'scenarioSearch', 'clearScenarioSearch', 'scenarioLibraryCount', 'scenarioLibrarySummary', 'scenarioListError', 'scenarioEditorHeading',
-    'scenarioLibraryStatus', 'refreshScenarios', 'newScenario', 'saveScenario', 'saveScenarioCopy',
+    'scenarioLibraryStatus', 'refreshScenarios', 'newScenario', 'chooseScenarioFile', 'scenarioFile', 'saveScenario', 'saveScenarioCopy',
     'scenarioLibraryError', 'scenarioEditingStatus', 'scenarioLibraryList', 'scenarioName',
     'scenarioText', 'scenarioError', 'runRepetitions', 'runScenario', 'scenarioDialog', 'toast',
     'validateScenario', 'scenarioValidation', 'scenarioValidationTitle', 'scenarioValidationMessage',
@@ -79,6 +79,7 @@ function fixture(fetch) {
     scenarioActionError: '',
     selectedScenarioId: null,
     scenarioLoadingId: null,
+    scenarioImporting: null,
     scenarioSaving: false,
     scenarioDeletingId: null,
     pendingScenarioDeleteId: null,
@@ -118,6 +119,7 @@ function fixture(fetch) {
     fetch,
     Headers,
     AbortController,
+    TextDecoder,
     Intl,
     Date,
     setTimeout: schedule,
@@ -142,6 +144,24 @@ function hangingResponse(options) {
       reject(error);
     }, { once: true });
   });
+}
+
+function scenarioFile(name, content) {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  return {
+    name,
+    size: bytes.byteLength,
+    async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); },
+  };
+}
+
+function deferredScenarioFile(name, content) {
+  const file = scenarioFile(name, content);
+  const read = file.arrayBuffer.bind(file);
+  let resolve;
+  let reject;
+  file.arrayBuffer = () => new Promise((done, failed) => { resolve = done; reject = failed; });
+  return { file, finish: async () => resolve(await read()), fail: (error) => reject(error) };
 }
 
 test('scenario form has explicit non-submitting close controls', () => {
@@ -640,4 +660,186 @@ test('mobile Load opens the editor without focusing the text input and failed lo
   assert.equal(failed.elements.get('#scenarioListError').hidden, false);
   assert.match(failed.elements.get('#scenarioListError').textContent, /Could not load/);
   assert.equal(failed.elements.get('#scenarioLibraryError').textContent, '');
+});
+
+test('file import derives the saved name from only the final extension and preserves the YAML', async () => {
+  const yaml = '# Keep formatting and the run name\r\nversion: 3\r\nname: internal-run\r\n';
+  for (const [filename, name] of [
+    ['experiment.yaml', 'experiment'],
+    ['experiment.v3.YML', 'experiment.v3'],
+    ['실험.기준.yaml', '실험.기준'],
+    ['extensionless', 'extensionless'],
+    ['.hidden', '.hidden'],
+    ['.hidden.yaml', '.hidden'],
+  ]) {
+    let calls = 0;
+    const { api, state, elements } = fixture(async () => { calls++; return response([]); });
+    state.selectedScenarioId = 'existing';
+    state.pendingScenarioDeleteId = 'existing';
+    state.scenarioValidation = { kind: 'success', title: 'Old validation', message: 'old' };
+    await api.importScenarioFile(scenarioFile(filename, '\uFEFF' + yaml));
+    assert.equal(elements.get('#scenarioName').value, name, filename);
+    assert.equal(elements.get('#scenarioText').value, yaml);
+    assert.equal(state.selectedScenarioId, null);
+    assert.equal(state.pendingScenarioDeleteId, null);
+    assert.equal(state.scenarioValidation, null);
+    assert.equal(state.scenarioImporting, null);
+    assert.equal(elements.get('.scenario-workspace').dataset.scenarioView, 'editor');
+    assert.equal(calls, 0, 'selecting a file must not save, validate, or run it');
+  }
+});
+
+test('saving an imported file creates a new library record instead of changing the selected scenario', async () => {
+  const requests = [];
+  const { api, state, elements } = fixture(async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({ url, method: options.method, body });
+    return response({ id: 'imported-id', ...body });
+  });
+  state.savedScenarios = [{ id: 'existing', name: 'Existing' }];
+  state.selectedScenarioId = 'existing';
+  const yaml = 'version: 3\nname: separate-run-name\n';
+  await api.importScenarioFile(scenarioFile('new-scenario.yaml', yaml));
+  assert.equal(elements.get('#saveScenario').textContent, 'Save scenario');
+  await api.saveEditedScenario(false);
+  assert.deepEqual(requests, [{ url: '/api/v1/scenarios', method: 'POST', body: { name: 'new-scenario', yaml } }]);
+  assert.equal(state.selectedScenarioId, 'imported-id');
+  assert.ok(state.savedScenarios.some(item => item.id === 'existing' && item.name === 'Existing'));
+});
+
+test('invalid or unreadable files preserve the existing draft and selected saved scenario', async () => {
+  for (const file of [
+    scenarioFile('empty.yaml', ''),
+    scenarioFile('blank.yaml', ' \r\n\t'),
+    scenarioFile('invalid-utf8.yaml', Buffer.from([0xC3, 0x28])),
+    { name: 'unreadable.yaml', size: 20, async arrayBuffer() { throw new Error('Device read failed'); } },
+  ]) {
+    const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+    state.selectedScenarioId = 'existing';
+    elements.get('#scenarioName').value = 'Original saved name';
+    const yaml = elements.get('#scenarioText').value;
+    await api.importScenarioFile(file);
+    assert.equal(state.selectedScenarioId, 'existing', file.name);
+    assert.equal(elements.get('#scenarioName').value, 'Original saved name');
+    assert.equal(elements.get('#scenarioText').value, yaml);
+    assert.ok(state.scenarioActionError, file.name + ' must show an error');
+    assert.equal(elements.get('#scenarioLibraryError').focused, true, 'the read error must be brought into view');
+    assert.equal(state.scenarioImporting, null);
+    assert.equal(elements.get('#scenarioText').disabled, false);
+    assert.equal(elements.get('#chooseScenarioFile').disabled, false);
+  }
+});
+
+test('file import checks the one MiB byte limit before reading and accepts the exact boundary', async () => {
+  const limit = 1 << 20;
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  const original = elements.get('#scenarioText').value;
+  let read = false;
+  await api.importScenarioFile({ name: 'too-large.yaml', size: limit + 1, async arrayBuffer() { read = true; return new ArrayBuffer(0); } });
+  assert.equal(read, false);
+  assert.equal(elements.get('#scenarioText').value, original);
+  assert.ok(state.scenarioActionError);
+  const yaml = 'a' + '한'.repeat((limit - 1) / 3);
+  const exact = scenarioFile('exact.yaml', yaml);
+  assert.equal(exact.size, limit);
+  assert.ok(yaml.length < limit, 'the boundary must count UTF-8 bytes, not characters');
+  await api.importScenarioFile(exact);
+  assert.equal(elements.get('#scenarioText').value, yaml);
+  assert.equal(state.scenarioActionError, '');
+});
+
+test('selecting no file preserves the draft without an error or request', async () => {
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  state.selectedScenarioId = 'existing';
+  elements.get('#scenarioName').value = 'Draft';
+  const yaml = elements.get('#scenarioText').value;
+  await api.importScenarioFile(undefined);
+  assert.equal(state.selectedScenarioId, 'existing');
+  assert.equal(elements.get('#scenarioName').value, 'Draft');
+  assert.equal(elements.get('#scenarioText').value, yaml);
+  assert.equal(state.scenarioActionError, '');
+  assert.equal(state.scenarioImporting, null);
+});
+
+test('reading a file blocks conflicting scenario operations and leaves close available', async () => {
+  let calls = 0;
+  const { api, state, elements, closes } = fixture(async () => { calls++; return response([]); });
+  state.savedScenarios = [{ id: 'saved', name: 'Saved' }];
+  const deferred = deferredScenarioFile('reading.yaml', 'version: 3\nname: loaded\n');
+  const importing = api.importScenarioFile(deferred.file);
+  assert.ok(state.scenarioImporting);
+  for (const id of ['#scenarioName', '#scenarioText', '#saveScenario', '#runScenario', '#validateScenario', '#newScenario', '#refreshScenarios', '#chooseScenarioFile']) {
+    assert.equal(elements.get(id).disabled, true, id + ' must be disabled while reading');
+  }
+  assert.ok(closes.every(button => !button.disabled));
+  await Promise.all([api.saveEditedScenario(false), api.submitScenarioRun(), api.validateEditedScenario(), api.loadSavedScenario('saved'), api.refreshSavedScenarios()]);
+  api.startNewScenario();
+  assert.equal(calls, 0);
+  assert.equal(elements.get('#scenarioText').value, 'version: 1\nname: current\n');
+  await deferred.finish();
+  await importing;
+  assert.equal(state.scenarioImporting, null);
+  assert.equal(elements.get('#runScenario').disabled, false);
+});
+
+test('closing and reopening ignores a late file read and preserves the original draft', async () => {
+  const { api, state, elements } = fixture(async () => response([{ id: 'existing', name: 'Original' }]));
+  state.selectedScenarioId = 'existing';
+  elements.get('#scenarioName').value = 'Original';
+  const yaml = elements.get('#scenarioText').value;
+  const deferred = deferredScenarioFile('late.yaml', 'name: old file\n');
+  const importing = api.importScenarioFile(deferred.file);
+  api.closeScenarioEditor();
+  assert.equal(state.scenarioImporting, null);
+  assert.equal(elements.get('#scenarioDialog').open, false);
+  api.openScenarioEditor();
+  await new Promise(resolve => setImmediate(resolve));
+  await deferred.finish();
+  await importing;
+  assert.equal(elements.get('#scenarioDialog').open, true);
+  assert.equal(state.selectedScenarioId, 'existing');
+  assert.equal(elements.get('#scenarioName').value, 'Original');
+  assert.equal(elements.get('#scenarioText').value, yaml);
+  assert.equal(state.scenarioActionError, '');
+});
+
+test('a cancelled read cannot release a newer import or overwrite its error state', async () => {
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  const first = deferredScenarioFile('first.yaml', 'name: first\n');
+  const oldImport = api.importScenarioFile(first.file);
+  api.cancelScenarioFileImport();
+  const second = deferredScenarioFile('second.yaml', 'name: second\n');
+  const newImport = api.importScenarioFile(second.file);
+  const currentToken = state.scenarioImporting;
+  first.fail(new Error('A cancelled device read failed'));
+  await oldImport;
+  assert.equal(state.scenarioImporting, currentToken);
+  assert.equal(elements.get('#runScenario').disabled, true);
+  assert.equal(state.scenarioActionError, '');
+  await second.finish();
+  await newImport;
+  assert.equal(elements.get('#scenarioName').value, 'second');
+  assert.equal(elements.get('#scenarioText').value, 'name: second\n');
+  assert.equal(state.scenarioImporting, null);
+});
+
+test('imported YAML ignores a late validation response for the previous draft', async () => {
+  let complete;
+  const { api, state, elements } = fixture(() => new Promise(resolve => { complete = resolve; }));
+  const validating = api.validateEditedScenario();
+  await api.importScenarioFile(scenarioFile('replacement.yaml', 'name: replacement\n'));
+  complete(response({ valid: true, name: 'Previous draft', phases: 1 }));
+  await validating;
+  assert.equal(elements.get('#scenarioText').value, 'name: replacement\n');
+  assert.equal(state.scenarioValidation, null);
+  assert.equal(state.scenarioValidating, false);
+});
+
+test('mobile file import opens the editor without raising the text keyboard', async () => {
+  const { api, elements, viewport } = fixture(async () => { throw new Error('Unexpected request'); });
+  viewport.mobile = true;
+  await api.importScenarioFile(scenarioFile('mobile.yaml', 'name: mobile\n'));
+  assert.equal(elements.get('.scenario-workspace').dataset.scenarioView, 'editor');
+  assert.equal(elements.get('#scenarioEditorHeading').focused, true);
+  assert.equal(elements.get('#scenarioText').focused, undefined);
 });

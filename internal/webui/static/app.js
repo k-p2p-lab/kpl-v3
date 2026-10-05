@@ -727,19 +727,20 @@ function resultLocked(run) {
 function resultImagesButton(run) {
   const job = run.analysis;
   const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "checking-sources" ? "Images · Checking" : job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.stale ? "Images · Check" : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
-  return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" aria-label="${escapeHTML(`View graph images: ${run.name || run.id}`)}" ${run.state === "unreadable" || run.state === "queued" ? "disabled" : ""}>${label}</button>`;
+  const description = `View graph images: ${run.name || run.id}${label === "Images" ? "" : ` · ${label.slice("Images · ".length)}`}`;
+  return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" title="${escapeHTML(description)}" aria-label="${escapeHTML(description)}" ${run.state === "unreadable" || run.state === "queued" ? "disabled" : ""}><span class="action-label-full">${label}</span><span class="action-label-compact" aria-hidden="true">Images</span></button>`;
 }
 
 function resultDownloadLink(run) {
   if (run.state === "unreadable") {
-    return '<span class="download-unavailable" title="Saved metadata could not be read.">Unavailable</span>';
+    return '<span class="download-unavailable" title="Saved metadata could not be read." aria-label="Download unavailable: saved metadata could not be read."><span class="action-label-full">Unavailable</span><span class="action-label-compact" aria-hidden="true">N/A</span></span>';
   }
   const active = isPendingRun(run);
   const label = active ? "Download snapshot" : "Download results";
   const path = `/api/v1/experiments/${encodeURIComponent(run.id)}/download`;
   const title = active ? "Download a ZIP snapshot of the scenario, metadata, notes, and events recorded so far."
     : "Download the saved scenario, metadata, notes, and events as a ZIP file.";
-  return `<a class="download-link" data-result-download="${escapeHTML(run.id)}" href="${escapeHTML(path)}" download="${escapeHTML(`${run.id}.zip`)}" target="_blank" rel="noopener" title="${title}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}">${label}</a>`;
+  return `<a class="download-link" data-result-download="${escapeHTML(run.id)}" href="${escapeHTML(path)}" download="${escapeHTML(`${run.id}.zip`)}" target="_blank" rel="noopener" title="${title}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}"><span class="action-label-full">${label}</span><span class="action-label-compact" aria-hidden="true">ZIP</span></a>`;
 }
 
 function resultSourceSize(run) {
@@ -1297,11 +1298,16 @@ function savedResultBatch(batch) {
       <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
-        ${appendBatchButton(batch, locked)}
-        ${retryBatchButton(batch, locked)}
-        ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
         <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
-        <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
+        <span class="action-menu" data-action-menu="batch:${escapeHTML(batch.id)}">
+          <button type="button" class="secondary-button" data-action-menu-toggle="batch:${escapeHTML(batch.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(batch.name)}</span></button>
+          <span class="action-menu-items">
+            ${appendBatchButton(batch, locked)}
+            ${retryBatchButton(batch, locked)}
+            ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
+            <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
+          </span>
+        </span>
       </span>
     </summary>
     ${savedResultTable(batch.runs, `batch:${batch.id}`, `Runs in ${batch.name} · ${batch.id}`)}
@@ -1333,16 +1339,18 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
-  return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch } : null;
+  const attribute = ["data-action-menu-toggle", "data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch,
+    menu: control.closest(".action-menu[data-action-menu]")?.dataset.actionMenu } : null;
 }
 
 function restoreSavedResultFocus(focus) {
   if (!focus) return;
   const list = $("#savedResultsRows");
   const target = [...list.querySelectorAll(`[${focus.attribute}]`)].find(element => element.getAttribute(focus.attribute) === focus.id);
+  const menu = [...list.querySelectorAll("[data-action-menu-toggle]")].find(element => element.dataset.actionMenuToggle === focus.menu);
   const summary = [...list.querySelectorAll("[data-result-batch-toggle]")].find(element => element.dataset.resultBatchToggle === focus.batch);
-  const candidates = [target, summary, $("#refreshResults"), $("#tab-results")];
+  const candidates = [target, menu, summary, $("#refreshResults"), $("#tab-results")];
   candidates.find(element => element && !element.disabled && element.getClientRects().length)?.focus({ preventScroll: true });
 }
 
@@ -1360,12 +1368,17 @@ function updateSavedResultsList(markup) {
   // Restore its native disclosure, keyboard focus and horizontal table position
   // synchronously, before the browser paints the updated list.
   const open = new Set([...list.querySelectorAll("details[data-result-batch][open]")].map(details => details.dataset.resultBatch));
+  const openMenus = new Set([...list.querySelectorAll(".action-menu.is-open, details.action-menu[open]")].map(menu => menu.dataset.actionMenu));
   const scroll = new Map([...list.querySelectorAll("[data-result-table]")].map(table => [table.dataset.resultTable, table.scrollLeft]));
   const focused = list.contains(document.activeElement) ? document.activeElement : null;
   const focus = savedResultFocus(focused);
   setHTML(list, markup);
   for (const details of list.querySelectorAll("details[data-result-batch]")) details.open = open.has(details.dataset.resultBatch);
+  for (const menu of list.querySelectorAll(".action-menu[data-action-menu]")) {
+    menu.classList.toggle("is-open", openMenus.has(menu.dataset.actionMenu));
+  }
   for (const table of list.querySelectorAll("[data-result-table]")) table.scrollLeft = scroll.get(table.dataset.resultTable) || 0;
+  globalThis.KPLActionMenus?.refresh();
   restoreSavedResultFocus(focus);
 }
 
@@ -1480,7 +1493,7 @@ function savedResultRow(run) {
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
-    <td data-label="Actions"><div class="result-actions">${retry}${resultImagesButton(run)}${resultDownloadLink(run)}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></div></td>
+    <td data-label="Actions"><div class="result-actions">${resultImagesButton(run)}${resultDownloadLink(run)}<span class="action-menu" data-action-menu="result:${escapeHTML(run.id)}"><button type="button" class="secondary-button" data-action-menu-toggle="result:${escapeHTML(run.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(run.name || run.id)}</span></button><span class="action-menu-items">${retry}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></span></span></div></td>
   </tr>`;
 }
 
@@ -1601,7 +1614,7 @@ async function refreshAgents(discover = false) {
     state.agentsRefreshing = false;
     buttons.forEach(item => { item.disabled = false; });
     button.setAttribute("aria-busy", "false");
-    setText(button, discover ? "Discover Agents" : "Refresh Agents");
+    setText(button, discover ? "Discover Agents" : "Refresh");
   }
 }
 

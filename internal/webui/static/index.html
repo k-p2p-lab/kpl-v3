@@ -7,6 +7,7 @@
   <title>K-P2PLab Dashboard</title>
   <link rel="icon" type="image/jpeg" href="/kpl-logo.jpg">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/resources-layout.css">
 </head>
 <body class="dashboard-page">
   <a class="skip-link" href="#dashboardMain">Skip to dashboard</a>
@@ -19,15 +20,20 @@
       </div>
     </div>
     <nav class="service-nav" aria-label="Primary navigation">
-      <a href="/" aria-current="page">Dashboard</a>
-      <a id="prometheusLink" href="http://localhost:9090/" target="_blank" rel="noopener noreferrer">Prometheus<span class="visually-hidden"> (opens in a new tab)</span></a>
-      <a id="grafanaLink" href="http://localhost:3000/d/kpl-experiments" target="_blank" rel="noopener noreferrer">Grafana<span class="visually-hidden"> (opens in a new tab)</span></a>
+      <details class="action-menu" data-action-menu="workspace-tools">
+        <summary class="secondary-button">Tools</summary>
+        <div class="action-menu-items">
+          <a href="/" aria-current="page">Dashboard</a>
+          <a id="prometheusLink" href="http://localhost:9090/" target="_blank" rel="noopener noreferrer">Prometheus<span class="visually-hidden"> (opens in a new tab)</span></a>
+          <a id="grafanaLink" href="http://localhost:3000/d/kpl-experiments" target="_blank" rel="noopener noreferrer">Grafana<span class="visually-hidden"> (opens in a new tab)</span></a>
+          <button class="secondary-button" id="logout" type="button">Log out</button>
+        </div>
+      </details>
     </nav>
     <div class="top-actions">
       <span class="connection-state" id="connectionState"><i></i> Connecting</span>
       <time id="updatedAt" title="Last dashboard update">—</time>
       <button class="primary-button" id="openScenario" type="button">Run experiment</button>
-      <button class="secondary-button" id="logout" type="button">Log out</button>
     </div>
   </header>
 
@@ -236,7 +242,7 @@
               <legend>Layers</legend>
               <label title="Reported libp2p transport connections. Older Peers may report only this layer."><input type="checkbox" id="showtransport"><i class="link-key transport" aria-hidden="true"></i>Transport</label>
               <label title="Reported Kademlia routing table membership; this does not require an active transport connection."><input type="checkbox" id="showkademlia"><i class="link-key kademlia" aria-hidden="true"></i>Kademlia</label>
-              <label title="Reported GossipSub GRAFT mesh membership by topic."><input type="checkbox" id="showgossipsub"><i class="link-key gossipsub" aria-hidden="true"></i>GossipSub mesh</label>
+              <label title="Reported GossipSub GRAFT mesh membership by topic."><input type="checkbox" id="showgossipsub"><i class="link-key gossipsub" aria-hidden="true"></i>GossipSub<span class="visually-hidden"> mesh</span></label>
             </fieldset>
             <label class="topology-topic" for="topologyTopic">GossipSub topic<select id="topologyTopic"><option value="">All topics</option></select></label>
             <div class="topology-camera" role="group" aria-label="Topology view controls">
@@ -283,14 +289,47 @@
           <div>
             <p class="eyebrow">FLEET</p>
             <h2>Agent status</h2>
-            <p class="panel-note">Refresh checks registered Agents. Discover Agents also finds missing Swarm Agents and retries their registration.</p>
+            <p class="panel-note">Live availability, capacity, and resource usage.</p>
           </div>
-          <div class="agent-resource-actions"><button class="secondary-button" type="button" data-resource-export="current">Current CSV</button><button class="secondary-button" id="refreshAgents" type="button">Refresh Agents</button><button class="secondary-button" id="discoverAgents" type="button">Discover Agents</button></div>
+          <div class="agent-resource-actions">
+            <button class="secondary-button" id="refreshAgents" type="button" title="Refresh registered Agents">Refresh</button>
+            <details class="action-menu">
+              <summary class="secondary-button" aria-label="More Agent actions">More</summary>
+              <div class="action-menu-items">
+                <button class="secondary-button" id="discoverAgents" type="button" title="Find missing Swarm Agents and retry their registration">Discover Agents</button>
+                <button class="secondary-button" type="button" data-resource-export="current">Current CSV</button>
+              </div>
+            </details>
+          </div>
         </header>
         <div class="panel-body" id="panel-agents-body">
+          <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
+          <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
+          <section class="agent-resource-overview" aria-labelledby="agentResourceHeading">
+            <div class="agent-resource-heading"><h3 id="agentResourceHeading">Agents &amp; Peers</h3><span class="panel-note">Refreshes about every 10 seconds</span></div>
+            <div class="agent-resource-summaries">
+              <p class="agent-resource-summary" id="agentResourceSummary" role="status">Agent + Peers · Awaiting samples</p>
+              <p class="agent-resource-summary" id="agentOnlyResourceSummary" role="status">Agent only · Awaiting samples</p>
+              <p class="agent-resource-summary" id="peersOnlyResourceSummary" role="status">Peers only · Awaiting samples</p>
+            </div>
+            <details class="resource-notes">
+              <summary>How resource usage is measured</summary>
+              <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Total excludes disabled Agents; Peer counts and capacity include online Agents only.</p>
+            </details>
+            <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
+            <div class="table-wrap fleet-resource-table" tabindex="0" role="region" aria-label="Agent status table">
+              <table>
+                <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>KPL CPU</th><th>KPL Memory</th><th>Last seen</th><th>Metrics</th><th class="agent-settings-cell" scope="col">Settings</th></tr></thead>
+                <tbody id="agentRows"><tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr></tbody>
+              </table>
+            </div>
+          </section>
           <section class="service-resource-section" aria-labelledby="serviceResourceHeading">
-            <div><p class="eyebrow">CONTROL PLANE</p><h3 id="serviceResourceHeading">Controller &amp; Services</h3></div>
-            <p class="panel-note">Controller, Prometheus, Grafana, and resource collectors. CPU: 100% = all logical CPUs on each service host; Total counts each measured host's capacity once. Memory: working set. Totals include available samples only.</p>
+            <div><h3 id="serviceResourceHeading">Controller &amp; Services</h3><p class="panel-note">Controller, Prometheus, Grafana, and resource collectors.</p></div>
+            <details class="resource-notes">
+              <summary>How service usage is measured</summary>
+              <p class="panel-note">CPU: 100% = all logical CPUs on each service host; Total counts each measured host's capacity once. Memory: working set. Totals include available samples only.</p>
+            </details>
             <div class="table-wrap service-resource-table" id="serviceResourceTable" role="region" aria-label="Controller and service resources" tabindex="0">
               <table>
                 <thead><tr><th scope="col">Service</th><th scope="col">State</th><th scope="col">Host</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Coverage</th></tr></thead>
@@ -300,49 +339,50 @@
             <p class="panel-note" id="serviceResourceScrollHint" hidden>Swipe or scroll within the table to see all service details.</p>
             <p class="panel-note" id="serviceResourceStatus" role="status">Service samples refresh about every 10 seconds.</p>
           </section>
-          <div class="agent-resource-overview">
-          <div class="agent-resource-heading"><p class="eyebrow">AGENT FLEET</p><h3 id="agentResourceHeading">Agents &amp; Peers</h3></div>
-          <div class="agent-resource-summaries">
-            <p class="agent-resource-summary" id="agentResourceSummary" role="status">Agent + Peers · Awaiting samples</p>
-            <p class="agent-resource-summary" id="agentOnlyResourceSummary" role="status">Agent only · Awaiting samples</p>
-            <p class="agent-resource-summary" id="peersOnlyResourceSummary" role="status">Peers only · Awaiting samples</p>
-          </div>
-          <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Total excludes disabled Agents; Peer counts and capacity include online Agents only. Samples refresh about every 10 seconds.</p>
-          <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
-            <div class="resource-measurement-heading">
-              <div class="resource-measurement-title"><h3 id="resourceMeasurementHeading">Interval measurement</h3><button class="secondary-button" type="button" id="refreshResourceMeasurements" aria-label="Refresh measurement status" title="Refresh measurement status">↻</button></div>
-              <div class="agent-resource-actions">
-                <button class="primary-button" type="button" id="startResourceMeasurement" disabled>Start measurement</button>
-                <button class="secondary-button" type="button" id="stopResourceMeasurement" disabled>Stop measurement</button>
-              </div>
+          <p class="agent-refresh-status" id="resourceMeasurementError" role="status" aria-live="polite" hidden></p>
+          <details class="resource-tools">
+            <summary><span>Measurement &amp; exports</span><span class="resource-measurement-status" id="resourceMeasurementStatus">Loading measurement status…</span></summary>
+            <div class="resource-tools-body">
+              <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
+                <div class="resource-measurement-title"><h3 id="resourceMeasurementHeading">Interval measurement</h3><button class="secondary-button" type="button" id="refreshResourceMeasurements" aria-label="Refresh measurement status" title="Refresh measurement status">↻</button></div>
+                <div class="agent-resource-actions">
+                  <button class="primary-button" type="button" id="startResourceMeasurement" disabled>Start measurement</button>
+                  <button class="secondary-button" type="button" id="stopResourceMeasurement" disabled>Stop</button>
+                </div>
+                <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours.</p>
+              </section>
+              <section class="resource-intervals" aria-labelledby="completedIntervalsHeading">
+                <label id="completedIntervalsHeading" for="resourceMeasurementSelect">Completed intervals</label>
+                <div class="resource-measurement-downloads">
+                  <select id="resourceMeasurementSelect" disabled><option value="">No completed measurements</option></select>
+                  <details class="action-menu">
+                    <summary class="secondary-button" aria-label="Completed interval actions">Actions</summary>
+                    <div class="action-menu-items">
+                      <button class="secondary-button" type="button" data-resource-export="measurement-samples" disabled>Interval CSV</button>
+                      <button class="secondary-button" type="button" data-resource-export="measurement-summary" disabled>Interval summary CSV</button>
+                      <button class="danger-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
+                    </div>
+                  </details>
+                </div>
+                <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
+              </section>
+              <section class="resource-history" aria-labelledby="resourceHistoryHeading">
+                <h3 id="resourceHistoryHeading">Resource history</h3>
+                <div class="agent-resource-history">
+                  <label for="agentResourceRange">Period</label><select id="agentResourceRange"><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select>
+                  <details class="action-menu">
+                    <summary class="secondary-button" aria-label="Export resource history">Export</summary>
+                    <div class="action-menu-items">
+                      <button class="secondary-button" type="button" data-resource-export="samples">History CSV</button>
+                      <button class="secondary-button" type="button" data-resource-export="summary">Summary CSV</button>
+                    </div>
+                  </details>
+                </div>
+                <p class="panel-note">Prometheus samples. Summary includes each Agent and service's mean, minimum, peak, and container coverage. Partial samples are included; missing usage is not estimated.</p>
+              </section>
+              <p class="panel-note resource-export-note">Interval downloads include Controller and service resources alongside Total, Agent, and Peers scopes. Availability depends on Prometheus retention; very short intervals may have no samples.</p>
             </div>
-            <p class="resource-measurement-status" id="resourceMeasurementStatus">Loading measurement status…</p>
-            <p class="agent-refresh-status" id="resourceMeasurementError" role="status" aria-live="polite" hidden></p>
-            <div class="agent-resource-actions resource-measurement-downloads">
-              <label for="resourceMeasurementSelect">Completed intervals</label>
-              <select id="resourceMeasurementSelect" disabled><option value="">No completed measurements</option></select>
-              <button class="secondary-button" type="button" data-resource-export="measurement-samples" disabled>Interval CSV</button>
-              <button class="secondary-button" type="button" data-resource-export="measurement-summary" disabled>Interval summary CSV</button>
-              <button class="danger-button" type="button" id="deleteResourceMeasurement" disabled title="Delete the selected interval record. Prometheus history is retained.">Delete interval</button>
-            </div>
-            <p class="panel-note" id="resourceMeasurementDetails">Stop a measurement to download its samples and summary.</p>
-            <p class="panel-note">Shared across tabs; continues after closing this page. Stops automatically after 24 hours. Downloads include Controller and service resources alongside Total, Agent, and Peers scopes from Prometheus samples within the saved interval and depend on its retention. Very short intervals may have no samples.</p>
-          </section>
-          <div class="agent-resource-actions agent-resource-history">
-            <label for="agentResourceRange">History period</label><select id="agentResourceRange"><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="1h" selected>Last hour</option><option value="6h">Last 6 hours</option><option value="24h">Last 24 hours</option></select>
-            <button class="secondary-button" type="button" data-resource-export="samples">History CSV</button><button class="secondary-button" type="button" data-resource-export="summary">Summary CSV</button>
-          </div>
-          <p class="panel-note">History uses Prometheus. Summary includes each Agent and service's sample mean, minimum, peak and container coverage. Partial samples are included; missing usage is not estimated.</p>
-          <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
-          </div>
-          <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
-          <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
-          <div class="table-wrap" tabindex="0" role="region" aria-label="Agent status table">
-            <table>
-              <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>KPL CPU</th><th>KPL Memory</th><th>Last seen</th><th>Metrics</th><th class="agent-settings-cell" scope="col">Settings</th></tr></thead>
-              <tbody id="agentRows"><tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr></tbody>
-            </table>
-          </div>
+          </details>
         </div>
       </article>
 
@@ -414,13 +454,21 @@
         <div><p class="eyebrow">SAVED RESULT</p><h2 id="resultImagesHeading">Result Metrics</h2><p id="resultImagesName"></p><p id="resultImagesDate"></p></div>
         <button class="icon-button" id="closeResultImages" type="button" aria-label="Close result metrics" autofocus><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
       </header>
-      <p class="dialog-help">Analysis continues on the server when you close this window or browser. Return to Saved results to check progress and download completed images.</p>
+      <p class="dialog-help">Analysis continues in the background. You can close this window.</p>
       <div class="result-images-feedback"><p id="resultImagesStatus" role="status" aria-live="polite"></p><button class="secondary-button" id="retryResultImages" type="button" hidden>Retry</button></div>
       <progress id="resultImagesProgress" max="100" aria-label="Log reading progress" hidden></progress>
-      <div class="result-images-actions"><a class="secondary-button" id="downloadResultAnalysis" hidden>Download analysis JSON</a><button class="secondary-button" id="refreshResultImages" type="button" hidden title="Recompute analysis even when the source hash is unchanged">Reanalyze</button></div>
-      <a class="secondary-button" id="downloadAllResultImages" hidden>Download all PNG + CSV (ZIP)</a>
+      <div class="result-images-actions">
+        <a class="primary-button" id="downloadAllResultImages" title="Download every PNG image and CSV file in one ZIP" hidden>Download ZIP</a>
+        <details class="action-menu" data-action-menu="result-analysis">
+          <summary class="secondary-button">Analysis tools</summary>
+          <div class="action-menu-items">
+            <a class="secondary-button" id="downloadResultAnalysis" hidden>Download analysis JSON</a>
+            <button class="secondary-button" id="refreshResultImages" type="button" hidden title="Recompute analysis even when the source hash is unchanged">Reanalyze</button>
+          </div>
+        </details>
+      </div>
       <details id="researchTools" hidden>
-        <summary>Message images, repeated runs and v2 comparisons</summary>
+        <summary>Advanced analysis <span class="disclosure-hint">Messages, repeated runs and v2 comparisons</span></summary>
         <div class="research-controls"><label>Message <select id="researchMessage"></select></label><button class="secondary-button" type="button" id="drawResearchMessage">Message images</button><button class="secondary-button" type="button" id="drawResearchOverview">Result overview images</button></div>
         <p class="dialog-help">Load results, select runs, and edit series/case labels. Identical series and case labels form repeats. Use separate series for baseline and treatment. i/f/p and D parameters are optional and required only by their models. A matched lazy-off baseline is required for lazy contribution estimates.</p>
         <button class="secondary-button" type="button" id="loadResearchRuns">Load saved results</button>
@@ -431,11 +479,11 @@
           <label>Filter p (%) <input id="researchP" type="number" min="0" max="100" placeholder="All"></label><label>FRT, DRC, reach weights <input id="researchWeights" value="0.25,0.25,0.5"></label>
           <label>Degree predictions (Dlow,D,Dhigh per line) <textarea id="researchPredictions" rows="2" placeholder="4,8,12"></textarea></label>
         </div>
-        <button class="secondary-button" type="button" id="drawResearchCompare">Analyze selected results and generate comparison images</button>
+        <button class="secondary-button" type="button" id="drawResearchCompare">Compare selected runs</button>
         <p class="dialog-help">Selected analyses continue on the server after closing. PNGs and CSVs are prepared from saved analyses when this view is open. Undefined values, missing evidence and rank-deficient fits appear as N/A.</p>
         <div class="research-controls"><label>Import v2 JSON / JSONL / CSV or v3 analysis JSON (32 MiB/file) <input id="researchFiles" type="file" accept=".json,.jsonl,.csv" multiple></label><button class="secondary-button" type="button" id="drawImportedCurves">Imported curve overlays</button><button class="secondary-button" type="button" id="clearResearchImports">Clear imports</button></div>
         <p class="dialog-help">For v2 x_case/y/yerr JSON, select its Metric before importing. Imported values retain their original analysis definitions. Use files with the same units for curve overlays.</p>
-        <button class="secondary-button" type="button" id="drawV2Reference">v2 fixed historical / ER reference images</button>
+        <button class="secondary-button" type="button" id="drawV2Reference">v2 historical / ER references</button>
       </details>
       <details id="batchAnalysisSummary" class="batch-analysis-summary" hidden></details>
       <fieldset class="result-image-protocols" id="resultImageProtocols" hidden>
@@ -444,7 +492,7 @@
         <label><input type="radio" name="resultImageProtocol" value="gossipsub"> <span>GossipSub</span></label>
         <label><input type="radio" name="resultImageProtocol" value="kademlia"> <span>Kademlia</span></label>
         <label><input type="radio" name="resultImageProtocol" value="transport"> <span>Transport</span></label>
-        <p>Common shows node counts, peer status and stream traffic. The ZIP includes every category.</p>
+        <p>ZIP downloads include all four categories.</p>
       </fieldset>
       <div class="result-metric-tools" id="resultMetricTools" hidden>
         <label class="result-metric-search">Search Metrics<input id="resultMetricSearch" type="search" placeholder="Name or keyword" maxlength="256" autocomplete="off" aria-controls="resultImagesGrid"></label>
@@ -619,5 +667,6 @@
   <script src="/agent-resources.js" defer></script>
   <script src="/service-resources.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/action-menus.js" defer></script>
 </body>
 </html>

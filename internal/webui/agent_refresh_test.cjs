@@ -36,7 +36,7 @@ test('Refresh Agents checks the server once, updates status and preserves other 
   assert.equal(api.rendered,state.snapshot);
   assert.equal(element('#agentRefreshStatus').textContent,'Refreshed 1 of 1 Agents.');
   assert.equal(element('#refreshAgents').disabled,false);
-  assert.equal(element('#refreshAgents').textContent,'Refresh Agents');
+  assert.equal(element('#refreshAgents').textContent,'Refresh');
   assert.equal(timers.size,0);
 });
 

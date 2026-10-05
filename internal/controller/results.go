@@ -361,16 +361,23 @@ func (s *Server) handleResultAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteSavedResult(id string) error {
+func (s *Server) deleteSavedResult(id string) (resultErr error) {
 	if !validResultID(id) {
 		return errResultNotFound
 	}
+	var batchID string
+	defer func() {
+		if resultErr == nil {
+			s.removeLibraryMembersAndEmptyBatch(batchID, "run:"+id)
+		}
+	}()
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	batchID = s.libraryResultBatchID(id)
 	return s.deleteSavedResultLocked(id)
 }
 

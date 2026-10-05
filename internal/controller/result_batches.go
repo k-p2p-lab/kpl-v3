@@ -37,10 +37,20 @@ func (s *Server) handleResultBatchAction(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"deletedIds": deleted})
 }
 
-func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, error) {
+func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []string, resultErr error) {
 	if !validResultID(id) {
 		return nil, errResultNotFound
 	}
+	defer func() {
+		keys := make([]string, 0, len(deleted)+1)
+		for _, runID := range deleted {
+			keys = append(keys, "run:"+runID)
+		}
+		if resultErr == nil {
+			keys = append(keys, "batch:"+id)
+		}
+		s.removeLibraryMembers(keys...)
+	}()
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	s.analysisJobMu.Lock()
@@ -118,7 +128,7 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) ([]string, err
 			return nil, err
 		}
 	}
-	deleted := make([]string, 0, len(members))
+	deleted = make([]string, 0, len(members))
 	for _, member := range members {
 		if err := s.deleteSavedResultLocked(member.ID); err != nil {
 			return deleted, err

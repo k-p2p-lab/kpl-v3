@@ -1,0 +1,38 @@
+.scenario-editor:has(.scenario-import-review:not([hidden])) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.scenario-editor:has(.scenario-import-review:not([hidden])) > :not(.scenario-editor-heading):not(.scenario-import-review) {
+  display: none;
+}
+.scenario-import-review {
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+}
+.scenario-import-review[hidden] { display: none; }
+.scenario-import-review p { margin: 0; overflow-wrap: anywhere; }
+.scenario-import-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem 1rem; }
+.scenario-import-heading p, #scenarioImportSummary { color: var(--muted); font-size: .75rem; }
+#scenarioImportList { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 5rem; flex: 1 1 auto; }
+.scenario-import-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .6rem; padding: .7rem 0; border-bottom: 1px solid var(--line-soft); }
+.scenario-import-row > label { display: flex; align-items: flex-start; gap: .5rem; min-width: 0; cursor: pointer; }
+.scenario-import-row input[type="checkbox"] { flex: 0 0 auto; width: 1rem; height: 1rem; margin: .1rem 0 0; }
+.scenario-import-row label span { min-width: 0; }
+.scenario-import-row strong, .scenario-import-row small { display: block; overflow-wrap: anywhere; }
+.scenario-import-row strong { font-size: .8rem; }
+.scenario-import-row small, .scenario-import-status { color: var(--muted); font-size: .7rem; }
+.scenario-import-row > p { grid-column: 1 / -1; color: var(--red); font-size: .75rem; line-height: 1.45; }
+.scenario-import-row[data-status="saved"] .scenario-import-status { color: var(--green); }
+.scenario-import-actions { display: flex; justify-content: flex-end; gap: .5rem; padding-top: .25rem; }
+@media (max-width: 860px) {
+  .scenario-editor:has(.scenario-import-review:not([hidden])) { min-height: 20rem; }
+  #scenarioImportList { max-height: 45dvh; }
+}
+@media (max-width: 420px) {
+  .scenario-import-row { grid-template-columns: minmax(0, 1fr); }
+  .scenario-import-status { padding-left: 1.5rem; }
+  .scenario-import-actions > button { min-width: 0; padding-inline: .65rem; font-size: .75rem; }
+}

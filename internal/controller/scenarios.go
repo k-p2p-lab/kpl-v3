@@ -389,7 +389,12 @@ func (s *Server) updateSavedScenario(id string, submission scenarioSubmission) (
 	return current, nil
 }
 
-func (s *Server) deleteSavedScenario(id string) error {
+func (s *Server) deleteSavedScenario(id string) (resultErr error) {
+	defer func() {
+		if resultErr == nil {
+			s.removeLibraryMembers("scenario:" + id)
+		}
+	}()
 	s.scenarioMu.Lock()
 	defer s.scenarioMu.Unlock()
 	root, err := s.openScenarioDirectory(false)

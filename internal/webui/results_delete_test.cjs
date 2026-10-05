@@ -117,17 +117,17 @@ test('group deletion confirms its scope and preserves individual deletion wordin
   const {api,state,element} = groupFixture();
   api.renderSavedResults();
   const html = element('#savedResultsRows').innerHTML;
-  assert.match(html, /<summary[\s\S]*data-delete-batch="batch"[\s\S]*Delete group[\s\S]*<\/summary>/);
+  assert.match(html, /<summary[\s\S]*data-delete-batch="batch"[\s\S]*Delete batch[\s\S]*<\/summary>/);
   assert.doesNotMatch(html, /<details[^>]*\bopen/);
   api.requestResultDeletion('batch',true);
   assert.equal(state.pendingDelete.isBatch,true);
-  assert.equal(element('#deleteResultHeading').textContent,'Delete result group?');
+  assert.equal(element('#deleteResultHeading').textContent,'Delete result batch?');
   assert.match(element('#deleteResultID').textContent,/Batch batch · 2 saved runs/);
-  assert.match(element('#deleteResultHelp').textContent,/all 2 saved runs.*group mean analysis/);
-  assert.equal(element('#confirmDeleteResult').textContent,'Delete group');
+  assert.match(element('#deleteResultHelp').textContent,/all 2 saved runs.*batch mean analysis/);
+  assert.equal(element('#confirmDeleteResult').textContent,'Delete batch');
   api.requestResultDeletion('run-1');
   assert.equal(element('#deleteResultHeading').textContent,'Delete saved result?');
-  assert.doesNotMatch(element('#deleteResultHelp').textContent,/group mean/);
+  assert.doesNotMatch(element('#deleteResultHelp').textContent,/batch mean/);
   assert.equal(element('#confirmDeleteResult').textContent,'Delete result');
 });
 
@@ -189,7 +189,7 @@ test('group conflicts and partial storage failures remain visible and retryable'
     await api.confirmResultDeletion();
     assert.equal(element('#deleteResultDialog').open,true);
     assert.equal(element('#cancelDeleteResult').disabled,false);
-    assert.equal(element('#confirmDeleteResult').textContent,'Delete group');
+    assert.equal(element('#confirmDeleteResult').textContent,'Delete batch');
     assert.equal(state.deletedResultIDs.size,0);
     assert.equal(state.savedResults.length,3);
     assert.match(element('#deleteResultError').textContent,status===409?/being downloaded/:/some results may already be deleted/);

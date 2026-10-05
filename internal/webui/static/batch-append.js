@@ -13,7 +13,7 @@
       cancel.disabled = busy;
       $("#appendBatchSummary").textContent = !batch ? "" : valid
         ? `${batch.expected} completed + ${count} additional = ${batch.expected + count} total runs. The next run will be Run ${batch.expected + 1} of ${batch.expected + count}.`
-        : `Enter a whole number from 1 to ${maximum}. A group can contain up to 100 runs.`;
+        : `Enter a whole number from 1 to ${maximum}. A batch can contain up to 100 runs.`;
     }
     function open(value) {
       if (!value || dialog.open || value.expected >= 100) return;

@@ -54,6 +54,8 @@ function fixture(fetch) {
     'scenarioLibraryError', 'scenarioEditingStatus', 'scenarioLibraryList', 'scenarioName',
     'scenarioText', 'scenarioError', 'runRepetitions', 'runScenario', 'scenarioDialog', 'toast',
     'validateScenario', 'scenarioValidation', 'scenarioValidationTitle', 'scenarioValidationMessage',
+    'scenarioImportReview', 'scenarioImportList', 'scenarioImportSummary', 'scenarioImportDestination', 'scenarioImportHeading',
+    'confirmScenarioImport', 'cancelScenarioImport',
   ]) elements.set(`#${id}`, element());
   elements.set('.scenario-library', element());
   elements.set('.scenario-workspace', element());
@@ -80,6 +82,7 @@ function fixture(fetch) {
     selectedScenarioId: null,
     scenarioLoadingId: null,
     scenarioImporting: null,
+    scenarioImportBatch: null,
     scenarioSaving: false,
     scenarioDeletingId: null,
     pendingScenarioDeleteId: null,
@@ -842,4 +845,210 @@ test('mobile file import opens the editor without raising the text keyboard', as
   assert.equal(elements.get('.scenario-workspace').dataset.scenarioView, 'editor');
   assert.equal(elements.get('#scenarioEditorHeading').focused, true);
   assert.equal(elements.get('#scenarioText').focused, undefined);
+});
+
+test('multiple file selection opens a review with file-based names and preserves the draft', async () => {
+  let requests = 0;
+  const { api, state, elements } = fixture(async () => { requests++; throw new Error('Unexpected request'); });
+  state.selectedScenarioId = 'existing';
+  elements.get('#scenarioName').value = 'Original';
+  const yaml = elements.get('#scenarioText').value;
+  await api.importScenarioFiles([
+    scenarioFile('실험.v3.YAML', 'name: first\n'),
+    scenarioFile('second.yml', 'name: second\n'),
+  ]);
+  assert.equal(requests, 0);
+  assert.equal(state.selectedScenarioId, 'existing');
+  assert.equal(elements.get('#scenarioName').value, 'Original');
+  assert.equal(elements.get('#scenarioText').value, yaml);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => [row.name, row.status]), [['실험.v3', 'ready'], ['second', 'ready']]);
+  assert.equal(elements.get('#scenarioImportReview').hidden, false);
+  assert.equal(elements.get('#runScenario').disabled, true);
+  assert.equal(elements.get('#scenarioImportHeading').focused, true);
+  api.cancelScenarioBatchImport();
+  assert.equal(state.scenarioImportBatch, null);
+  assert.equal(elements.get('#scenarioText').value, yaml);
+  assert.equal(elements.get('#runScenario').disabled, false);
+  assert.match(markup, /id="scenarioFile"[^>]*\bmultiple\b/);
+});
+
+test('file selection dispatches one file to the existing draft editor and cancellation changes nothing', async () => {
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  await api.importScenarioFiles([]);
+  assert.equal(state.scenarioImportBatch, null);
+  await api.importScenarioFiles([scenarioFile('single.yml', 'name: one\n')]);
+  assert.equal(state.scenarioImportBatch, null);
+  assert.equal(elements.get('#scenarioName').value, 'single');
+  assert.equal(elements.get('#scenarioText').value, 'name: one\n');
+});
+
+test('batch limits reject oversized selections before reading device files', async () => {
+  for (const [count, size] of [[101, 1], [17, 1 << 20]]) {
+    let reads = 0;
+    const { api, state } = fixture(async () => { throw new Error('Unexpected request'); });
+    const files = Array.from({ length: count }, (_, index) => ({
+      name: index + '.yaml', size, async arrayBuffer() { reads++; return new ArrayBuffer(0); },
+    }));
+    await api.importScenarioFiles(files);
+    assert.equal(reads, 0);
+    assert.equal(state.scenarioImportBatch, null);
+    assert.match(state.scenarioActionError, /100 files.*16 MiB/);
+  }
+});
+
+test('batch review isolates invalid UTF-8, oversized files, empty files and duplicate saved names', async () => {
+  let largeRead = false;
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  await api.importScenarioFiles([
+    scenarioFile('good.yaml', 'name: good\n'),
+    scenarioFile('good.yml', 'name: duplicate\n'),
+    scenarioFile('utf8.yaml', Buffer.from([0xC3, 0x28])),
+    scenarioFile('empty.yaml', ''),
+    { name: 'large.yaml', size: (1 << 20) + 1, async arrayBuffer() { largeRead = true; } },
+    scenarioFile('<script>.yaml', 'name: escaped\n'),
+  ]);
+  assert.equal(largeRead, false);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['ready', 'invalid', 'invalid', 'invalid', 'invalid', 'ready']);
+  const html = elements.get('#scenarioImportList').innerHTML;
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(!html.includes('<script>'));
+  assert.match(state.scenarioImportBatch.rows[1].error, /same saved name/);
+});
+
+test('batch imports are sequential and retry only rejected selected files', async () => {
+  const requests = [];
+  let active = 0;
+  let maximum = 0;
+  let rejectSecond = true;
+  const { api, state, elements } = fixture(async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body.name);
+    maximum = Math.max(maximum, ++active);
+    await new Promise(resolve => setImmediate(resolve));
+    active--;
+    if (body.name === 'second' && rejectSecond) return response({ error: 'Temporary validation rejection' }, 400);
+    return response({ id: body.name + '-id', ...body });
+  });
+  await api.importScenarioFiles([
+    scenarioFile('first.yaml', 'name: run-first\n'),
+    scenarioFile('second.yaml', 'name: run-second\n'),
+    scenarioFile('unselected.yaml', 'name: run-third\n'),
+  ]);
+  state.scenarioImportBatch.rows[2].selected = false;
+  const saving = api.saveScenarioImportBatch();
+  await api.saveScenarioImportBatch();
+  await saving;
+  assert.equal(maximum, 1);
+  assert.deepEqual(requests, ['first', 'second']);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['saved', 'failed', 'ready']);
+  rejectSecond = false;
+  await api.saveScenarioImportBatch();
+  assert.deepEqual(requests, ['first', 'second', 'second']);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['saved', 'saved', 'ready']);
+  assert.equal(state.savedScenarios.length, 2);
+  assert.equal(elements.get('#scenarioText').value, 'version: 1\nname: current\n');
+  assert.equal(state.scenarioImportBatch.rows[0].yaml, '', 'release successful file data');
+});
+
+test('uncertain batch saves stop the queue and cannot be blindly retried', async () => {
+  for (const outcome of ['timeout', 'network', 'server', 'malformed']) {
+    const requests = [];
+    const { api, state, expireRequest } = fixture(async (url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body.name);
+      if (body.name === 'second') return response({ id: 'second-id', ...body });
+      if (outcome === 'timeout') return hangingResponse(options);
+      if (outcome === 'network') throw new Error('Network unavailable');
+      if (outcome === 'server') return response({ error: 'Persistence uncertain' }, 500);
+      return response({ name: body.name });
+    });
+    await api.importScenarioFiles([scenarioFile('first.yaml', 'name: first\n'), scenarioFile('second.yaml', 'name: second\n')]);
+    const saving = api.saveScenarioImportBatch();
+    if (outcome === 'timeout') expireRequest();
+    await saving;
+    assert.equal(state.scenarioImportBatch.rows[0].status, 'uncertain', outcome);
+    assert.equal(state.scenarioImportBatch.rows[1].status, 'ready', outcome);
+    assert.deepEqual(requests, ['first']);
+    await api.saveScenarioImportBatch();
+    assert.deepEqual(requests, ['first', 'second'], outcome);
+    assert.equal(state.scenarioImportBatch.rows[0].status, 'uncertain');
+    assert.equal(state.scenarioImportBatch.rows[1].status, 'saved');
+  }
+});
+
+test('closing an in-flight batch stops after the acknowledged file and reopening preserves pending files', async () => {
+  let complete;
+  const requests = [];
+  const { api, state, elements } = fixture(async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body.name);
+    if (body.name === 'first') return new Promise(resolve => { complete = () => resolve(response({ id: 'first-id', ...body })); });
+    return response({ id: 'second-id', ...body });
+  });
+  await api.importScenarioFiles([scenarioFile('first.yaml', 'name: first\n'), scenarioFile('second.yaml', 'name: second\n')]);
+  const saving = api.saveScenarioImportBatch();
+  api.closeScenarioEditor();
+  complete();
+  await saving;
+  assert.equal(elements.get('#scenarioDialog').open, false);
+  assert.deepEqual(requests, ['first']);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['saved', 'ready']);
+  api.openScenarioEditor();
+  await api.saveScenarioImportBatch();
+  assert.deepEqual(requests, ['first', 'second']);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['saved', 'saved']);
+});
+
+test('a canceled batch device read cannot replace a later single-file draft', async () => {
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  const deferred = deferredScenarioFile('late.yaml', 'name: late\n');
+  const pending = api.importScenarioFiles([deferred.file, scenarioFile('other.yaml', 'name: other\n')]);
+  api.cancelScenarioBatchImport();
+  await api.importScenarioFiles([scenarioFile('current.yaml', 'name: current file\n')]);
+  await deferred.finish();
+  await pending;
+  assert.equal(state.scenarioImportBatch, null);
+  assert.equal(state.scenarioImporting, null);
+  assert.equal(elements.get('#scenarioName').value, 'current');
+  assert.equal(elements.get('#scenarioText').value, 'name: current file\n');
+});
+
+test('batch group destination is captured and failed assignments retry without duplicate scenario creation', async () => {
+  const creates = [];
+  const assignments = [];
+  let currentGroup = 'chosen-group';
+  let rejectGroup = true;
+  const { api, state, elements } = fixture(async (url, options) => {
+    const body = JSON.parse(options.body);
+    creates.push(body.name);
+    return response({ id: body.name + '-id', ...body });
+  });
+  api.KPLLibraryGroups = {
+    matches: () => true,
+    isFiltered: () => false,
+    selectionMarkup: () => "",
+    badgeMarkup: () => "",
+    refreshUI() {},
+    getImportGroup: () => currentGroup,
+    getGroupName: id => id === 'chosen-group' ? 'Chosen group' : 'Other group',
+    async assign(keys, id) {
+      assignments.push({ keys: Array.from(keys), id });
+      if (rejectGroup) throw new Error('Group unavailable');
+    },
+  };
+  await api.importScenarioFiles([scenarioFile('first.yaml', 'name: first\n'), scenarioFile('second.yaml', 'name: second\n')]);
+  currentGroup = 'different-group';
+  assert.equal(elements.get('#scenarioImportDestination').textContent, 'Group: Chosen group');
+  await api.saveScenarioImportBatch();
+  assert.deepEqual(creates, ['first']);
+  assert.equal(state.scenarioImportBatch.rows[0].status, 'group-failed');
+  rejectGroup = false;
+  await api.saveScenarioImportBatch();
+  assert.deepEqual(creates, ['first', 'second']);
+  assert.deepEqual(assignments, [
+    { keys: ['scenario:first-id'], id: 'chosen-group' },
+    { keys: ['scenario:first-id'], id: 'chosen-group' },
+    { keys: ['scenario:second-id'], id: 'chosen-group' },
+  ]);
+  assert.deepEqual(Array.from(state.scenarioImportBatch.rows, row => row.status), ['saved', 'saved']);
 });

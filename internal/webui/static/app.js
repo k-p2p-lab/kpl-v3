@@ -9,7 +9,7 @@ const state = {
   resultsStorageRevision: null, resultsLoadedStorageRevision: null,
   scenarioQuery: "", scenarioActionScope: "editor",
   savedScenarios: null, scenariosLoading: false, scenariosError: "", scenarioActionError: "",
-  selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false, scenarioImporting: null,
+  selectedScenarioId: null, scenarioLoadingId: null, scenarioSaving: false, scenarioImporting: null, scenarioImportBatch: null,
   scenarioValidating: false, scenarioValidation: null, scenarioValidationVersion: 0,
   scenarioDeletingId: null, pendingScenarioDeleteId: null, scenarioLoadVersion: 0, scenarioSubmitting: false, scenarioEditorVersion: 0,
   agentNumbers: loadAgentNumbers(),
@@ -782,7 +782,7 @@ function validateSavedScenario(value, requireYAML = false) {
 
 function scenarioOperationBusy() {
   return state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
-    || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId) || Boolean(state.scenarioImporting);
+    || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId) || Boolean(state.scenarioImporting) || Boolean(state.scenarioImportBatch);
 }
 
 function renderScenarioValidation() {
@@ -855,7 +855,28 @@ async function validateEditedScenario() {
 
 function filteredSavedScenarios() {
   const query = (state.scenarioQuery || "").trim().toLowerCase();
-  return (state.savedScenarios || []).filter(item => !query || `${item.name} ${item.id}`.toLowerCase().includes(query));
+  return (state.savedScenarios || []).filter(item => (globalThis.KPLLibraryGroups?.matches(`scenario:${item.id}`) ?? true)
+    && (!query || `${item.name} ${item.id}`.toLowerCase().includes(query)));
+}
+
+function resultLibraryKey(run) {
+  return run.batchId ? `batch:${run.batchId}` : `run:${run.id}`;
+}
+
+function libraryGroupItems() {
+  const items = (state.savedScenarios || []).map(item => ({ key: `scenario:${item.id}`, name: item.name || item.id, scope: "scenarios" }));
+  const results = new Map();
+  for (const run of state.savedResults || []) {
+    const key = resultLibraryKey(run);
+    if (!results.has(key)) results.set(key, { key, name: run.name || run.id, scope: "results" });
+  }
+  return [...items, ...results.values()];
+}
+
+function visibleLibraryGroupKeys(scope) {
+  if (scope === "scenarios") return filteredSavedScenarios().map(item => `scenario:${item.id}`);
+  return [...new Set(filterSavedResults(state.savedResults || [], state.resultQuery || "", state.resultStatus || "all")
+    .filter(run => globalThis.KPLLibraryGroups?.matches(resultLibraryKey(run)) ?? true).map(resultLibraryKey))];
 }
 
 function setScenarioView(view) {
@@ -875,6 +896,7 @@ function searchSavedScenarios(query) {
 
 function renderSavedScenarios() {
   renderScenarioValidation();
+  renderScenarioImportReview();
   const scenarios = state.savedScenarios || [];
   const status = $("#scenarioLibraryStatus");
   const busy = scenarioOperationBusy();
@@ -883,7 +905,7 @@ function renderSavedScenarios() {
   $("#refreshScenarios").setAttribute("aria-label", state.scenariosLoading ? "Refreshing saved scenarios" : "Refresh saved scenarios");
   $("#newScenario").disabled = busy;
   $("#chooseScenarioFile").disabled = busy;
-  $("#chooseScenarioFile").textContent = state.scenarioImporting ? "Reading…" : "Choose file";
+  $("#chooseScenarioFile").textContent = state.scenarioImporting ? "Reading…" : "Choose files";
   $("#scenarioFile").disabled = busy;
   $("#saveScenario").disabled = busy;
   $("#saveScenario").textContent = state.scenarioSaving ? "Saving…"
@@ -904,7 +926,7 @@ function renderSavedScenarios() {
   $("#clearScenarioSearch").hidden = !state.scenarioQuery;
   $("#clearScenarioSearch").disabled = busy;
   $("#scenarioLibraryCount").textContent = scenarios.length;
-  $("#scenarioLibrarySummary").textContent = query ? `${visible.length} of ${scenarios.length} scenarios` : `${scenarios.length} saved · Most recent first`;
+  $("#scenarioLibrarySummary").textContent = query || globalThis.KPLLibraryGroups?.isFiltered() ? `${visible.length} of ${scenarios.length} scenarios` : `${scenarios.length} saved · Most recent first`;
   status.classList.toggle("error", Boolean(state.scenariosError));
   status.setAttribute("role", state.scenariosError ? "alert" : "status");
   status.textContent = state.scenariosLoading ? "Loading saved scenarios…"
@@ -918,7 +940,8 @@ function renderSavedScenarios() {
     ? `Editing saved scenario · ${selected?.name || state.selectedScenarioId}`
     : "New unsaved scenario";
   const empty = !visible.length && !state.scenariosLoading && !state.scenariosError && state.savedScenarios !== null
-    ? `<li class="scenario-library-empty"><strong>${query ? "No matching scenarios" : "Your scenario library is empty"}</strong><p>${query ? "Try another name or scenario ID." : "Choose New, edit your scenario, then save it here to use again."}</p></li>` : "";
+    ? `<li class="scenario-library-empty"><strong>${query || scenarios.length ? "No matching scenarios" : "Your scenario library is empty"}</strong><p>${query || scenarios.length ? "Choose another group or change your search." : "Choose New, edit your scenario, then save it here to use again."}</p></li>` : "";
+  const focusedSelection = document.activeElement?.getAttribute?.("data-library-select-key");
   setHTML($("#scenarioLibraryList"), empty || visible.map((item) => {
     const name = item.name || item.id;
     const isSelected = item.id === state.selectedScenarioId;
@@ -926,19 +949,29 @@ function renderSavedScenarios() {
     const isDeleting = item.id === state.scenarioDeletingId;
     const isLoading = item.id === state.scenarioLoadingId;
     const updated = formatResultTime(item.updatedAt);
-    return `<li class="scenario-library-item${isSelected ? " selected" : ""}"${isSelected ? ' aria-current="true"' : ""}>
+    const key = `scenario:${item.id}`;
+    const selection = globalThis.KPLLibraryGroups?.selectionMarkup(key, name) || "";
+    return `<li class="scenario-library-item${isSelected ? " selected" : ""}${selection ? " has-group-selection" : ""}"${isSelected ? ' aria-current="true"' : ""}>
+      ${selection}
       <button class="load-scenario-button" type="button" data-load-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Load saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>
         <span class="scenario-item-heading"><strong title="${escapeHTML(name)}">${escapeHTML(name)}</strong><span class="scenario-item-state">${isLoading ? "Loading…" : isSelected ? "Editing" : "Load →"}</span></span>
+        ${globalThis.KPLLibraryGroups?.badgeMarkup(key) || ""}
         <span class="scenario-item-meta"><span>Updated ${escapeHTML(updated)}</span><span class="scenario-item-id" title="${escapeHTML(`Scenario ID: ${item.id}`)}"><span aria-hidden="true">ID ${escapeHTML(formatScenarioID(item.id))}</span><span class="visually-hidden">Scenario ID: ${escapeHTML(item.id)}</span></span></span>
       </button>
       <button class="icon-button delete-scenario-button" type="button" data-delete-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Delete saved scenario: ${name}`)}" title="${escapeHTML(`Delete saved scenario: ${name}`)}" ${busy || confirmingDelete ? "disabled" : ""}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg></button>
       ${confirmingDelete ? `<div class="scenario-delete-confirmation"><p>Delete this saved scenario? This cannot be undone.</p><div class="scenario-item-actions"><button class="secondary-button" type="button" data-cancel-scenario-delete="${escapeHTML(item.id)}" ${busy ? "disabled" : ""}>Cancel</button><button class="danger-button confirm-delete-scenario" type="button" data-confirm-scenario-delete="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Confirm deletion of saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>${isDeleting ? "Deleting…" : "Confirm delete"}</button></div></div>` : ""}
     </li>`;
   }).join(""));
+  if (focusedSelection?.startsWith("scenario:")) {
+    [...$("#scenarioLibraryList").querySelectorAll("[data-library-select-key]")]
+      .find(input => input.getAttribute("data-library-select-key") === focusedSelection)?.focus({ preventScroll: true });
+  }
+  globalThis.KPLLibraryGroups?.refreshUI();
 }
 
 async function refreshSavedScenarios() {
   if (scenarioOperationBusy()) return;
+  void globalThis.KPLLibraryGroups?.refresh().catch(() => {});
   state.scenariosLoading = true;
   state.scenariosError = "";
   state.scenarioActionError = "";
@@ -1009,9 +1042,194 @@ function startNewScenario() {
 }
 
 function cancelScenarioFileImport() {
+  const batch = state.scenarioImportBatch;
+  if (batch?.saving) batch.stopRequested = true;
+  if (batch?.reading) state.scenarioImportBatch = null;
   if (!state.scenarioImporting) return;
   state.scenarioImporting = null;
   renderSavedScenarios();
+}
+
+function scenarioImportName(file) {
+  const extension = file.name.lastIndexOf(".");
+  return extension > 0 ? file.name.slice(0, extension) : file.name;
+}
+
+async function readScenarioImportFile(file) {
+  if (file.size > (1 << 20)) throw new Error("Scenario files must be 1 MiB or smaller.");
+  const bytes = await file.arrayBuffer();
+  if (bytes.byteLength > (1 << 20)) throw new Error("Scenario files must be 1 MiB or smaller.");
+  let yaml;
+  try {
+    yaml = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Use a UTF-8 YAML file.");
+  }
+  if (!yaml.trim()) throw new Error("The selected file is empty.");
+  return yaml;
+}
+
+function scenarioImportRetryable(row) {
+  return ["ready", "failed", "group-failed"].includes(row.status);
+}
+
+function renderScenarioImportReview() {
+  const panel = $("#scenarioImportReview");
+  if (!panel) return;
+  const batch = state.scenarioImportBatch;
+  panel.hidden = !batch;
+  if (!batch) {
+    setHTML($("#scenarioImportList"), "");
+    return;
+  }
+  panel.setAttribute("aria-busy", String(batch.reading || batch.saving));
+  const saved = batch.rows.filter(row => row.status === "saved").length;
+  const selected = batch.rows.filter(row => row.selected && scenarioImportRetryable(row)).length;
+  $("#scenarioImportSummary").textContent = batch.reading ? "Reading selected files…"
+    : batch.saving ? "Importing files… " + saved + " of " + batch.rows.length + " saved."
+    : saved + " saved · " + selected + " selected · " + batch.rows.length + " files";
+  $("#scenarioImportDestination").textContent = batch.groupId ? "Group: " + batch.groupName : "Group: Ungrouped";
+  $("#confirmScenarioImport").disabled = batch.reading || batch.saving || selected === 0;
+  $("#confirmScenarioImport").textContent = batch.saving ? "Importing…" : "Import selected";
+  $("#cancelScenarioImport").textContent = batch.saving
+    ? batch.stopRequested ? "Stopping…" : "Stop after current"
+    : saved ? "Done" : "Cancel";
+  $("#cancelScenarioImport").disabled = batch.saving && batch.stopRequested;
+  const focusedIndex = document.activeElement?.getAttribute("data-scenario-import-select");
+  const labels = { reading: "Reading…", ready: "Ready", saving: "Saving…", saved: "Saved", failed: "Failed", invalid: "Cannot import", uncertain: "Status unknown", "group-failed": "Saved · Group pending" };
+  setHTML($("#scenarioImportList"), batch.rows.map((row, index) => {
+    const enabled = !batch.reading && !batch.saving && scenarioImportRetryable(row);
+    return '<li class="scenario-import-row" data-status="' + row.status + '"><label><input type="checkbox" data-scenario-import-select="' + index
+      + '" ' + (row.selected ? "checked " : "") + (enabled ? "" : "disabled ")
+      + 'aria-label="' + escapeHTML("Import " + row.name) + '"><span><strong title="' + escapeHTML(row.filename) + '">' + escapeHTML(row.name)
+      + '</strong><small>' + escapeHTML(row.filename) + '</small></span></label><span class="scenario-import-status">'
+      + labels[row.status] + '</span>' + (row.error ? '<p role="' + (row.status === "uncertain" ? "alert" : "status") + '">' + escapeHTML(row.error) + "</p>" : "") + "</li>";
+  }).join(""));
+  if (focusedIndex != null) $('[data-scenario-import-select="' + focusedIndex + '"]')?.focus();
+}
+
+async function importScenarioFiles(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length || scenarioOperationBusy() || !$("#scenarioDialog").open) return;
+  if (selected.length === 1) return importScenarioFile(selected[0]);
+  state.scenarioActionScope = "editor";
+  state.scenarioActionError = "";
+  setScenarioView("editor");
+  if (selected.length > 100 || selected.reduce((total, file) => total + file.size, 0) > (16 << 20)) {
+    state.scenarioActionError = "Choose up to 100 files totaling 16 MiB or less.";
+    renderSavedScenarios();
+    $("#scenarioLibraryError").focus();
+    return;
+  }
+  const groupId = globalThis.KPLLibraryGroups?.getImportGroup() || "";
+  const batch = {
+    groupId, groupName: globalThis.KPLLibraryGroups?.getGroupName(groupId) || groupId,
+    rows: selected.map(file => ({ name: scenarioImportName(file), filename: file.name, status: "reading", selected: true, yaml: "", error: "" })),
+    reading: true, saving: false, stopRequested: false,
+  };
+  const pending = { editorVersion: state.scenarioEditorVersion };
+  const current = () => state.scenarioImportBatch === batch && state.scenarioImporting === pending
+    && state.scenarioEditorVersion === pending.editorVersion && $("#scenarioDialog").open;
+  state.scenarioImportBatch = batch;
+  state.scenarioImporting = pending;
+  renderSavedScenarios();
+  const names = new Set();
+  try {
+    for (let index = 0; index < selected.length; index++) {
+      if (!current()) return;
+      const row = batch.rows[index];
+      try {
+        if (!row.name.trim() || [...row.name.trim()].length > 128) throw new Error("The filename must provide a saved name of 1–128 characters.");
+        if (names.has(row.name.trim())) throw new Error("Another selected file has the same saved name.");
+        names.add(row.name.trim());
+        row.yaml = await readScenarioImportFile(selected[index]);
+        if (!current()) return;
+        row.status = "ready";
+      } catch (error) {
+        if (!current()) return;
+        row.status = "invalid";
+        row.selected = false;
+        row.error = error.message;
+      }
+      renderScenarioImportReview();
+    }
+  } finally {
+    if (current()) {
+      batch.reading = false;
+      state.scenarioImporting = null;
+      renderSavedScenarios();
+      $("#scenarioImportHeading").focus();
+    }
+  }
+}
+
+function cancelScenarioBatchImport() {
+  const batch = state.scenarioImportBatch;
+  if (!batch) return;
+  if (batch.saving) {
+    batch.stopRequested = true;
+    renderScenarioImportReview();
+    return;
+  }
+  state.scenarioImportBatch = null;
+  if (batch.reading) state.scenarioImporting = null;
+  renderSavedScenarios();
+  $("#chooseScenarioFile").focus();
+}
+
+async function saveScenarioImportBatch() {
+  const batch = state.scenarioImportBatch;
+  if (!batch || batch.reading || batch.saving || !$("#scenarioDialog").open) return;
+  batch.saving = true;
+  batch.stopRequested = false;
+  renderSavedScenarios();
+  try {
+    for (const row of batch.rows) {
+      if (batch.stopRequested || !$("#scenarioDialog").open) break;
+      if (!row.selected || !scenarioImportRetryable(row)) continue;
+      row.status = "saving";
+      row.error = "";
+      renderScenarioImportReview();
+      if (!row.savedId) {
+        try {
+          const item = validateSavedScenario(await scenarioRequest("/api/v1/scenarios", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: row.name, yaml: row.yaml }),
+          }, "mutation"), true);
+          row.savedId = item.id;
+          upsertSavedScenario(item);
+        } catch (error) {
+          const rejected = error.status >= 400 && error.status < 500 && error.status !== 408;
+          row.status = rejected ? "failed" : "uncertain";
+          row.error = rejected ? error.message
+            : "The server may have saved this file. Check the saved scenario list before importing it again. " + error.message;
+          if (!rejected || error.status === 401 || error.status === 403) batch.stopRequested = true;
+          renderSavedScenarios();
+          continue;
+        }
+      }
+      if (batch.groupId) {
+        try {
+          if (!globalThis.KPLLibraryGroups?.assign) throw new Error("Group controls are unavailable.");
+          await globalThis.KPLLibraryGroups.assign(["scenario:" + row.savedId], batch.groupId);
+        } catch (error) {
+          row.status = "group-failed";
+          row.error = "Saved to the library; could not add to the group. Import selected retries only the group assignment. " + error.message;
+          batch.stopRequested = true;
+          renderSavedScenarios();
+          continue;
+        }
+      }
+      row.status = "saved";
+      row.selected = false;
+      row.yaml = "";
+      renderSavedScenarios();
+    }
+  } finally {
+    batch.saving = false;
+    renderSavedScenarios();
+  }
 }
 
 async function importScenarioFile(file) {
@@ -1025,19 +1243,9 @@ async function importScenarioFile(file) {
   renderSavedScenarios();
   let loaded = false;
   try {
-    // Match the Controller's scenarioYAMLLimit before reading into memory.
-    if (file.size > (1 << 20)) throw new Error("Scenario files must be 1 MiB or smaller.");
-    const bytes = await file.arrayBuffer();
+    const yaml = await readScenarioImportFile(file);
     if (!current()) return;
-    let yaml;
-    try {
-      yaml = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch {
-      throw new Error("Use a UTF-8 YAML file.");
-    }
-    if (!yaml.trim()) throw new Error("The selected file is empty.");
-    const extension = file.name.lastIndexOf(".");
-    $("#scenarioName").value = extension > 0 ? file.name.slice(0, extension) : file.name;
+    $("#scenarioName").value = scenarioImportName(file);
     $("#scenarioText").value = yaml;
     state.selectedScenarioId = null;
     state.pendingScenarioDeleteId = null;
@@ -1091,6 +1299,7 @@ async function saveEditedScenario(asNew = false) {
     return;
   }
   const updateID = !asNew && state.selectedScenarioId;
+  const targetGroup = !updateID ? globalThis.KPLLibraryGroups?.getImportGroup() || "" : "";
   state.scenarioSaving = true;
   state.pendingScenarioDeleteId = null;
   state.scenarioActionError = "";
@@ -1110,6 +1319,13 @@ async function saveEditedScenario(asNew = false) {
     }
     upsertSavedScenario(item);
     showToast(`${updateID ? "Updated" : "Saved"} scenario: ${item.name}.`);
+    if (targetGroup) {
+      try {
+        await globalThis.KPLLibraryGroups.assign([`scenario:${item.id}`], targetGroup);
+      } catch (error) {
+        state.scenarioActionError = `Scenario saved, but its group could not be updated: ${error.message} Use Groups and Select to move it.`;
+      }
+    }
   } catch (error) {
     state.scenarioActionError = `${updateID ? "Could not update" : "Could not save"} the scenario: ${error.message}`;
   } finally {
@@ -1157,6 +1373,7 @@ async function confirmScenarioDeletion(id) {
     if (state.selectedScenarioId === id) state.selectedScenarioId = null;
     deleted = true;
     showToast(`Deleted saved scenario: ${item.name || item.id}.`);
+    void globalThis.KPLLibraryGroups?.refresh().catch(() => {});
   } catch (error) {
     state.scenarioActionError = `Could not delete the saved scenario: ${error.message}`;
   } finally {
@@ -1270,8 +1487,8 @@ function appendBatchButton(batch, locked = false) {
   const pending = state.pendingAppends?.has(batch.id);
   const analyzing = ["queued", "running"].includes(batch.job?.state)
     || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
-  const hint = batch.expected >= 100 ? "This group has reached the 100-run limit."
-    : "Append runs using this group's saved scenario. Batch statistics will include all completed runs.";
+  const hint = batch.expected >= 100 ? "This batch has reached the 100-run limit."
+    : "Append runs using this batch's saved scenario. Batch statistics will include all completed runs.";
   return `<button type="button" class="secondary-button batch-append-button" data-append-batch="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Add runs to group: ${batch.name}`)}" ${locked || pending || analyzing || batch.expected >= 100 || state.deletingResultId ? "disabled" : ""}>${pending ? "Adding runs…" : "Add runs"}</button>`;
 }
 
@@ -1333,7 +1550,7 @@ async function resumeSavedBatch(id, retry = false) {
 function savedResultTable(runs, key, label = "Saved experiment results") {
   return `<div class="table-wrap" data-result-table="${escapeHTML(key)}"><table aria-label="${escapeHTML(label)}">
     <thead><tr><th scope="col">Experiment / ID</th><th scope="col">State</th><th scope="col">Started (local)</th><th scope="col">Finished (local)</th><th scope="col">Actions</th></tr></thead>
-    <tbody>${runs.map(savedResultRow).join("")}</tbody>
+    <tbody>${runs.map(run => savedResultRow(run, key?.startsWith("batch:") || key?.startsWith("previous:"))).join("")}</tbody>
   </table></div>`;
 }
 
@@ -1351,7 +1568,7 @@ function savedResultBatch(batch) {
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
-      <span class="saved-batch-heading"><strong>${escapeHTML(batch.name)}</strong><span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
+      <span class="saved-batch-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
         <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
@@ -1361,7 +1578,7 @@ function savedResultBatch(batch) {
             ${appendBatchButton(batch, locked)}
             ${retryBatchButton(batch, locked)}
             ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
-            <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this group stop." : "Delete every saved run and the mean analysis in this group."}" aria-label="${escapeHTML(`Delete result group: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete group"}</button>
+            <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this batch stop." : "Delete every saved run and the mean analysis in this batch."}" aria-label="${escapeHTML(`Delete result batch: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete batch"}</button>
           </span>
         </span>
       </span>
@@ -1395,7 +1612,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-action-menu-toggle", "data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-library-select-key", "data-action-menu-toggle", "data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch,
     menu: control.closest(".action-menu[data-action-menu]")?.dataset.actionMenu } : null;
 }
@@ -1477,8 +1694,9 @@ function clearResultSearch() {
 
 function renderSavedResults() {
   const results = state.savedResults || [];
-  const visible = filterSavedResults(results, state.resultQuery || "", state.resultStatus || "all");
-  const filtered = Boolean((state.resultQuery || "").trim()) || (state.resultStatus || "all") !== "all";
+  const visible = filterSavedResults(results, state.resultQuery || "", state.resultStatus || "all")
+    .filter(run => globalThis.KPLLibraryGroups?.matches(resultLibraryKey(run)) ?? true);
+  const filtered = Boolean((state.resultQuery || "").trim()) || (state.resultStatus || "all") !== "all" || globalThis.KPLLibraryGroups?.isFiltered();
   $("#clearResultSearch").hidden = !state.resultQuery;
   for (const value of ["all", "active", "completed", "attention"]) {
     $(`#resultStatus-${value}`).checked = value === (state.resultStatus || "all");
@@ -1503,6 +1721,7 @@ function renderSavedResults() {
   status.hidden = !status.textContent;
   $("#savedResultsTable").hidden = visible.length === 0;
   updateSavedResultsList(savedResultsMarkup(visible));
+  globalThis.KPLLibraryGroups?.refreshUI();
 }
 
 function resultStorageMarkup(run) {
@@ -1516,7 +1735,7 @@ function resultStorageMarkup(run) {
 }
 
 function resultNoteMarkup(run, group = false) {
-  const label = `${run.note ? "Edit" : "Add"} ${group ? "group note" : "note"}`;
+  const label = `${run.note ? "Edit" : "Add"} ${group ? "batch note" : "note"}`;
   const tag = group ? "span" : "div";
   return `<${tag} class="result-note"><button class="result-note-button secondary-button" type="button" ${group ? "data-group-note" : "data-result-note"}="${escapeHTML(run.id)}" aria-label="${escapeHTML(`${label}: ${run.name || run.id}`)}">${label}</button>${run.note ? `<span class="result-note-preview">${escapeHTML(run.note.preview)}</span>` : ""}</${tag}>`;
 }
@@ -1539,13 +1758,13 @@ function resultIntegrityMarkup(run) {
   return activity ? `<span class="result-activity">${escapeHTML(activity)}</span>` : "";
 }
 
-function savedResultRow(run) {
+function savedResultRow(run, inBatch = false) {
   const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
   const retry = singleBatch && !singleBatch.previousRuns.length ? appendBatchButton(singleBatch, resultLocked(run)) + retryBatchButton(singleBatch, resultLocked(run)) : "";
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name" data-label="Experiment"><strong>${escapeHTML(run.name || run.id)}</strong><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
+    <td class="result-name" data-label="Experiment">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong>${inBatch ? "" : globalThis.KPLLibraryGroups?.badgeMarkup(resultLibraryKey(run)) || ""}<span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
@@ -1559,15 +1778,15 @@ function requestResultDeletion(id, isBatch = false) {
     : (state.savedResults || []).find((result) => result.id === id);
   if (!run || (isBatch ? run.runs.some(resultLocked) : resultLocked(run))) return;
   state.pendingDelete = isBatch ? { ...run, isBatch: true } : run;
-  $("#deleteResultHeading").textContent = isBatch ? "Delete result group?" : "Delete saved result?";
+  $("#deleteResultHeading").textContent = isBatch ? "Delete result batch?" : "Delete saved result?";
   $("#deleteResultName").textContent = run.name || run.id;
   $("#deleteResultID").textContent = isBatch ? `Batch ${run.id} · ${run.runs.length} saved runs` : run.id;
   $("#deleteResultHelp").textContent = isBatch
-    ? `Delete all ${run.runs.length} saved runs in this group, including their scenarios, metadata, logs, individual analyses, and the group mean analysis. This cannot be undone. Previously collected Prometheus and Grafana time series remain.`
+    ? `Delete all ${run.runs.length} saved runs in this batch, including their scenarios, metadata, logs, individual analyses, and the batch mean analysis. This cannot be undone. Previously collected Prometheus and Grafana time series remain.`
     : "Delete this run's saved scenario, metadata, and event log. This cannot be undone. Previously collected Prometheus and Grafana time series remain.";
   $("#deleteResultError").textContent = "";
   $("#confirmDeleteResult").disabled = false;
-  $("#confirmDeleteResult").textContent = isBatch ? "Delete group" : "Delete result";
+  $("#confirmDeleteResult").textContent = isBatch ? "Delete batch" : "Delete result";
   $("#cancelDeleteResult").disabled = false;
   $("#deleteResultDialog").showModal();
 }
@@ -1594,7 +1813,7 @@ async function confirmResultDeletion() {
     try {
       const response = await api(`/api/v1/${run.isBatch ? "result-batches" : "results"}/${encodeURIComponent(run.id)}`, { method: "DELETE", signal: controller.signal });
       if (run.isBatch) {
-        if (!Array.isArray(response?.deletedIds) || response.deletedIds.some(id => typeof id !== "string" || !id)) throw new Error("Unexpected group deletion response. Refresh the list to check.");
+        if (!Array.isArray(response?.deletedIds) || response.deletedIds.some(id => typeof id !== "string" || !id)) throw new Error("Unexpected batch deletion response. Refresh the list to check.");
         deletedIDs = response.deletedIds;
       }
     } catch (error) {
@@ -1608,21 +1827,22 @@ async function confirmResultDeletion() {
     state.savedResults = (state.savedResults || []).filter((result) => !state.deletedResultIDs.has(result.id));
     state.pendingDelete = null;
     $("#deleteResultDialog").close();
-    showToast(`Deleted ${run.isBatch ? "result group" : "saved result"}: ${run.name || run.id}.`);
+    showToast(`Deleted ${run.isBatch ? "result batch" : "saved result"}: ${run.name || run.id}.`);
   } catch (error) {
     $("#deleteResultError").textContent = error.name === "AbortError"
       ? "Deletion timed out; it may still finish on the Controller. Refresh the list to check, or retry the deletion."
       : error.status === 409
       ? "This result is active, belongs to an active batch, or is being downloaded. Wait for it to finish, then try again."
-      : `Could not delete the ${run.isBatch ? "result group" : "saved result"}: ${error.message}`;
+      : `Could not delete the ${run.isBatch ? "result batch" : "saved result"}: ${error.message}`;
   } finally {
     clearTimeout(timeout);
     state.deletingResultId = null;
     $("#confirmDeleteResult").disabled = false;
-    $("#confirmDeleteResult").textContent = run.isBatch ? "Delete group" : "Delete result";
+    $("#confirmDeleteResult").textContent = run.isBatch ? "Delete batch" : "Delete result";
     $("#cancelDeleteResult").disabled = false;
     renderResultViews();
     // A slow list refresh must not keep the deletion dialog locked.
+    void globalThis.KPLLibraryGroups?.refresh().catch(() => {});
     void refreshSavedResults();
   }
 }
@@ -2290,8 +2510,10 @@ $("#agentCapacityMode").addEventListener("change", updateAgentCapacityMode);
 $("#toggleAgentEnabled").addEventListener("click", () => void toggleAgentEnabled());
 $("#agentCapacityDialog").addEventListener("cancel", event => { event.preventDefault(); closeAgentCapacity(); });
 for (const button of document.querySelectorAll("[data-agent-capacity-close]")) button.addEventListener("click", closeAgentCapacity);
-$("#refreshResults").addEventListener("click", refreshSavedResults);
-$("#refreshExperiments").addEventListener("click", refreshSavedResults);
+for (const id of ["#refreshResults", "#refreshExperiments"]) $(id).addEventListener("click", () => {
+  void globalThis.KPLLibraryGroups?.refresh().catch(() => {});
+  void refreshSavedResults();
+});
 $("#refreshAgents").addEventListener("click", () => refreshAgents());
 $("#discoverAgents").addEventListener("click", () => refreshAgents(true));
 globalThis.KPLAgentResources?.init({api});
@@ -2311,9 +2533,19 @@ $("#chooseScenarioFile").addEventListener("click", () => {
   if (!scenarioOperationBusy()) $("#scenarioFile").click();
 });
 $("#scenarioFile").addEventListener("change", event => {
-  const file = event.target.files?.[0];
+  const files = Array.from(event.target.files || []);
   event.target.value = "";
-  void importScenarioFile(file);
+  void importScenarioFiles(files);
+});
+$("#confirmScenarioImport").addEventListener("click", () => void saveScenarioImportBatch());
+$("#cancelScenarioImport").addEventListener("click", cancelScenarioBatchImport);
+$("#scenarioImportList").addEventListener("change", event => {
+  const index = Number(event.target.dataset.scenarioImportSelect);
+  const batch = state.scenarioImportBatch;
+  const row = batch?.rows[index];
+  if (!row || batch.reading || batch.saving || !scenarioImportRetryable(row)) return;
+  row.selected = event.target.checked;
+  renderScenarioImportReview();
 });
 $("#scenarioDialog").addEventListener("close", cancelScenarioFileImport);
 for (const button of document.querySelectorAll("button[data-scenario-view]")) button.addEventListener("click", () => setScenarioView(button.dataset.scenarioView));
@@ -2454,6 +2686,8 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
+globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisibleKeys: visibleLibraryGroupKeys,
+  onChanged: () => { renderSavedScenarios(); renderSavedResults(); } });
 globalThis.KPLResultStorage?.init({ api, onStatus: refreshResultsForStorage });
 globalThis.KPLBatchAppend?.init({api, onBusy: (id, busy) => {
   if (busy) state.pendingAppends.add(id); else state.pendingAppends.delete(id);
@@ -2468,7 +2702,7 @@ globalThis.KPLBatchAppend?.init({api, onBusy: (id, busy) => {
     if (!state.snapshot.experiments.some(member => member.id === run.id)) state.snapshot.experiments.push(run);
   }
   if (state.resultStatus === "completed") state.resultStatus = "all";
-  showToast(`Added ${count} runs. This group now has ${run.repetitions} total runs.`);
+  showToast(`Added ${count} runs. This batch now has ${run.repetitions} total runs.`);
   renderResultViews();
   void refreshSavedResults();
 }, onError: () => { void refreshSavedResults(); }});

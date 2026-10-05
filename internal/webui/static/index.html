@@ -8,6 +8,8 @@
   <link rel="icon" type="image/jpeg" href="/kpl-logo.jpg">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/resources-layout.css">
+  <link rel="stylesheet" href="/library-groups.css">
+  <link rel="stylesheet" href="/scenario-import.css">
 </head>
 <body class="dashboard-page">
   <a class="skip-link" href="#dashboardMain">Skip to dashboard</a>
@@ -428,6 +430,7 @@
               </div>
             </fieldset>
           </div>
+          <div id="resultGroupTools"></div>
           <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
           <details class="results-guide"><summary>About results, retries, and downloads</summary>
             <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
@@ -555,6 +558,7 @@
             <input id="scenarioSearch" type="search" placeholder="Name or ID" maxlength="256" autocomplete="off" aria-controls="scenarioLibraryList" aria-describedby="scenarioLibrarySummary">
             <button class="icon-button" id="clearScenarioSearch" type="button" aria-label="Clear scenario search" title="Clear search" hidden>×</button>
           </div>
+          <div id="scenarioGroupTools"></div>
           <p class="scenario-library-summary" id="scenarioLibrarySummary" role="status" aria-live="polite">Most recent first</p>
           <p class="scenario-library-status" id="scenarioLibraryStatus" role="status" aria-live="polite">Open the editor to load saved scenarios.</p>
           <p class="scenario-list-error" id="scenarioListError" role="alert" hidden></p>
@@ -566,9 +570,22 @@
               <h3 id="scenarioEditorHeading" tabindex="-1">Scenario editor</h3>
               <p id="scenarioEditingStatus">New unsaved scenario</p>
             </div>
-            <button class="secondary-button" id="chooseScenarioFile" type="button" title="Load a YAML file from your device (up to 1 MiB)">Choose file</button>
-            <input id="scenarioFile" type="file" accept=".yaml,.yml,application/yaml,text/yaml,application/x-yaml" aria-label="Choose a YAML scenario file" hidden>
+            <button class="secondary-button" id="chooseScenarioFile" type="button" title="Choose YAML files from your device (1 MiB each, up to 100 files and 16 MiB total)">Choose files</button>
+            <input id="scenarioFile" type="file" accept=".yaml,.yml,application/yaml,text/yaml,application/x-yaml" aria-label="Choose YAML scenario files" multiple hidden>
           </div>
+          <section id="scenarioImportReview" class="scenario-import-review" aria-labelledby="scenarioImportHeading" hidden>
+            <div class="scenario-import-heading">
+              <h3 id="scenarioImportHeading" tabindex="-1">Import scenarios</h3>
+              <p id="scenarioImportDestination"></p>
+            </div>
+            <p class="dialog-help">Saved names use filenames without their final extension. Each file is validated when saved.</p>
+            <p id="scenarioImportSummary" role="status" aria-live="polite"></p>
+            <ul id="scenarioImportList" aria-label="Selected scenario files"></ul>
+            <div class="scenario-import-actions">
+              <button class="secondary-button" id="cancelScenarioImport" type="button">Cancel</button>
+              <button class="primary-button" id="confirmScenarioImport" type="button">Import selected</button>
+            </div>
+          </section>
           <label for="scenarioName">Saved scenario name</label>
           <input id="scenarioName" type="text" maxlength="128" autocomplete="off" placeholder="Example: 100-peer churn baseline">
           <div class="scenario-yaml-heading">
@@ -628,7 +645,7 @@
       <label for="appendBatchCount">Additional runs</label>
       <input id="appendBatchCount" type="number" min="1" max="99" step="1" value="1" required inputmode="numeric" aria-describedby="appendBatchSummary appendBatchHelp">
       <p class="dialog-help" id="appendBatchSummary" role="status" aria-live="polite"></p>
-      <p class="dialog-help" id="appendBatchHelp">New runs use the same saved scenario and start after existing Peers are cleaned up. Group notes stay with this group. Analyze batch mean after completion to include all runs.</p>
+      <p class="dialog-help" id="appendBatchHelp">New runs use the same saved scenario and start after existing Peers are cleaned up. Batch notes stay with this batch. Analyze batch mean after completion to include all runs.</p>
       <p class="dialog-error" id="appendBatchError" role="alert"></p>
       <footer>
         <button class="secondary-button" id="cancelAppendBatch" type="button">Cancel</button>
@@ -668,6 +685,7 @@
   <script src="/metrics-carousel.js" defer></script>
   <script src="/agent-resources.js" defer></script>
   <script src="/service-resources.js" defer></script>
+  <script src="/library-groups.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/action-menus.js" defer></script>
 </body>

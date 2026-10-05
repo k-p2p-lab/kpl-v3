@@ -118,9 +118,9 @@
       loaded = false;
       conflict = false;
       input.value = "";
-      $("#resultNoteHeading").textContent = result.isBatch ? "Group note" : "Result note";
+      $("#resultNoteHeading").textContent = result.isBatch ? "Batch note" : "Result note";
       $("#resultNoteHelp").textContent = result.isBatch
-        ? "Shared across this group and its retries. Individual run notes stay separate. Leave empty and save to clear the note."
+        ? "Shared across this batch and its retries. Individual run notes stay separate. Leave empty and save to clear the note."
         : "Shared with everyone who can view this result. Leave empty and save to clear the note.";
       $("#resultNoteName").textContent = result.name || result.id;
       $("#resultNoteID").textContent = result.id;

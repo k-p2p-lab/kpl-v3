@@ -458,7 +458,7 @@ test('group note preview is independent of run notes and survives filtering and 
   state.resultQuery = 'retry'; state.resultStatus = 'completed'; api.renderSavedResults();
   const html = element('#savedResultsRows').innerHTML;
   assert.equal(html.split('data-group-note="group"').length - 1, 1);
-  assert.match(html, /Edit group note/);
+  assert.match(html, /Edit batch note/);
   assert.match(html, /&lt;script&gt;group&lt;\/script&gt;/);
   assert.ok(!html.includes('<script>'));
   assert.match(html, /Run observation/);
@@ -575,4 +575,36 @@ test('failed storage-driven refresh retries the same revision on the next storag
   resolve([{id:'saved',state:'completed',storage:{state:'archived'}}]);
   await new Promise(setImmediate);
   assert.equal(state.resultsLoadedStorageRevision,'archived');
+});
+
+test('shared library groups filter scenarios and whole result batches without changing batch analysis membership', () => {
+  const runs = [
+    { id: 'old', name: 'Previous', batchId: 'one', repetitions: 2, iteration: 1, state: 'failed', superseded: true },
+    { id: 'a', name: 'Series', batchId: 'one', repetitions: 2, iteration: 1, state: 'completed', previousRunIds: ['old'] },
+    { id: 'b', name: 'Series', batchId: 'one', repetitions: 2, iteration: 2, state: 'completed' },
+    { id: 'c', name: 'Other', state: 'completed' },
+  ];
+  const {api, state, element} = fixture(runs);
+  const members = {'scenario:scenario-a': 'research', 'batch:one': 'research'};
+  api.KPLLibraryGroups = {
+    matches: key => members[key] === 'research', isFiltered: () => true, refreshUI() {},
+    badgeMarkup: key => members[key] ? '<span>Research group</span>' : '',
+    selectionMarkup: key => '<input data-library-select-key="' + key + '">',
+  };
+  state.savedScenarios = [{id: 'scenario-a', name: 'Selected'}, {id: 'scenario-b', name: 'Other'}];
+  api.renderSavedResults();
+  const html = element('#savedResultsRows').innerHTML;
+  for (const id of ['old', 'a', 'b']) assert.ok(html.includes('data-result-images="' + id + '"'));
+  assert.ok(!html.includes('data-result-images="c"'));
+  assert.equal((html.match(/data-library-select-key="batch:one"/g) || []).length, 1, 'a batch has one organizing checkbox');
+  assert.equal(element('#resultFilterSummary').textContent, '3 of 4 saved runs');
+  assert.deepEqual(Array.from(api.filteredSavedScenarios(), item => item.id), ['scenario-a']);
+  assert.deepEqual(Array.from(api.visibleLibraryGroupKeys('results')), ['batch:one']);
+  const groupItems = Array.from(api.libraryGroupItems(), item => item.key);
+  assert.deepEqual(groupItems, ['scenario:scenario-a', 'scenario:scenario-b', 'batch:one', 'run:c']);
+  const batch = api.savedResultBatches(runs).find(item => item.id === 'one');
+  assert.equal(batch.completed, 2);
+  assert.equal(batch.previousRuns.length, 1);
+  state.resultQuery = 'a';
+  assert.deepEqual(Array.from(api.visibleLibraryGroupKeys('results')), ['batch:one']);
 });

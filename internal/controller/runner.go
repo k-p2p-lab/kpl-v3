@@ -85,6 +85,7 @@ type Server struct {
 	batchAnalysisJobs          map[string]*batchAnalysisJob
 	analysisWorkers            sync.WaitGroup
 	scenarioMu                 sync.Mutex
+	libraryGroupsMu            sync.Mutex
 	scenarioCacheMu            sync.Mutex
 	scenarioSummaries          map[string][]scenarioSummaryCacheEntry
 	scenarioSummaryFlights     map[string][]*scenarioSummaryFlight

@@ -33,6 +33,8 @@ import (
 type Server struct {
 	networkSchedule   *peerNetworkSchedule
 	networkApplied    atomic.Pointer[networkAppliedState]
+	profileUpdates    profileUpdateState
+	profileApplied    atomic.Pointer[profileAppliedState]
 	config            model.PeerProcessConfig
 	host              host.Host
 	dht               *dht.IpfsDHT
@@ -388,6 +390,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/publish", s.handlePublish)
 	mux.HandleFunc("/mesh-freeze", s.handleMeshFreeze)
 	mux.HandleFunc("/topology", s.handleTopology)
+	mux.HandleFunc("/profile", s.handleProfileUpdate)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.config.Token != "" && r.Method != http.MethodGet && r.Header.Get("Authorization") != "Bearer "+s.config.Token {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -590,6 +593,7 @@ func (s *Server) statusLoop(ctx context.Context) {
 func (s *Server) reportStatus(ctx context.Context, state, message string) error {
 	node := s.config.Node
 	s.addNetworkStatus(&node)
+	s.addProfileStatus(&node)
 	node.PeerID = s.host.ID().String()
 	node.State = state
 	node.Error = message

@@ -13,11 +13,11 @@ import (
 // Called under the Agent state lock. Only scheduled peers may update these
 // fields, and an older network revision cannot undo a later tc transition.
 func updateProcessNetwork(proc *process, metadata map[string]string) {
-	if proc.node.Metadata["networkSchedule"] == "" || metadata["networkPending"] != "false" {
+	if proc.node.Metadata["networkSchedule"] == "" && proc.node.Metadata["networkMutable"] != "true" || metadata["networkPending"] != "false" {
 		return
 	}
 	revision, err := strconv.Atoi(metadata["networkRevision"])
-	if err != nil || revision < 0 || revision > 128 {
+	if err != nil || revision < 0 || revision > 128 && proc.node.Metadata["networkMutable"] != "true" || revision > 2147483647 {
 		return
 	}
 	if previous, err := strconv.Atoi(proc.node.Metadata["networkRevision"]); err == nil && revision <= previous {

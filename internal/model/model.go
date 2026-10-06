@@ -99,6 +99,8 @@ type AgentHeartbeat struct {
 const AgentAdmissionRetryHeader = "X-KPL-Admission-Retry"
 
 type CreateNodeRequest struct {
+	NetworkMutable      bool       `json:"networkMutable,omitempty"`
+	ProfileRevision     uint64     `json:"profileRevision,omitempty"`
 	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
 	ID                  string     `json:"id"`
 	RunID               string     `json:"runId"`
@@ -243,6 +245,8 @@ type Snapshot struct {
 }
 
 type PeerProcessConfig struct {
+	NetworkMutable      bool       `json:"networkMutable,omitempty"`
+	ProfileRevision     uint64     `json:"profileRevision,omitempty"`
 	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
 	Node                Node       `json:"node"`
 	NodeConfig          NodeConfig `json:"nodeConfig"`

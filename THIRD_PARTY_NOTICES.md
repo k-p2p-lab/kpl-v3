@@ -4,7 +4,7 @@ This file identifies third-party source included directly in K-P2PLab and select
 
 ## go-libp2p-pubsub
 
-K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation, optional HopWave forwarding, and opt-in mesh freezing.
+K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observation, optional HopWave forwarding, opt-in mesh freezing, and runtime routing parameter updates.
 
 - Upstream project: [libp2p/go-libp2p-pubsub](https://github.com/libp2p/go-libp2p-pubsub)
 - Upstream version: [v0.13.1](https://github.com/libp2p/go-libp2p-pubsub/tree/v0.13.1)
@@ -39,6 +39,8 @@ The copy also bounds periodic direct-peer reconnect work, cancels initial timers
 The optional mesh freeze patch adds `WithMeshFreeze()` and `PubSub.FreezeMesh(ctx)` to pin GossipSub mesh membership after a runtime command. It suppresses automatic and incoming GRAFT/PRUNE membership changes while retaining transport cleanup and ordinary message processing. The capability is disabled by default; its implementation and regression tests are recorded in the patch notes below.
 
 The related [explicit mesh plan extension](third_party/go-libp2p-pubsub/mesh_plan.go) adds `ValidateMeshPlan` and `SetMeshAndFreeze` under the same opt-in capability. It validates a supplied neighbor set, installs one topic's membership and freezes all local topic meshes in one event-loop operation, preserving existing score/connection accounting without synthetic wire controls. Graph generation itself lives in KPL's `internal/topology` package. This extension changes no protobuf schema, protocol ID or dependency version.
+
+The [runtime parameter extension](third_party/go-libp2p-pubsub/runtime_params.go) adds acknowledged, validated updates of degree, gossip factor and HopWave forwarding parameters on the router event loop. It preserves mesh freezing and construction-time timers, queues, caches and scoring. The separate file changes no defaults, dependencies, protobufs or protocol IDs.
 
 K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go) and [HopWave](third_party/go-libp2p-pubsub/kpl_hopwave_test.go) regression tests, [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), a [SHA-256 manifest of the pristine upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json), and a [manifest of HopWave reference sources](third_party/go-libp2p-pubsub/KPL-HOPWAVE-SHA256.json). Original license files are unchanged; the reference fork retains the same licenses. The root [go.mod](go.mod) selects this local copy through a `replace` directive.
 

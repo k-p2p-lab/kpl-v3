@@ -1,0 +1,39 @@
+version: 3
+name: Scheduled mesh degree and network conditions
+seed: 42
+onExit: drain
+profiles:
+  baseline:
+    type: gossip-only
+    gossipsub:
+      topics: [blocks]
+      params: {d: 6, dLow: 5, dHigh: 12, dScore: 3, dOut: 2}
+    network: {delay: 10ms}
+phases:
+  - {action: join, group: workers, profile: baseline, count: 8, parallel: true}
+  - {action: wait-ready, group: workers, timeout: 2m}
+  - action: schedule
+    name: Change worker conditions
+    group: workers
+    profile: baseline
+    job: worker-conditions
+    await: false
+    timeout: 2m
+    schedule:
+      reference: phase-start
+      changes:
+        - after: 5s
+          set:
+            gossipsub: {params: {d: 8}}
+            network: {delay: 100ms}
+        - after: 20s
+          set:
+            gossipsub: {params: {d: 6}}
+            network: {delay: 10ms}
+  - {action: wait, duration: 10s}
+  - {action: join, group: workers, profile: baseline, count: 2, parallel: true}
+  - {action: wait-ready, group: workers, timeout: 2m}
+  - {action: publish, group: workers, count: 10, topic: blocks, interval: {model: fixed, value: 1s}}
+  - {action: wait-jobs, jobs: [worker-conditions], timeout: 2m}
+  - {action: wait, duration: 10s}
+  - {action: stop-all}

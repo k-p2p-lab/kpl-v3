@@ -28,37 +28,39 @@ type Scenario struct {
 }
 
 type Phase struct {
-	Name            string                `json:"name" yaml:"name"`
-	Job             string                `json:"job,omitempty" yaml:"job,omitempty"`
-	Jobs            []string              `json:"jobs,omitempty" yaml:"jobs,omitempty"`
-	Action          string                `json:"action" yaml:"action"`
-	OnError         string                `json:"onError,omitempty" yaml:"onError,omitempty"`
-	AgentID         string                `json:"agentId,omitempty" yaml:"agentId,omitempty"`
-	Placement       string                `json:"placement,omitempty" yaml:"placement,omitempty"`
-	Group           string                `json:"group" yaml:"group"`
-	NodeIDs         []string              `json:"nodeIds,omitempty" yaml:"nodeIds,omitempty"`
-	PeerIDs         []string              `json:"peerIds,omitempty" yaml:"peerIds,omitempty"`
-	Role            string                `json:"role" yaml:"role"`
-	Profile         string                `json:"profile,omitempty" yaml:"profile,omitempty"`
-	NodeType        string                `json:"type,omitempty" yaml:"type,omitempty"`
-	Count           int                   `json:"count" yaml:"count"`
-	Repeat          int                   `json:"repeat,omitempty" yaml:"repeat,omitempty"`
-	Parallel        bool                  `json:"parallel,omitempty" yaml:"parallel,omitempty"`
-	Parallelism     int                   `json:"parallelism,omitempty" yaml:"parallelism,omitempty"`
-	Await           *bool                 `json:"await,omitempty" yaml:"await,omitempty"`
-	Duration        string                `json:"duration" yaml:"duration"`
-	Timeout         string                `json:"timeout" yaml:"timeout"`
-	Message         string                `json:"message,omitempty" yaml:"message,omitempty"`
-	ReadyRatio      float64               `json:"readyRatio" yaml:"readyRatio"`
-	MinCount        int                   `json:"minCount,omitempty" yaml:"minCount,omitempty"`
-	PayloadSize     int                   `json:"payloadSize" yaml:"payloadSize"`
-	PayloadEncoding string                `json:"payloadEncoding,omitempty" yaml:"payloadEncoding,omitempty"`
-	DeliveryWindow  string                `json:"deliveryWindow,omitempty" yaml:"deliveryWindow,omitempty"`
-	Topic           string                `json:"topic" yaml:"topic"`
-	Topology        *model.TopologyConfig `json:"topology,omitempty" yaml:"topology,omitempty"`
-	Interval        Distribution          `json:"interval" yaml:"interval"`
-	Lifetime        Distribution          `json:"lifetime" yaml:"lifetime"`
-	Node            model.NodeConfig      `json:"node" yaml:"node"`
+	Name            string                 `json:"name" yaml:"name"`
+	Job             string                 `json:"job,omitempty" yaml:"job,omitempty"`
+	Jobs            []string               `json:"jobs,omitempty" yaml:"jobs,omitempty"`
+	Action          string                 `json:"action" yaml:"action"`
+	OnError         string                 `json:"onError,omitempty" yaml:"onError,omitempty"`
+	AgentID         string                 `json:"agentId,omitempty" yaml:"agentId,omitempty"`
+	Placement       string                 `json:"placement,omitempty" yaml:"placement,omitempty"`
+	Group           string                 `json:"group" yaml:"group"`
+	NodeIDs         []string               `json:"nodeIds,omitempty" yaml:"nodeIds,omitempty"`
+	PeerIDs         []string               `json:"peerIds,omitempty" yaml:"peerIds,omitempty"`
+	Role            string                 `json:"role" yaml:"role"`
+	Profile         string                 `json:"profile,omitempty" yaml:"profile,omitempty"`
+	NodeType        string                 `json:"type,omitempty" yaml:"type,omitempty"`
+	Count           int                    `json:"count" yaml:"count"`
+	Repeat          int                    `json:"repeat,omitempty" yaml:"repeat,omitempty"`
+	Parallel        bool                   `json:"parallel,omitempty" yaml:"parallel,omitempty"`
+	Parallelism     int                    `json:"parallelism,omitempty" yaml:"parallelism,omitempty"`
+	Await           *bool                  `json:"await,omitempty" yaml:"await,omitempty"`
+	Duration        string                 `json:"duration" yaml:"duration"`
+	Timeout         string                 `json:"timeout" yaml:"timeout"`
+	Message         string                 `json:"message,omitempty" yaml:"message,omitempty"`
+	ReadyRatio      float64                `json:"readyRatio" yaml:"readyRatio"`
+	MinCount        int                    `json:"minCount,omitempty" yaml:"minCount,omitempty"`
+	PayloadSize     int                    `json:"payloadSize" yaml:"payloadSize"`
+	PayloadEncoding string                 `json:"payloadEncoding,omitempty" yaml:"payloadEncoding,omitempty"`
+	DeliveryWindow  string                 `json:"deliveryWindow,omitempty" yaml:"deliveryWindow,omitempty"`
+	Topic           string                 `json:"topic" yaml:"topic"`
+	Topology        *model.TopologyConfig  `json:"topology,omitempty" yaml:"topology,omitempty"`
+	Schedule        *model.ProfileSchedule `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+	NetworkMutable  bool                   `json:"-" yaml:"-"`
+	Interval        Distribution           `json:"interval" yaml:"interval"`
+	Lifetime        Distribution           `json:"lifetime" yaml:"lifetime"`
+	Node            model.NodeConfig       `json:"node" yaml:"node"`
 }
 
 type Distribution = distribution.Distribution
@@ -165,13 +167,23 @@ func (s *Scenario) Validate() error {
 		if p.Action != "publish" && p.DeliveryWindow != "" {
 			return fmt.Errorf("phase %q: deliveryWindow is only supported for publish", p.Name)
 		}
-		if (p.NodeIDs != nil || p.PeerIDs != nil) && (s.Version != 3 || p.Action != "mesh-freeze" && p.Action != "topology") {
-			return fmt.Errorf("phase %q: nodeIds and peerIds require version 3 mesh-freeze or topology", p.Name)
+		if (p.NodeIDs != nil || p.PeerIDs != nil) && (s.Version != 3 || p.Action != "mesh-freeze" && p.Action != "topology" && p.Action != "schedule") {
+			return fmt.Errorf("phase %q: nodeIds and peerIds require version 3 mesh-freeze, topology, or schedule", p.Name)
+		}
+		if p.Schedule != nil && p.Action != "schedule" {
+			return fmt.Errorf("phase %q: schedule configuration requires the schedule action", p.Name)
 		}
 		if p.Topology != nil && p.Action != "topology" {
 			return fmt.Errorf("phase %q: topology configuration is only supported for the topology action", p.Name)
 		}
 		switch p.Action {
+		case "schedule":
+			if s.Version != 3 {
+				return fmt.Errorf("phase %q: schedule requires version 3", p.Name)
+			}
+			if err := validateSchedulePhase(p); err != nil {
+				return fmt.Errorf("phase %q: %w", p.Name, err)
+			}
 		case "topology":
 			if s.Version != 3 {
 				return fmt.Errorf("phase %q: topology requires version 3", p.Name)
@@ -327,8 +339,8 @@ func (s *Scenario) Validate() error {
 		default:
 			return fmt.Errorf("phase %q: unknown action %q", p.Name, p.Action)
 		}
-		if !p.ShouldAwait() && p.Action != "join" && p.Action != "publish" && p.Action != "leave" {
-			return fmt.Errorf("phase %q: await:false is only supported for join, publish, and leave", p.Name)
+		if !p.ShouldAwait() && p.Action != "join" && p.Action != "publish" && p.Action != "leave" && p.Action != "schedule" {
+			return fmt.Errorf("phase %q: await:false is only supported for join, publish, leave, and schedule", p.Name)
 		}
 		if p.Parallel && p.Action != "join" && p.Action != "publish" && p.Action != "leave" {
 			return fmt.Errorf("phase %q: parallel is only supported for join, publish, and leave", p.Name)
@@ -340,7 +352,7 @@ func (s *Scenario) Validate() error {
 			knownJobs[p.Job] = struct{}{}
 		}
 	}
-	return nil
+	return s.validateProfileSchedules()
 }
 
 func validateMeshFreezePhase(p *Phase) error {

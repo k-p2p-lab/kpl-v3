@@ -190,7 +190,17 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 			return err
 		}
 		var node model.Node
-		err := s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node)
+		effective, releaseProfile, err := profileCreateRequest(ctx, request)
+		if err != nil {
+			s.releaseReservation(request.ID)
+			return err
+		}
+		err = s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", effective, &node)
+		created := false
+		if err == nil {
+			created = s.recordCreatedNode(effective, agent.ID, node, agent.StartedAt)
+		}
+		releaseProfile()
 		var deferred *agentAdmissionDeferredError
 		if errors.As(err, &deferred) {
 			s.deferAgentAdmission(agent, deferred, request.RunID)
@@ -220,7 +230,7 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 			s.releaseReservation(request.ID)
 			return fmt.Errorf("create node %s on agent %s: %w", request.ID, agent.ID, err)
 		}
-		if !s.recordCreatedNode(request, agent.ID, node, agent.StartedAt) {
+		if !created {
 			s.releaseReservation(request.ID)
 			return fmt.Errorf("agent %s changed instance while creating node %s", agent.ID, request.ID)
 		}

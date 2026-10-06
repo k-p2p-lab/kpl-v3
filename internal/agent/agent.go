@@ -530,11 +530,15 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		node.Metadata["networkPending"] = "true"
 	}
 	node.Metadata["seed"] = strconv.FormatInt(request.Seed, 10)
+	node.Metadata["networkMutable"] = strconv.FormatBool(request.NetworkMutable)
+	node.Metadata["profileRevision"] = strconv.FormatUint(request.ProfileRevision, 10)
 	if request.Lifetime != "" {
 		node.Metadata["lifetime"] = request.Lifetime
 		node.Metadata["lifetimeBasis"] = "container-created"
 	}
 	peerConfig := model.PeerProcessConfig{
+		NetworkMutable:      request.NetworkMutable,
+		ProfileRevision:     request.ProfileRevision,
 		ExperimentStartedAt: request.ExperimentStartedAt,
 		Node:                node,
 		NodeConfig:          resolvedConfig,
@@ -818,6 +822,7 @@ func (s *Server) updateNode(update model.Node) error {
 		proc.node.OverlayObservedAt = update.OverlayObservedAt
 	}
 	updateProcessNetwork(proc, update.Metadata)
+	updateProcessProfile(proc, update.Metadata)
 	// Freeze is one-way. An older in-flight status must never undo a successful
 	// command acknowledgement, and a Peer cannot enable a disabled capability.
 	if proc.node.Metadata["meshFreezeEnabled"] == "true" && update.Metadata["meshFrozen"] == "true" {

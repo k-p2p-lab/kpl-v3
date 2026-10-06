@@ -209,6 +209,8 @@ func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "profile":
+		s.handleProfileUpdate(w, r, parts[0])
 	case "mesh-freeze":
 		s.handleMeshFreeze(w, r, parts[0])
 	case "topology":

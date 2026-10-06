@@ -23,7 +23,7 @@ The implementation source used for this port is [kmu-comnet/go-libp2p-pubsub, ho
 - With HopWave enabled, default and per-topic message ID callbacks receive the message without mutable propagation/hop fields. This preserves one ID across eager/lazy forwarding, deduplication and IWANT cache lookup even for callbacks that serialize the entire protobuf. Other fields are preserved. Disabled HopWave retains the original callback input; mixed settings require an ID function based only on stable fields.
 - Missing, negative and overflowing counters remain unknown. Unknown counters use full publication forwarding. Wire fields are unauthenticated reports and require compatible instrumentation/settings along the path for interpretation. Protocol IDs remain GossipSub's, as in the fork; unpatched signed-message verifiers do not support the extension.
 
-Modified upstream implementation files are `score.go`, `pubsub.go`, `topic.go`, `gossipsub.go`, `comm.go`, `midgen.go`, `sign.go`, `trace.go` and the four protobuf schema/binding files. KPL adds `hopwave.go`, `mesh_freeze.go`, `mesh_plan.go`, score/HopWave/lifecycle/mesh regression tests and the two provenance manifests. The upstream license files are retained unchanged.
+Modified upstream implementation files are `score.go`, `pubsub.go`, `topic.go`, `gossipsub.go`, `comm.go`, `midgen.go`, `sign.go`, `trace.go` and the four protobuf schema/binding files. KPL adds `hopwave.go`, `mesh_freeze.go`, `mesh_plan.go`, `runtime_params.go`, score/HopWave/lifecycle/mesh/runtime regression tests and the two provenance manifests. The upstream license files are retained unchanged.
 
 `kpl_hopwave_audit_test.go` covers mesh/fanout/flood recipient parity with disabled, metadata-only and full-forwarding options, hop interval boundaries, lazy recovery, and custom message IDs. `kpl_score_audit_test.go` checks legacy inspector behavior, asynchronous callback ownership and unchanged score/retention arithmetic.
 
@@ -52,6 +52,12 @@ This KPL extension is independent of HopWave and disabled by default. `WithMeshF
 
 `kpl_mesh_freeze_parity_test.go` exercises ordinary and opted-in-but-unfrozen routing, control retries, cache maintenance, TCP delivery and other routers. `kpl_mesh_freeze_semantics_test.go` covers joined-topic versus fanout semantics and lazy recovery for new topics, with and without HopWave. `kpl_mesh_freeze_resource_test.go` covers upstream positive/negative score retention on disconnect and protocol capabilities when pinned peers reconnect.
 
+## Runtime routing parameters
+
+`runtime_params.go` adds `PubSub.SetGossipSubRuntimeParams(ctx, values)` and `GossipSubRuntimeParamsSnapshot(ctx)`. The setter validates a complete set of D/Dlo/Dhi/Dscore/Dout/Dlazy, GossipFactor and HopwaveFactor/HopwaveInterval values, then updates only those fields in the existing router event loop. No initialization option or default changes. Non-GossipSub routers are rejected. Cancellation before the event-loop callback changes nothing; a cancellation racing application may have taken effect.
+
+Normal heartbeat maintenance uses the new degrees without restarting PubSub. Frozen meshes stay frozen; fanout, gossip and optional HopWave continue using their existing rules. Timers, worker queues, message caches, scoring, protocol IDs and wire schemas are unchanged. The entire parameter struct is never replaced because worker goroutines read other immutable fields. `kpl_runtime_params_test.go` checks acknowledgment ordering, canceled queued calls, bounds, frozen membership and preservation of unrelated settings. The source-provenance checksum manifests and original license files remain unchanged.
+
 ## Integration and upgrades
 
 ### Explicit mesh plans
@@ -66,4 +72,4 @@ Already frozen identical membership succeeds even after a link disappears; any d
 
 The root `go.mod` selects this local replacement; Docker copies it before dependency download. KPL exposes routing through `gossipsub.hopwave` and `gossipsub.params.hopwaveFactor` / `hopwaveInterval`. Operator and log contracts live in the wiki's [Protocol Options](https://github.com/k-p2p-lab/kpl-v3/wiki/Protocol-Options#hopwave).
 
-When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply the score inspection, HopWave, mesh-freeze/plan and resource-lifetime patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, mesh plan/freeze lifecycle/control tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave and mesh network tests explicitly use TCP, Noise and Yamux, matching the application transport.
+When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply the score inspection, HopWave, mesh-freeze/plan, runtime-parameter and resource-lifetime patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, mesh plan/freeze lifecycle/control tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave and mesh network tests explicitly use TCP, Noise and Yamux, matching the application transport.

@@ -142,7 +142,7 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 		"--security-opt", "no-new-privileges", "--init",
 		"--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=2",
 	}
-	if config.NodeConfig.Network.Enabled() {
+	if config.NodeConfig.Network.Enabled() || config.NetworkMutable {
 		args = append(args, "--cap-add", "NET_ADMIN")
 	}
 	args = append(args, d.image, "peer", "--config", peerContainerConfig)

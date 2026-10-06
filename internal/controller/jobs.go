@@ -16,12 +16,13 @@ type phaseJob struct {
 }
 
 type phaseJobs struct {
-	mu   sync.RWMutex
-	jobs map[string]*phaseJob
+	profiles *runProfileState
+	mu       sync.RWMutex
+	jobs     map[string]*phaseJob
 }
 
 func newPhaseJobs() *phaseJobs {
-	return &phaseJobs{jobs: make(map[string]*phaseJob)}
+	return &phaseJobs{jobs: make(map[string]*phaseJob), profiles: newRunProfileState()}
 }
 
 func (j *phaseJobs) start(id string, run func() error, completed func(error)) error {

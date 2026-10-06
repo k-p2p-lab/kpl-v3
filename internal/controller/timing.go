@@ -51,6 +51,11 @@ func newTimingPlan(spec scenario.Scenario) *timingPlan {
 	for i, phase := range spec.Phases {
 		var seconds float64
 		switch phase.Action {
+		case "schedule":
+			if phase.Schedule != nil && len(phase.Schedule.Changes) > 0 {
+				duration, _ := time.ParseDuration(phase.Schedule.Changes[len(phase.Schedule.Changes)-1].After)
+				seconds = duration.Seconds()
+			}
 		case "wait":
 			duration, _ := time.ParseDuration(phase.Duration)
 			seconds = duration.Seconds()
@@ -138,6 +143,9 @@ func projectRunDuration(plan *timingPlan, observed []phaseTiming, start time.Tim
 			seconds = history.phases[i] / float64(history.samples[i])
 		}
 		end := boundedEstimate(begin + seconds)
+		if !learned && phase.Action == "schedule" && phase.Schedule != nil && phase.Schedule.Clock() == "experiment-start" {
+			end = max(begin, seconds)
+		}
 		if !learned && (phase.Action == "wait-jobs" || phase.Action == "wait-ready" && len(phase.Jobs) > 0) {
 			dependency := begin
 			if len(phase.Jobs) == 0 {

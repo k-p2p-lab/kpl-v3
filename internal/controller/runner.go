@@ -234,7 +234,8 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 			runErr = err
 			break
 		}
-		s.state.recordPhaseTiming(experiment.ID, index, false, time.Now().UTC())
+		phaseStarted := time.Now()
+		s.state.recordPhaseTiming(experiment.ID, index, false, phaseStarted.UTC())
 		s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 			current.Phase = index + 1
 			current.PhaseName = phase.Name
@@ -242,6 +243,9 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		phaseSeed := rng.Int63()
 		phaseGeneration := generation
 		execute := func(executionCtx context.Context) error {
+			if phase.Action == "schedule" {
+				executionCtx = context.WithValue(executionCtx, profilePhaseStartKey{}, phaseStarted)
+			}
 			defer func() { s.state.recordPhaseTiming(experiment.ID, index, true, time.Now().UTC()) }()
 			phaseRNG := rand.New(rand.NewSource(phaseSeed))
 			for repetition := 0; repetition < phase.Repeat; repetition++ {
@@ -418,7 +422,12 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand, jobs *phaseJobs, shutdownTimeout time.Duration) error {
 	switch phase.Action {
 	case "join":
+		if jobs != nil && jobs.profiles != nil {
+			ctx = context.WithValue(ctx, profileRuntimeKey{}, jobs.profiles)
+		}
 		return s.runJoin(ctx, runID, generation, phase, rng)
+	case "schedule":
+		return s.runProfileSchedule(ctx, runID, generation, phase, jobs.profiles)
 	case "wait":
 		duration, _ := time.ParseDuration(phase.Duration)
 		return sleepContext(ctx, duration)
@@ -461,6 +470,9 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 		defer cleanupCancel()
 		stopErr := s.stopRunGeneration(cleanupCtx, runID, generation)
 		refreshErr := s.refreshAgentState(cleanupCtx)
+		if stopErr == nil && refreshErr == nil {
+			jobs.profiles = newRunProfileState()
+		}
 		return errors.Join(refreshErr, stopErr)
 	case "log":
 		s.logger.Info("scenario message", "run", runID, "message", phase.Message)
@@ -483,6 +495,7 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 			lifetime = phase.Lifetime.Sample(rng).String()
 		}
 		requests = append(requests, model.CreateNodeRequest{
+			NetworkMutable:      phase.NetworkMutable,
 			ExperimentStartedAt: experimentStartedAt,
 			ID:                  nodeID,
 			RunID:               runID,
@@ -1373,7 +1386,7 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	client := s.client
-	if method == http.MethodPost && (strings.HasSuffix(path, "/mesh-freeze") || strings.HasSuffix(path, "/topology")) {
+	if method == http.MethodPost && (strings.HasSuffix(path, "/mesh-freeze") || strings.HasSuffix(path, "/topology") || strings.HasSuffix(path, "/profile")) {
 		// Mesh control phases supply deadlines across their target peers.
 		freezeClient := *s.client
 		freezeClient.Timeout = 0
@@ -1405,20 +1418,24 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 	}
 	if output != nil {
-		if strings.HasSuffix(path, "/topology") {
-			data, err := io.ReadAll(io.LimitReader(resp.Body, model.MaxTopologyRequestBytes+1))
+		if strings.HasSuffix(path, "/topology") || strings.HasSuffix(path, "/profile") {
+			limit := model.MaxTopologyRequestBytes
+			if strings.HasSuffix(path, "/profile") {
+				limit = model.MaxProfileUpdateBytes
+			}
+			data, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 			if err != nil {
 				return err
 			}
-			if len(data) > model.MaxTopologyRequestBytes {
-				return errors.New("topology acknowledgement exceeds body limit")
+			if len(data) > limit {
+				return errors.New("control acknowledgement exceeds body limit")
 			}
 			decoder := json.NewDecoder(bytes.NewReader(data))
 			if err := decoder.Decode(output); err != nil {
 				return err
 			}
 			if err := decoder.Decode(new(any)); err != io.EOF {
-				return errors.New("invalid topology acknowledgement: expected one JSON value")
+				return errors.New("invalid control acknowledgement: expected one JSON value")
 			}
 			return nil
 		}

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -34,10 +36,49 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request, nodeID s
 	}
 	response, err := s.proxyTopology(r.Context(), nodeID, request)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, topologyProxyErrorStatus(err), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// Preserve retryable Peer responses separately from permanent plan conflicts
+// and malformed acknowledgements. The Controller must not infer retryability
+// from an error message returned by a Peer.
+type topologyPeerResponseError struct {
+	statusCode int
+	status     string
+	message    string
+}
+
+func (e *topologyPeerResponseError) Error() string {
+	return fmt.Sprintf("peer returned %s: %s", e.status, e.message)
+}
+
+func topologyProxyErrorStatus(err error) int {
+	var responseErr *topologyPeerResponseError
+	if errors.As(err, &responseErr) {
+		switch responseErr.statusCode {
+		case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return responseErr.statusCode
+		default:
+			return http.StatusBadGateway
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return http.StatusGatewayTimeout
+	}
+	if errors.Is(err, context.Canceled) {
+		return http.StatusServiceUnavailable
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		if networkErr.Timeout() {
+			return http.StatusGatewayTimeout
+		}
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusBadGateway
 }
 
 func (s *Server) proxyTopology(ctx context.Context, nodeID string, request model.TopologyRequest) (model.TopologyResponse, error) {
@@ -67,7 +108,7 @@ func (s *Server) proxyTopology(ctx context.Context, nodeID string, request model
 	if len(data) > model.MaxTopologyRequestBytes {
 		return result, fmt.Errorf("topology request exceeds 1 MiB")
 	}
-	ctx, cancel := context.WithTimeout(ctx, model.TopologyCommandTimeout)
+	ctx, cancel := context.WithTimeout(ctx, model.TopologyProxyTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/topology", bytes.NewReader(data))
 	if err != nil {
@@ -93,7 +134,7 @@ func (s *Server) proxyTopology(ctx context.Context, nodeID string, request model
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return result, fmt.Errorf("peer returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+		return result, &topologyPeerResponseError{statusCode: resp.StatusCode, status: resp.Status, message: strings.TrimSpace(string(message))}
 	}
 	data, err = io.ReadAll(io.LimitReader(resp.Body, model.MaxTopologyRequestBytes+1))
 	if err != nil {

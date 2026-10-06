@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -188,5 +191,102 @@ func TestTopologyProxyRechecksGenerationAfterNetworkWithoutHoldingLock(t *testin
 	}
 	if proc.node.Metadata["meshFrozen"] == "true" {
 		t.Fatal("late acknowledgement changed replacement metadata")
+	}
+}
+
+func TestTopologyProxyPreservesRetryablePeerStatus(t *testing.T) {
+	id := topologyProxyTestID(t)
+	for _, testCase := range []struct {
+		name   string
+		status int
+		body   string
+		want   int
+	}{
+		{"peer timeout", http.StatusGatewayTimeout, "waiting for topology subscriptions", http.StatusGatewayTimeout},
+		{"peer unavailable", http.StatusServiceUnavailable, "router is stopping", http.StatusServiceUnavailable},
+		{"plan conflict", http.StatusConflict, "context deadline exceeded", http.StatusBadGateway},
+		{"invalid plan", http.StatusBadRequest, "invalid topology request", http.StatusBadGateway},
+		{"internal failure", http.StatusInternalServerError, "temporary", http.StatusBadGateway},
+		{"malformed acknowledgement", http.StatusOK, "context deadline exceeded", http.StatusBadGateway},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer endpoint.Close()
+			proc := meshFreezeTestProcess(endpoint.URL)
+			proc.node.PeerID = id
+			s := &Server{client: endpoint.Client(), processes: map[string]*process{"node": proc}}
+			body, _ := json.Marshal(topologyProxyRequest("prepare"))
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node/topology", bytes.NewReader(body)))
+			if w.Code != testCase.want {
+				t.Fatalf("status=%d, want=%d: %s", w.Code, testCase.want, w.Body)
+			}
+			if proc.node.Metadata["meshFrozen"] == "true" {
+				t.Fatal("failed preparation changed freeze metadata")
+			}
+		})
+	}
+}
+
+func TestTopologyProxyClassifiesTransportFailureAndAllowsPeerResponseBudget(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"proxy timeout", context.DeadlineExceeded, http.StatusGatewayTimeout},
+		{"transport timeout", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ETIMEDOUT}, http.StatusGatewayTimeout},
+		{"connection refused", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}, http.StatusServiceUnavailable},
+		{"canceled", context.Canceled, http.StatusServiceUnavailable},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			proc := meshFreezeTestProcess("http://peer.test")
+			proc.node.PeerID = topologyProxyTestID(t)
+			var calls atomic.Int32
+			client := &http.Client{Timeout: time.Millisecond, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				deadline, ok := r.Context().Deadline()
+				remaining := time.Until(deadline)
+				if !ok || remaining <= model.TopologyCommandTimeout || remaining > model.TopologyProxyTimeout {
+					t.Errorf("proxy did not leave time for Peer failure response: remaining=%s", remaining)
+				}
+				return nil, testCase.err
+			})}
+			s := &Server{client: client, processes: map[string]*process{"node": proc}}
+			body, _ := json.Marshal(topologyProxyRequest("prepare"))
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node/topology", bytes.NewReader(body)))
+			if w.Code != testCase.want || calls.Load() != 1 {
+				t.Fatalf("transport failure classification: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body)
+			}
+			if client.Timeout != time.Millisecond {
+				t.Fatal("topology changed the shared HTTP client timeout")
+			}
+		})
+	}
+}
+
+func TestTopologyProxyStopsAtParentDeadline(t *testing.T) {
+	proc := meshFreezeTestProcess("http://peer.test")
+	proc.node.PeerID = topologyProxyTestID(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	parentDeadline, _ := ctx.Deadline()
+	var calls atomic.Int32
+	s := &Server{processes: map[string]*process{"node": proc}, client: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		deadline, ok := r.Context().Deadline()
+		if !ok || !deadline.Equal(parentDeadline) {
+			t.Errorf("proxy extended the parent deadline: %s, want %s", deadline, parentDeadline)
+		}
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}}
+	_, err := s.proxyTopology(ctx, "node", topologyProxyRequest("prepare"))
+	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 || proc.node.Metadata["meshFrozen"] == "true" {
+		t.Fatalf("proxy did not stop with the parent deadline: calls=%d err=%v", calls.Load(), err)
 	}
 }

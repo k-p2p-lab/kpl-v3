@@ -141,6 +141,50 @@ test('an older GET cannot overwrite a newer mutation response',async()=>{
   assert.equal(h.groups.matches('run:single'),false);
 });
 
+test('fresh refresh reads memberships after an older pending GET completes',async()=>{
+  const stale=deferred();let reads=0;
+  const updated={...initial(),revision:'3',memberships:{...initial().memberships,'batch:new':'g1'}};
+  const h=harness(async()=>{
+    if(++reads===1)return initial();
+    if(reads===2)return stale.promise;
+    return updated;
+  });await h.initialized;
+  h.groups.setFilter('g1');
+  const changes=h.changes();
+  const older=h.groups.refresh();
+  const fresh=h.groups.refresh({fresh:true});
+  const duplicate=h.groups.refresh({fresh:true});
+  stale.resolve({...initial(),revision:'2',memberships:{'scenario:one':'g2'}});
+  await Promise.all([older,fresh,duplicate]);
+  assert.equal(reads,3,'fresh callers should share one new read after the stale request');
+  assert.equal(h.changes(),changes+1,'the stale snapshot must not be adopted');
+  assert.equal(h.groups.matches('scenario:one'),true);
+  assert.equal(h.groups.matches('batch:new'),true);
+});
+
+test('fresh refresh proceeds after a failed stale read and a pending local mutation',async()=>{
+  const stale=deferred(),write=deferred();let reads=0;
+  const updated={...initial(),revision:'3',memberships:{'scenario:one':'g2','batch:new':'g1'}};
+  const h=harness(async(path,options)=>{
+    if(options.method)return write.promise;
+    if(++reads===1)return initial();
+    if(reads===2)return stale.promise;
+    return updated;
+  });await h.initialized;
+  const older=h.groups.refresh();
+  const rejected=assert.rejects(older,/old read failed/);
+  const moving=h.groups.assign(['scenario:one'],'g2');
+  const fresh=h.groups.refresh({fresh:true});
+  stale.reject(new Error('old read failed'));
+  await rejected;await nextTurn();
+  assert.equal(reads,2,'the new read must wait for the mutation response');
+  write.resolve({...initial(),revision:'2',memberships:{'scenario:one':'g2'}});
+  await Promise.all([moving,fresh]);
+  assert.equal(reads,3);
+  h.groups.setFilter('g1');assert.equal(h.groups.matches('batch:new'),true);
+  h.groups.setFilter('g2');assert.equal(h.groups.matches('scenario:one'),true);
+});
+
 test('overlapping writes are rejected while an existing move is in progress',async()=>{
   const write=deferred();let writes=0;
   const h=harness(async(path,options)=>{if(options.method){writes++;return write.promise;}return initial();});await h.initialized;

@@ -24,8 +24,15 @@ type submissionReceipt struct {
 }
 
 func (s *Server) submitScenario(ctx context.Context, raw []byte, count int, key string) (model.Experiment, error) {
+	return s.submitScenarioFromLibrary(ctx, raw, count, key, "")
+}
+
+func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, count int, key, scenarioID string) (model.Experiment, error) {
+	if scenarioID != "" && !validScenarioID(scenarioID) {
+		return model.Experiment{}, errors.New("scenarioId must identify a saved scenario")
+	}
 	if key == "" {
-		return s.StartScenarioRepeated(ctx, raw, count)
+		return s.startScenarioRepeated(ctx, raw, count, "", scenarioID)
 	}
 	if len(key) > 128 || strings.ContainsAny(key, "\r\n\x00") {
 		return model.Experiment{}, errors.New("invalid submission key")
@@ -33,7 +40,13 @@ func (s *Server) submitScenario(ctx context.Context, raw []byte, count int, key 
 	sum := sha256.Sum256([]byte(key))
 	name := hex.EncodeToString(sum[:])
 	id := "run-request-" + name
-	hash := sha256.Sum256(append(fmt.Appendf(nil, "%d\n", count), raw...))
+	prefix := fmt.Appendf(nil, "%d\n", count)
+	if scenarioID != "" {
+		// Preserve old receipt digests when no source ID is supplied. The NUL
+		// separator cannot collide with a valid legacy YAML input.
+		prefix = fmt.Appendf(prefix, "scenarioId:%s\x00", scenarioID)
+	}
+	hash := sha256.Sum256(append(prefix, raw...))
 	digest := hex.EncodeToString(hash[:])
 	s.submissionMu.Lock()
 	defer s.submissionMu.Unlock()
@@ -109,7 +122,7 @@ func (s *Server) submitScenario(ctx context.Context, raw []byte, count int, key 
 	if err != nil {
 		return model.Experiment{}, err
 	}
-	return s.startScenarioRepeated(ctx, raw, count, id)
+	return s.startScenarioRepeated(ctx, raw, count, id, scenarioID)
 }
 func readAllSmallSubmission(f resultFile) ([]byte, error) {
 	if f.size > 4096 {

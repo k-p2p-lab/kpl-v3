@@ -1399,6 +1399,9 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		if method == http.MethodPost && path == "/api/v1/nodes" && retryableAdmissionResponse(resp, message) {
 			return &agentAdmissionDeferredError{after: admissionRetryDelay(resp.Header.Get("Retry-After"), time.Now()), reason: strings.TrimSpace(string(message))}
 		}
+		if method == http.MethodPost && strings.HasSuffix(path, "/topology") {
+			return &topologyAgentError{status: resp.StatusCode, message: fmt.Sprintf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))}
+		}
 		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 	}
 	if output != nil {

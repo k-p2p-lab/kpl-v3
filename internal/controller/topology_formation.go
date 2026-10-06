@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -30,7 +28,8 @@ func (s *Server) runTopology(ctx context.Context, runID string, generation uint6
 	if phase.Topology == nil || phase.Topic == "" {
 		return errors.New("topology requires a graph configuration and topic")
 	}
-	timeout := 2 * time.Minute
+	started := time.Now()
+	var timeout time.Duration
 	if phase.Timeout != "" {
 		var err error
 		timeout, err = time.ParseDuration(phase.Timeout)
@@ -38,12 +37,17 @@ func (s *Server) runTopology(ctx context.Context, runID string, generation uint6
 			return errors.New("topology requires a positive timeout")
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	targets, err := s.topologyTargets(runID, generation, phase)
 	if err != nil {
 		return fmt.Errorf("topology preflight: %w", err)
 	}
+	if timeout == 0 {
+		timeout = defaultTopologyPhaseTimeout(len(targets))
+	}
+	ctx, cancel := context.WithDeadline(ctx, started.Add(timeout))
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	timeout = deadline.Sub(started)
 	if phase.Topology.Seed != nil {
 		seed = *phase.Topology.Seed
 	}
@@ -97,32 +101,26 @@ func (s *Server) runTopology(ctx context.Context, runID string, generation uint6
 		return fmt.Errorf("record topology plan: %w", err)
 	}
 	for _, stage := range []string{"prepare", "apply"} {
+		stageStarted := time.Now()
 		var acknowledged atomic.Int64
-		err := runOperations(ctx, len(targets), true, 16, nil, false, func(operationCtx context.Context, i int) error {
-			target := targets[i]
-			agent, err := s.currentTopologyAgent(runID, generation, target)
-			if err != nil {
-				return err
-			}
+		var attempts topologyDispatchStats
+		err := runOperations(ctx, len(targets), true, topologyCommandParallelism, nil, false, func(operationCtx context.Context, i int) error {
 			request := requests[i]
 			request.Stage = stage
-			commandCtx, stop := context.WithTimeout(operationCtx, model.TopologyCommandTimeout)
-			defer stop()
-			var response model.TopologyResponse
-			path := "/api/v1/nodes/" + url.PathEscape(target.ID) + "/topology"
-			if err := s.callAgent(commandCtx, agent.URL, http.MethodPost, path, request, &response); err != nil {
-				return fmt.Errorf("%s topology on node %q: %w", stage, target.ID, err)
-			}
-			if err := response.Validate(request, target.ID, target.PeerID); err != nil {
-				return fmt.Errorf("node %q: %w", target.ID, err)
-			}
-			if _, err := s.currentTopologyAgent(runID, generation, target); err != nil {
+			if err := s.dispatchTopologyCommand(operationCtx, runID, generation, targets[i], request, &attempts); err != nil {
 				return err
 			}
 			acknowledged.Add(1)
 			return nil
 		})
-		fields := map[string]any{"topologyId": planID, "phase": phase.Name, "stage": stage, "acknowledged": acknowledged.Load(), "targets": len(targets)}
+		fields := map[string]any{"topologyId": planID, "phase": phase.Name, "stage": stage, "acknowledged": acknowledged.Load(), "targets": len(targets),
+			"attempts": attempts.total.Load(), "retries": attempts.retries.Load(), "elapsedSeconds": time.Since(stageStarted).Seconds(), "timeoutSeconds": timeout.Seconds()}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			fields["timeoutScope"] = "phase"
+			err = errors.Join(fmt.Errorf("topology phase exceeded its %s timeout after %s: %w", timeout.Round(time.Millisecond), time.Since(started).Round(time.Millisecond), ctx.Err()), err)
+		} else if topologyCommandTimedOut(err) {
+			fields["timeoutScope"] = "command"
+		}
 		if err != nil {
 			fields["error"] = err.Error()
 		}

@@ -85,7 +85,8 @@ func validateLibraryGroupName(name string) (string, error) {
 
 // Library metadata lives directly in the local data directory. It never becomes
 // an experiment input, archive member, or analysis hash input. All accesses use
-// libraryGroupsMu, independently of experiment, archive and scenario locks.
+// libraryGroupsMu. Group endpoints do not acquire experiment, archive or
+// scenario locks; initial admission can hold cancelMu/persistMu before this lock.
 func (s *Server) readLibraryGroups() (libraryGroupsSnapshot, error) {
 	data, err := os.OpenRoot(s.config.DataDir)
 	if errors.Is(err, os.ErrNotExist) {

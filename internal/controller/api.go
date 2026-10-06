@@ -57,6 +57,10 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 		_ = listener.Close()
 		return fmt.Errorf("recover batch extensions: %w", err)
 	}
+	if err := s.recoverLibraryGroupAdmissions(ctx); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("recover scenario result groups: %w", err)
+	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	// Do not wait for filesystem syscalls on a disconnected NAS during shutdown.
@@ -573,6 +577,7 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 				return
 			}
 			repetitions := 1
+			var scenarioID string
 			if mediaType == "application/json" {
 				if !utf8.Valid(raw) {
 					writeError(w, http.StatusBadRequest, "experiment request must be valid UTF-8")
@@ -581,6 +586,7 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 				var submission struct {
 					Scenario    string `json:"scenario"`
 					Repetitions *int   `json:"repetitions"`
+					ScenarioID  string `json:"scenarioId,omitempty"`
 				}
 				decoder := json.NewDecoder(bytes.NewReader(raw))
 				decoder.DisallowUnknownFields()
@@ -596,13 +602,18 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 				if submission.Repetitions != nil {
 					repetitions = *submission.Repetitions
 				}
+				if submission.ScenarioID != "" && !validScenarioID(submission.ScenarioID) {
+					writeError(w, http.StatusBadRequest, "scenarioId must identify a saved scenario")
+					return
+				}
+				scenarioID = submission.ScenarioID
 				if len(submission.Scenario) > scenarioYAMLLimit {
 					writeError(w, http.StatusBadRequest, fmt.Sprintf("scenario YAML cannot exceed %d bytes", scenarioYAMLLimit))
 					return
 				}
 				raw = []byte(submission.Scenario)
 			}
-			experiment, err := s.submitScenario(ctx, raw, repetitions, r.Header.Get("Idempotency-Key"))
+			experiment, err := s.submitScenarioFromLibrary(ctx, raw, repetitions, r.Header.Get("Idempotency-Key"), scenarioID)
 			if err != nil {
 				status := http.StatusBadRequest
 				if errors.Is(err, errSubmissionConflict) {
@@ -613,6 +624,12 @@ func (s *Server) handleExperiments(ctx context.Context) http.HandlerFunc {
 				}
 				if errors.Is(err, errRunStorageFull) {
 					status = http.StatusInsufficientStorage
+				}
+				if errors.Is(err, errScenarioResultGroup) && !errors.Is(err, errLibraryGroupsLimit) {
+					status = http.StatusInternalServerError
+				}
+				if errors.Is(err, errScenarioNotFound) {
+					status = http.StatusNotFound
 				}
 				writeError(w, status, err.Error())
 				return

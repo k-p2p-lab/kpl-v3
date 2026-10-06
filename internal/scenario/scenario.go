@@ -416,7 +416,9 @@ func validateTopologyPhase(p *Phase) error {
 		return err
 	}
 	if p.Timeout == "" {
-		p.Timeout = "2m"
+		// The Controller chooses the default from the actual selected cohort.
+		// Keep omission distinct from an explicitly configured hard deadline.
+		return nil
 	}
 	timeout, err := time.ParseDuration(p.Timeout)
 	if err != nil || timeout <= 0 {

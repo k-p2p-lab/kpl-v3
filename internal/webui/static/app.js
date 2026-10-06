@@ -2453,7 +2453,8 @@ async function submitScenarioRun() {
   error.textContent = "";
   renderSavedScenarios();
   try {
-    const payload=JSON.stringify({scenario: $("#scenarioText").value,repetitions});
+    const scenarioId = state.selectedScenarioId;
+    const payload=JSON.stringify({scenario: $("#scenarioText").value,repetitions,...(scenarioId ? {scenarioId} : {})});
     const submissionKey=scenarioSubmissionKey(payload);
     const run = await scenarioRequest("/api/v1/experiments", {
       method: "POST",
@@ -2466,6 +2467,11 @@ async function submitScenarioRun() {
       globalThis.KPLDashboardTabs?.show("experiments");
     }
     showToast(repetitions > 1 ? `Queued ${repetitions} runs: ${run.name}.` : `Submitted experiment: ${run.name}.`);
+    if (scenarioId) {
+      // Submission already succeeded. Refresh the server-assigned membership
+      // without making a slow or failed group read look like a failed run.
+      void Promise.resolve().then(() => globalThis.KPLLibraryGroups?.refresh({fresh: true})).catch(() => {});
+    }
   } catch (caught) {
     error.textContent = caught.message;
   } finally {

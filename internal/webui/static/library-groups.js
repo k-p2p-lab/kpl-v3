@@ -106,7 +106,18 @@
       return readTask;
     }
 
-    function refresh() {
+    function refresh({fresh = false} = {}) {
+      if (fresh) {
+        // An external write (such as submitting a saved scenario) may have
+        // changed memberships after an existing GET began. Ignore that older
+        // snapshot and issue a read after pending local operations finish.
+        epoch++;
+        return (async () => {
+          if (readTask) await readTask.catch(() => {});
+          if (mutationTask) await mutationTask.catch(() => {});
+          return loadSnapshot();
+        })();
+      }
       if (mutationTask) return mutationTask.then(() => snapshot);
       return loadSnapshot();
     }

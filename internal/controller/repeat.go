@@ -50,10 +50,10 @@ func (s *Server) cancelRepeatLocked(runID string) bool {
 }
 
 func (s *Server) StartScenarioRepeated(parent context.Context, raw []byte, repetitions int) (model.Experiment, error) {
-	return s.startScenarioRepeated(parent, raw, repetitions, "")
+	return s.startScenarioRepeated(parent, raw, repetitions, "", "")
 }
 
-func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repetitions int, submissionID string) (model.Experiment, error) {
+func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repetitions int, submissionID, scenarioID string) (model.Experiment, error) {
 	if repetitions < 1 || repetitions > maxScenarioRepetitions {
 		return model.Experiment{}, fmt.Errorf("repetitions must be an integer between 1 and %d", maxScenarioRepetitions)
 	}
@@ -99,7 +99,9 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	// Reserve every manifest before running any phase. A partial disk failure
 	// rolls back only the new, exclusively created directories owned by this call.
 	s.state.persistMu.Lock()
-	err = s.commitBatchAdmissionLocked(parent, experiments[0].BatchID, experiments, raw, repetitions, nil, nil)
+	err = s.admitScenarioResultGroup(parent, scenarioID, experiments[0].BatchID, func() error {
+		return s.commitBatchAdmissionLocked(parent, experiments[0].BatchID, experiments, raw, repetitions, nil, nil)
+	})
 	s.state.persistMu.Unlock()
 	if err != nil {
 		return model.Experiment{}, err

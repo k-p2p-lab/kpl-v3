@@ -20,7 +20,7 @@ func TestTopologyV3SelectorsAndDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			phase := spec.Phases[1]
-			if phase.Timeout != "2m" || !phase.ShouldAwait() || phase.Repeat != 1 || phase.Job != "" {
+			if phase.Timeout != "" || !phase.ShouldAwait() || phase.Repeat != 1 || phase.Job != "" {
 				t.Fatalf("unexpected defaults: %+v", phase)
 			}
 			if phase.Topology.Seed == nil || *phase.Topology.Seed != 0 {
@@ -30,6 +30,33 @@ func TestTopologyV3SelectorsAndDefaults(t *testing.T) {
 				t.Fatalf("validation is not idempotent: %v", err)
 			}
 		})
+	}
+}
+
+func TestTopologyTimeoutPreservesOmissionAndExplicitLimits(t *testing.T) {
+	for _, count := range []int{0, 1000} {
+		for _, timeout := range []string{"", "2m", "15s"} {
+			t.Run(fmt.Sprintf("count=%d/timeout=%s", count, timeout), func(t *testing.T) {
+				fields := fmt.Sprintf("count: %d", count)
+				if timeout != "" {
+					fields += ", timeout: " + timeout
+				}
+				data := "version: 3\nname: graph\nphases: [{action: join, group: workers, count: 1000, node: {gossipsub: {meshFreeze: true}}}, {action: topology, group: workers, topic: blocks, topology: {model: er, p: 0.05}, " + fields + "}]"
+				spec, err := Parse([]byte(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := spec.Phases[1].Timeout; got != timeout {
+					t.Fatalf("timeout changed during parsing: got %q, want %q", got, timeout)
+				}
+				if err := spec.Validate(); err != nil {
+					t.Fatal(err)
+				}
+				if got := spec.Phases[1].Timeout; got != timeout {
+					t.Fatalf("timeout changed during repeat validation: got %q, want %q", got, timeout)
+				}
+			})
+		}
 	}
 }
 
@@ -68,7 +95,9 @@ func TestTopologyRejectsInvalidSchema(t *testing.T) {
 		{"count negative", base + ", count: -1"},
 		{"count too large", base + ", count: 10001"},
 		{"zero timeout", base + ", timeout: 0s"},
+		{"negative timeout", base + ", timeout: -1s"},
 		{"bad timeout", base + ", timeout: later"},
+		{"overflow timeout", base + ", timeout: 999999999999999999999h"},
 		{"missing parameter", "group: workers, topic: blocks, topology: {model: ws, p: 0.1}"},
 		{"unknown parameter", "group: workers, topic: blocks, topology: {model: er, p: 0.1, probability: 0.1}"},
 		{"irrelevant parameter", "group: workers, topic: blocks, topology: {model: er, p: 0.1, radius: 0}"},

@@ -277,3 +277,30 @@ func TestTopologyConnectDoesNotRetryPermanentDialErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestTopologyPrepareRetriesSamePlanAfterConnectionLoss(t *testing.T) {
+	s, neighbor := newTopologyTestServer(t, "target"), newTopologyTestServer(t, "neighbor")
+	originalHost := s.host
+	var calls atomic.Int32
+	s.host = &topologyConnectHookHost{Host: originalHost, connect: func(ctx context.Context, info corepeer.AddrInfo) error {
+		if calls.Add(1) == 1 {
+			// Model a successful dial whose connection disappears before the
+			// PubSub stream is ready, without background reconnect timing.
+			return nil
+		}
+		return originalHost.Connect(ctx, info)
+	}}
+	request := topologyTestRequest(s, "prepare", neighbor)
+	ctx, cancel := context.WithTimeout(t.Context(), 350*time.Millisecond)
+	defer cancel()
+	w := topologyTestHTTP(t, ctx, s, request)
+	if w.Code != http.StatusGatewayTimeout || calls.Load() != 1 || s.meshFrozen.Load() {
+		t.Fatalf("prepare acknowledged an unavailable neighbor or froze the mesh: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body)
+	}
+	retryCtx, stop := context.WithTimeout(t.Context(), 3*time.Second)
+	defer stop()
+	w = topologyTestHTTP(t, retryCtx, s, request)
+	if w.Code != http.StatusOK || calls.Load() != 2 || s.meshFrozen.Load() {
+		t.Fatalf("same-plan retry failed to recover connection: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body)
+	}
+}

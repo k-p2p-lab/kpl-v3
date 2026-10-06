@@ -620,6 +620,57 @@ test('a successful submission closes the original editor normally', async () => 
   assert.equal(state.scenarioSubmitting, false);
 });
 
+test('saved scenario runs submit their source ID and refresh groups without waiting for it', async () => {
+  const requests=[];let rejectRefresh,refreshOptions;
+  const {api,state,elements}=fixture(async(url,options)=>{
+    requests.push(JSON.parse(options.body));
+    return response({id:'run-one',name:'Edited scenario'});
+  });
+  state.selectedScenarioId='a'.repeat(32);
+  elements.get('#scenarioText').value='version: 3\nname: Edited scenario\n';
+  elements.get('#runRepetitions').value='2';
+  api.KPLLibraryGroups={matches:()=>true,isFiltered:()=>false,selectionMarkup:()=>'',badgeMarkup:()=>'',refreshUI(){},
+    refresh(options){refreshOptions=options;return new Promise((resolve,reject)=>{rejectRefresh=reject;});}};
+  await api.submitScenarioRun();
+  assert.deepEqual(requests,[{scenario:'version: 3\nname: Edited scenario\n',repetitions:2,scenarioId:'a'.repeat(32)}]);
+  assert.equal(refreshOptions.fresh,true);
+  assert.equal(elements.get('#scenarioDialog').open,false);
+  assert.equal(state.scenarioSubmitting,false);
+  assert.match(elements.get('#toast').textContent,/Queued 2 runs/);
+  rejectRefresh(new Error('Groups unavailable'));
+  await new Promise(setImmediate);
+  assert.equal(elements.get('#scenarioError').textContent,'');
+  assert.equal(requests.length,1,'failed group refresh must not resubmit the experiment');
+});
+
+test('new unsaved runs omit scenarioId even while viewing a group', async () => {
+  let submitted,refreshes=0;
+  const {api,elements}=fixture(async(url,options)=>{submitted=JSON.parse(options.body);return response({id:'run',name:'Draft'});});
+  api.KPLLibraryGroups={matches:()=>true,isFiltered:()=>true,getImportGroup:()=> 'group',selectionMarkup:()=>'',badgeMarkup:()=>'',refreshUI(){},refresh(){refreshes++;return Promise.resolve();}};
+  await api.submitScenarioRun();
+  assert.equal(Object.hasOwn(submitted,'scenarioId'),false);
+  assert.equal(refreshes,0);
+  assert.equal(elements.get('#scenarioError').textContent,'');
+});
+
+test('changing the selected scenario changes an uncertain submission idempotency key', async () => {
+  const keys=[],payloads=[],storage=new Map();let key=0;
+  const {api,state}=fixture(async(url,options)=>{
+    keys.push(options.headers.get('Idempotency-Key'));
+    payloads.push(JSON.parse(options.body));
+    throw new Error('Response unavailable');
+  });
+  api.sessionStorage={getItem:name=>storage.get(name),setItem:(name,value)=>storage.set(name,value),removeItem:name=>storage.delete(name)};
+  api.crypto={randomUUID:()=>`request-${++key}`};
+  state.selectedScenarioId='a'.repeat(32);
+  await api.submitScenarioRun();
+  await api.submitScenarioRun();
+  state.selectedScenarioId='b'.repeat(32);
+  await api.submitScenarioRun();
+  assert.deepEqual(keys,['request-1','request-1','request-2']);
+  assert.deepEqual(payloads.map(payload=>payload.scenarioId),['a'.repeat(32),'a'.repeat(32),'b'.repeat(32)]);
+});
+
 test('scenario search matches names and IDs without changing the editor or server order', () => {
   const { api, state, elements } = fixture(async () => response([]));
   state.savedScenarios = [

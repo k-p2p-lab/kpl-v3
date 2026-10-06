@@ -14,6 +14,9 @@ const (
 	MaxTopologyRequestBytes = 1 << 20
 	MaxTopologyNeighbors    = MaxTopologyNodes - 1
 	TopologyCommandTimeout  = 30 * time.Second
+	// Each outer hop leaves time for the inner hop to report its failure.
+	TopologyProxyTimeout   = TopologyCommandTimeout + 5*time.Second
+	TopologyRequestTimeout = TopologyProxyTimeout + 5*time.Second
 )
 
 // TopologyRequest addresses one Peer incarnation and one Controller-generated

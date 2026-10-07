@@ -7,6 +7,10 @@ fail() { printf 'Swarm Agent: %s\n' "$*" >&2; exit 1; }
 : "${KPL_SWARM_SERVICE_NAME:?Swarm service name is required}"
 : "${KPL_SWARM_NODE_ID:?Swarm node ID is required}"
 : "${KPL_PEER_NETWORK:?Peer overlay network is required}"
+control_network=${KPL_CONTROL_NETWORK:-$KPL_PEER_NETWORK}
+if [ -n "${KPL_CONTROL_NETWORK:-}" ] && [ "$control_network" = "$KPL_PEER_NETWORK" ]; then
+    fail 'Control and Peer networks must be different for automatic network initialization'
+fi
 
 # Reject configuration errors before retrying Docker discovery.
 metrics_port=${KPL_AGENT_METRICS_PORT:-9091}
@@ -20,14 +24,14 @@ esac
 # fall back to the service VIP: node-specific operations must reach this Agent.
 docker_read() { timeout -k 1 5 docker "$@"; }
 discover_task() {
-    startup_stage='task Peer overlay address'
+    startup_stage='task control overlay address'
     addresses=$(docker_read inspect --type container --format '{{range $name, $net := .NetworkSettings.Networks}}{{printf "%s %s\n" $name $net.IPAddress}}{{end}}' "$KPL_SWARM_TASK_NAME") || return 1
     address=$(printf '%s\n' "$addresses" | while read -r network ip; do
-        if [ "$network" = "$KPL_PEER_NETWORK" ]; then printf '%s\n' "$ip"; fi
+        if [ "$network" = "$control_network" ]; then printf '%s\n' "$ip"; fi
     done)
     [ -n "$address" ] || return 1
     case "$address" in
-        *[!0-9.]*) fail "No unambiguous IPv4 address on $KPL_PEER_NETWORK" ;;
+        *[!0-9.]*) fail "No unambiguous IPv4 address on $control_network" ;;
     esac
 
     startup_stage='Swarm node address'
@@ -58,7 +62,11 @@ done
 metrics_host=$node_address
 case "$metrics_host" in *:*) metrics_host=[$metrics_host] ;; esac
 
-exec kpl agent \
+set --
+if [ -n "${KPL_CONTROL_NETWORK:-}" ]; then
+    set -- --auto-reset-network --control-network "$control_network"
+fi
+exec kpl agent "$@" \
     --id "$KPL_SWARM_SERVICE_NAME-$KPL_SWARM_NODE_ID" \
     --name "${KPL_SWARM_NODE_HOSTNAME:-$KPL_SWARM_NODE_ID}" \
     --labels "swarmNodeId=$KPL_SWARM_NODE_ID" \

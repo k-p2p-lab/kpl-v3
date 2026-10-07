@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/agent"
 	"github.com/k-p2p-lab/kpl-v3/internal/auth"
 	"github.com/k-p2p-lab/kpl-v3/internal/controller"
+	"github.com/k-p2p-lab/kpl-v3/internal/experimentnet"
 	"github.com/k-p2p-lab/kpl-v3/internal/peer"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
@@ -37,6 +39,10 @@ func main() {
 		err = runAgent(ctx, logger, os.Args[2:])
 	case "resource-monitor":
 		err = runServiceMonitor(ctx, logger, os.Args[2:])
+	case "network-manager":
+		err = runNetworkManager(ctx, os.Args[2:])
+	case "network-gateway":
+		err = runNetworkGateway(ctx, os.Args[2:])
 	case "peer":
 		err = runPeer(ctx, logger, os.Args[2:])
 	case "validate":
@@ -79,6 +85,7 @@ func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) 
 func runController(ctx context.Context, logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
 	listen := flags.String("listen", ":8080", "HTTP listen address")
+	networkManager := flags.String("network-manager", os.Getenv("KPL_NETWORK_MANAGER_URL"), "experiment network manager URL; reset the Peer overlay before every run")
 	agentDiscoveryDNS := flags.String("agent-discovery-dns", os.Getenv("KPL_AGENT_DISCOVERY_DNS"), "optional Swarm Agent task DNS name for Dashboard discovery (port 8090)")
 	dataDir := flags.String("data-dir", "data", "experiment data directory")
 	minimumFree := uint64(1 << 30)
@@ -107,6 +114,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
+		NetworkManagerURL: strings.TrimSpace(*networkManager),
 		AgentDiscoveryDNS: strings.TrimSpace(*agentDiscoveryDNS),
 		Listen:            *listen,
 		DataDir:           *dataDir,
@@ -151,6 +159,8 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	dockerBinary := flags.String("docker-binary", "docker", "Docker CLI executable")
 	dockerImage := flags.String("docker-image", "", "peer image resolved from the running Swarm Agent task")
 	dockerNetwork := flags.String("docker-network", "", "attachable Swarm peer overlay network")
+	autoResetNetwork := flags.Bool("auto-reset-network", false, "require an initialized network before admitting Peers")
+	controlNetwork := flags.String("control-network", "", "stable attachable overlay for Agent control")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -158,6 +168,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 	server, err := agent.New(agent.Config{
+		AutoResetNetwork: *autoResetNetwork, ControlNetwork: *controlNetwork,
 		ID: *id, Name: *name, Listen: *listen, AdvertiseURL: *advertiseURL,
 		MetricsListen: *metricsListen, MetricsURL: *metricsURL, SelfURL: *selfURL,
 		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir, Token: auth.InternalToken(user, password),
@@ -169,6 +180,38 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 	return server.Run(ctx)
+}
+
+func runNetworkManager(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("network-manager", flag.ContinueOnError)
+	dataDir := flags.String("data-dir", "/var/lib/kpl/network", "network recovery state directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
+	if err := auth.Validate(user, password); err != nil {
+		return err
+	}
+	return experimentnet.RunManager(ctx, experimentnet.ManagerConfig{Stack: os.Getenv("KPL_STACK_NAME"), PeerNetwork: os.Getenv("KPL_PEER_NETWORK"),
+		ControlNetwork: os.Getenv("KPL_CONTROL_NETWORK"), Subnet: os.Getenv("KPL_PEER_SUBNET"), ControllerURL: os.Getenv("KPL_CONTROLLER_URL"),
+		Token: auth.InternalToken(user, password), SelfContainer: os.Getenv("KPL_SWARM_TASK_NAME"), DataDir: *dataDir})
+}
+
+func runNetworkGateway(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("network-gateway", flag.ContinueOnError)
+	configPath := flags.String("config", "", "gateway configuration file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(*configPath)
+	if err != nil {
+		return err
+	}
+	var config experimentnet.GatewayConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return err
+	}
+	return experimentnet.RunGateway(ctx, config)
 }
 
 func runPeer(ctx context.Context, logger *slog.Logger, args []string) error {
@@ -222,10 +265,12 @@ Usage:
   kpl controller [--listen :8080] [--data-dir data]
   kpl agent --id ID --advertise-url URL --controller-url URL --docker-image IMAGE --docker-network OVERLAY
   kpl resource-monitor --stack STACK --node-id NODE --controller URL
+  kpl network-manager [--data-dir /var/lib/kpl/network]
+  kpl network-gateway --config FILE
   kpl peer --config FILE
   kpl validate --scenario FILE
   kpl version
 
 Deploy and manage the Swarm stack with sh scripts/swarm.sh.
-Controller, Agent, resource-monitor and Peer commands are container entrypoints.`)
+Controller, Agent, resource-monitor, network-manager, network-gateway and Peer commands are container entrypoints.`)
 }

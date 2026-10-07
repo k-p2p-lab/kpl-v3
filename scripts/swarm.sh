@@ -38,13 +38,14 @@ KPL_IMAGE_BUILD_TIMEOUT and KPL_IMAGE_PUSH_TIMEOUT default to 1800 and 600 secon
 KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
 Bash completion: source scripts/activate-swarm.sh, then use swarm COMMAND.
-Log components: controller (default), agent, resource-monitor, prometheus, grafana, access, auth.
+Log components: controller (default), agent, network-manager, resource-monitor, prometheus, grafana, access, auth.
 Logs default to the last 100 lines; --tail all prints all available lines.
 Access/auth print JSONL from the running Controller (rotated backups excluded).
 For access/auth, --context selects its node's Docker daemon for file reads only;
 service/task discovery still uses the caller's manager Docker context.
 Removal preserves experiment/monitoring volumes and the external Peer network.
-Full remove does not wait for clean task exits or verify standalone Peer cleanup.
+Service deletion is failure tolerant. Gateway removal requires clean Agent/manager exits.
+Run remove on the configured control node to also clean its standalone gateway.
 Network reset requires removed services, Ready nodes and no attached containers.
 It preserves the IPv4 subnet/gateway and refuses custom network settings.
 EOF
@@ -89,7 +90,7 @@ case "$command_name" in
                 *) log_component=$1; shift ;;
             esac
         fi
-        case "$log_component" in controller|agent|resource-monitor|prometheus|grafana|access|auth) ;; *) fail 'Unknown log component.' ;; esac
+        case "$log_component" in controller|agent|network-manager|resource-monitor|prometheus|grafana|access|auth) ;; *) fail 'Unknown log component.' ;; esac
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 --tail)
@@ -303,15 +304,17 @@ esac
 services=$(dock service ls --quiet --filter "label=com.docker.stack.namespace=$KPL_STACK_NAME")
 controller_present=no
 agent_present=no
+network_manager_present=no
 for service in $services; do
     identity=$(dock service inspect --format '{{.Spec.Name}}|{{index .Spec.Labels "io.kpl.application"}}' "$service")
     case "$identity" in
-        "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application"|"$KPL_STACK_NAME"_resource-monitor\|"$application") ;;
+        "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application"|"$KPL_STACK_NAME"_resource-monitor\|"$application"|"$KPL_STACK_NAME"_network-manager\|"$application") ;;
         *) fail 'Existing stack contains an unrecognized service. See https://github.com/k-p2p-lab/kpl-v3/wiki/Swarm-Deployment for migration; no changes made.' ;;
     esac
     case "$identity" in
         "${KPL_STACK_NAME}_controller|$application") controller_present=yes ;;
         "${KPL_STACK_NAME}_agent|$application") agent_present=yes ;;
+        "${KPL_STACK_NAME}_network-manager|$application") network_manager_present=yes ;;
     esac
 done
 service_exists() {
@@ -567,6 +570,7 @@ case "$command_name" in
         # Validate interpolation without printing credentials.
         dock stack config --compose-file "$root/stack.swarm.yaml" >/dev/null
         ready_node "$KPL_CONTROL_NODE_ID"
+        [ "$(dock node inspect --format '{{.Spec.Role}}' "$KPL_CONTROL_NODE_ID")" = manager ] || fail 'The control node must be a Swarm manager for automatic network initialization.'
         nodes=$(command_nodes "$@")
         for node in $nodes; do ready_node "$node"; done
         report_nodes "$nodes"
@@ -624,11 +628,24 @@ case "$command_name" in
         printf 'Selected Agents stopped with clean exits. Other node labels were unchanged.\n'
         ;;
     remove)
+        . "$root/scripts/swarm-network-gateway.sh"
+        gateway_cleanup_ready=no
+        if [ "$network_manager_present" = yes ]; then
+            # Failure must not block deleting unhealthy service definitions.
+            if (swarm_prepare_gateway_removal); then
+                gateway_cleanup_ready=yes
+            else
+                printf '%s\n' 'KPL Swarm: Gateway cleanup is unverified; services will be deleted, but the gateway and attached control network are retained for inspection. A later initialization can recover after all Agents confirm Peer cleanup.' >&2
+            fi
+        fi
         if [ -n "$services" ]; then
             # Ownership was checked above. Delete the service definitions
             # directly: failed tasks, missing history and offline workers must
             # not block removal or leave Swarm scheduling replacements.
             dock service rm $services || fail 'Service removal failed; inspect status and retry remove.'
+        fi
+        if [ "$gateway_cleanup_ready" = yes ]; then
+            (swarm_remove_network_gateway) || printf '%s\n' 'KPL Swarm: Gateway removal is unverified; inspect the retained gateway and control network.' >&2
         fi
         # Also remove stack-owned configs and monitoring networks. Repeat this
         # on an empty stack so an interrupted removal can finish its cleanup.

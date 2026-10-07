@@ -66,7 +66,7 @@ for command in help config credentials nodes login check access status remove; d
 [[ ! -s $KPL_COMPLETION_CALLS ]]
 
 complete_words swarm logs ''
-for component in controller agent resource-monitor prometheus grafana access auth --tail; do has "$component"; done
+for component in controller agent network-manager resource-monitor prometheus grafana access auth --tail; do has "$component"; done
 lacks --context
 complete_words swarm logs auth --
 has --context; has --tail

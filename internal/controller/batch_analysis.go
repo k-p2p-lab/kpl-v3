@@ -271,7 +271,7 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 		return batchAnalysisStatus{}, err
 	}
 	membership := batchMembership(members)
-	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.Membership == membership && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
+	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.Membership == membership && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		return existing.status, nil
 	}
 	count := 0
@@ -303,7 +303,7 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	}
 	work, cancel := context.WithCancel(ctx)
 	job := &batchAnalysisJob{status: status, cancel: cancel}
-	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
+	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
 		job.previous = &previous
 	}
@@ -378,9 +378,14 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 					defer s.analysisJobMu.Unlock()
 					job.status.Phase = fmt.Sprintf("Run %d/%d · %s", i+1, len(selected), phase)
 					job.status.ProcessedBytes, job.status.UpdatedAt = processed, now
+					phaseTotal := total
+					if phase == "checking-sources" {
+						phaseTotal = analysisSourceSampleBytes(snapshot.files)
+					}
+					job.status.TotalBytes = phaseTotal
 					fraction := 0.
-					if total > 0 {
-						fraction = min(.99, float64(processed)/float64(total))
+					if phaseTotal > 0 {
+						fraction = min(.99, float64(processed)/float64(phaseTotal))
 					}
 					job.status.Progress = 100 * (float64(i) + fraction) / float64(len(selected))
 				})
@@ -539,7 +544,7 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 			members, err = s.allBatchMembers(r.Context(), id)
 			if err == nil {
 				status, err = s.batchAnalysisStatus(id)
-				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || status.SourceHash == "" || status.AnalysisVersion != currentAnalysisVersion) {
+				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || !reusableSourceHash(status.SourceHash) || status.AnalysisVersion != currentAnalysisVersion) {
 					status.State, status.Stale = "idle", true
 				}
 			}

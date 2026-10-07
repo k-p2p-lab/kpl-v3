@@ -67,7 +67,9 @@ test('Swarm isolates service monitoring from Agent participation and Grafana use
  const monitor=stack.split('\n  resource-monitor:')[1].split('\n  prometheus:')[0];
  assert.match(monitor,/mode: global/);assert.doesNotMatch(monitor,/kpl.*\.agent ==/);assert.match(monitor,/docker.sock:ro/);
  const controller=stack.split('\n  controller:')[1].split('\n  agent:')[0];assert.doesNotMatch(controller,/docker.sock|user: '0:0'/);
- assert.equal((stack.match(/io.kpl.resource-monitor: 'true'/g)||[]).length,4);
+ const manager=stack.split('\n  network-manager:')[1].split('\n  resource-monitor:')[0];
+ assert.match(manager,/io.kpl.resource-monitor: 'true'/);assert.match(manager,/node.role == manager/);
+ assert.equal((stack.match(/io.kpl.resource-monitor: 'true'/g)||[]).length,5);
  const panels=JSON.parse(fs.readFileSync(path.join(root,'monitoring/grafana/dashboards/kpl-experiments.json'))).panels;
  const service=panels.filter(p=>p.title.startsWith('Service '));assert.equal(service.length,6);
  for(const p of service){assert.match(p.targets[0].expr,/kpl_service_/);assert.doesNotMatch(p.targets[0].expr,/agent_id/);assert.match(p.targets[0].legendFormat,/node_id/);}

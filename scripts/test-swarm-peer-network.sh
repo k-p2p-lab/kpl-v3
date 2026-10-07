@@ -40,7 +40,7 @@ case "$1 ${2:-}" in
                 printf '%s\n' "$ipam" ;;
             *'.ConfigOnly'*)
                 [ "${KPL_RESET_TEST_FAULT:-}" != metadata-query ] || exit 1
-                metadata=${KPL_RESET_TEST_METADATA:-'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|2|'}
+                metadata=${KPL_RESET_TEST_METADATA:-'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab||'}
                 n=$(cat "$KPL_RESET_TEST_DIR/metadata-count")
                 n=$((n+1)); printf '%s\n' "$n" > "$KPL_RESET_TEST_DIR/metadata-count"
                 if { [ "${KPL_RESET_TEST_FAULT:-}" = endpoint-race ] && [ "$n" -ge 2 ]; } || { [ "$last" = newnetworkid ] && [ "${KPL_RESET_TEST_FAULT:-}" = new-metadata ]; }; then metadata=changed; fi
@@ -114,14 +114,14 @@ no_mutation
 # Ownership, attached containers, and settings we cannot reconstruct must all
 # fail before deletion, including custom labels/options and nondefault IPAM.
 for metadata in \
-    'other|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|2|' \
-    'lab-peers|bridge|local|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|2|' \
-    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|1|kp2plab-v3|lab|2|' \
-    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|other|2|' \
-    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|3|' \
-    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|2|custom' \
-    'lab-peers|overlay|swarm|true|false|false|false|true||default|0|2|0|kp2plab-v3|lab|2|' \
-    'lab-peers|overlay|swarm|true|false|false|false|false||custom|0|1|0|kp2plab-v3|lab|2|'; do
+    'other|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab||' \
+    'lab-peers|bridge|local|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab||' \
+    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|1|kp2plab-v3|lab||' \
+    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|other||' \
+    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab|custom|' \
+    'lab-peers|overlay|swarm|true|false|false|false|false||default|0|1|0|kp2plab-v3|lab||custom' \
+    'lab-peers|overlay|swarm|true|false|false|false|true||default|0|2|0|kp2plab-v3|lab||' \
+    'lab-peers|overlay|swarm|true|false|false|false|false||custom|0|1|0|kp2plab-v3|lab||'; do
     reset_case
     export KPL_RESET_TEST_METADATA=$metadata
     reject

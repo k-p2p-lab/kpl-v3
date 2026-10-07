@@ -1,5 +1,5 @@
 #!/bin/sh
-# Contract test: multi-network tasks must advertise their Peer overlay IP.
+# Contract test: multi-network tasks must advertise their control overlay IP.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 scratch=$(mktemp -d)
@@ -36,7 +36,9 @@ case "$1 $2" in
         [ "$3" = container ] && [ "$6" = 'lab_agent.node.task' ] || exit 2
         case "$5" in
             '{{.Image}}') echo sha256:0123456789abcdef ;;
-            *) printf 'lab_monitoring 10.1.0.8\n%s %s\n' "$KPL_PEER_NETWORK" "${KPL_TEST_IP:-10.2.0.9}" ;;
+            *)
+                printf 'lab_monitoring 10.1.0.8\n%s %s\n' "$KPL_PEER_NETWORK" "${KPL_TEST_IP:-10.2.0.9}"
+                if [ -n "${KPL_CONTROL_NETWORK:-}" ]; then printf '%s 10.3.0.9\n' "$KPL_CONTROL_NETWORK"; fi ;;
         esac ;;
     *) exit 2 ;;
 esac
@@ -65,6 +67,7 @@ chmod +x "$scratch/bin/docker" "$scratch/bin/kpl" "$scratch/bin/timeout" "$scrat
 export PATH="$scratch/bin:$PATH"
 export KPL_SWARM_TASK_NAME=lab_agent.node.task KPL_SWARM_SERVICE_NAME=lab_agent KPL_SWARM_NODE_ID=node
 export KPL_PEER_NETWORK=lab-peers KPL_AGENT_CAPACITY=37
+unset KPL_CONTROL_NETWORK
 sh "$root/scripts/swarm-agent.sh"
 grep -qx 'lab_agent-node' "$KPL_TEST_ARGUMENTS"
 [ "$(grep -cx 'http://10.2.0.9:8090' "$KPL_TEST_ARGUMENTS")" = 2 ]
@@ -79,6 +82,14 @@ if grep -Eq '^--(runtime|peer-api-port|peer-p2p-port)$' "$KPL_TEST_ARGUMENTS"; t
     echo 'Swarm Agent received a removed local runtime option' >&2
     exit 1
 fi
+if grep -qx -- '--auto-reset-network' "$KPL_TEST_ARGUMENTS"; then exit 1; fi
+KPL_CONTROL_NETWORK=lab_control sh "$root/scripts/swarm-agent.sh"
+[ "$(grep -cx 'http://10.3.0.9:8090' "$KPL_TEST_ARGUMENTS")" = 2 ]
+grep -qx -- '--auto-reset-network' "$KPL_TEST_ARGUMENTS"
+grep -qx -- '--control-network' "$KPL_TEST_ARGUMENTS"
+grep -qx -- 'lab_control' "$KPL_TEST_ARGUMENTS"
+grep -qx -- 'lab-peers' "$KPL_TEST_ARGUMENTS"
+if KPL_CONTROL_NETWORK=lab-peers sh "$root/scripts/swarm-agent.sh" 2>/dev/null; then exit 1; fi
 KPL_AGENT_METRICS_PORT=19091 KPL_TEST_NODE_ADDR='fd00::9' sh "$root/scripts/swarm-agent.sh"
 grep -Fqx -- 'http://[fd00::9]:19091/metrics' "$KPL_TEST_ARGUMENTS"
 if KPL_AGENT_METRICS_PORT=0 sh "$root/scripts/swarm-agent.sh" 2>/dev/null; then
@@ -117,7 +128,7 @@ fi
 [ ! -f "$KPL_TEST_ARGUMENTS" ]
 [ "$(cat "$KPL_TEST_DISCOVERY_STATE")" = 5 ]
 [ "$(wc -l < "$KPL_TEST_SLEEPS" | tr -d ' ')" = 4 ]
-grep -Fq 'Cannot resolve task Peer overlay address after 5 attempts' "$scratch/retry.log"
+grep -Fq 'Cannot resolve task control overlay address after 5 attempts' "$scratch/retry.log"
 
 # Controller discovery must use task addresses scoped to this stack.
 controller_stack=$(sed -n '/^  controller:/,/^  agent:/p' "$root/stack.swarm.yaml")
@@ -141,4 +152,13 @@ if grep -Fq 'tasks.agent' "$root/monitoring/prometheus/swarm.yml"; then
     echo 'Legacy Swarm DNS discovery is still configured' >&2
     exit 1
 fi
+# The supplied stack opts into automatic initialization without putting its
+# long-lived Controller/Agent tasks on the replaceable Peer overlay.
+printf '%s\n' "$controller_stack" | grep -Fq 'KPL_NETWORK_MANAGER_URL: http://network-manager:18082'
+printf '%s\n' "$agent_stack" | grep -Fq 'KPL_CONTROL_NETWORK: "${KPL_STACK_NAME:-kpl}_control"'
+[ "$(grep -Fc 'networks: [control, monitoring]' "$root/stack.swarm.yaml")" = 2 ]
+if grep -Eq '^    networks:.*peers' "$root/stack.swarm.yaml"; then exit 1; fi
+manager_stack=$(sed -n '/^  network-manager:/,/^  resource-monitor:/p' "$root/stack.swarm.yaml")
+printf '%s\n' "$manager_stack" | grep -Fq 'node.role == manager'
+printf '%s\n' "$manager_stack" | grep -Fq 'network-manager-data:/var/lib/kpl/network'
 printf '%s\n' 'PASS: Swarm task identity, overlay address, node-address metrics URL, local image, port validation and bounded startup recovery.'

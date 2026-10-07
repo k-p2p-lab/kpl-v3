@@ -27,6 +27,7 @@ import (
 )
 
 type ServerConfig struct {
+	NetworkManagerURL string
 	AgentDiscoveryDNS string
 	PrometheusURL     string
 	RunMinFreeBytes   uint64
@@ -230,8 +231,25 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 	}
 
 	var runErr error
+	if s.config.NetworkManagerURL != "" {
+		s.updateExperiment(experiment.ID, func(run *model.Experiment) {
+			run.PhaseName = "Preparing network"
+			run.StartedAt = time.Time{}
+			run.PeerNetworkID = ""
+		})
+		runErr = s.prepareExperimentNetwork(ctx, experiment)
+		if runErr == nil {
+			s.updateExperiment(experiment.ID, func(run *model.Experiment) {
+				run.StartedAt = time.Now().UTC()
+				run.PhaseName = ""
+			})
+		}
+	}
 	generation := uint64(1)
 	for index, phase := range spec.Phases {
+		if runErr != nil {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			runErr = err
 			break
@@ -487,6 +505,7 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand) error {
 	s.state.mu.RLock()
 	experimentStartedAt := s.state.experiments[runID].StartedAt
+	peerNetworkID := s.state.experiments[runID].PeerNetworkID
 	s.state.mu.RUnlock()
 	requests := make([]model.CreateNodeRequest, 0, phase.Count)
 	for i := 0; i < phase.Count; i++ {
@@ -497,6 +516,7 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 			lifetime = phase.Lifetime.Sample(rng).String()
 		}
 		requests = append(requests, model.CreateNodeRequest{
+			PeerNetworkID:       peerNetworkID,
 			NetworkMutable:      phase.NetworkMutable,
 			ExperimentStartedAt: experimentStartedAt,
 			ID:                  nodeID,
@@ -1388,6 +1408,11 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	client := s.client
+	if strings.HasPrefix(path, "/api/v1/network/") {
+		networkClient := *s.client
+		networkClient.Timeout = 0 // bounded by the preparation context
+		client = &networkClient
+	}
 	if method == http.MethodPost && (strings.HasSuffix(path, "/mesh-freeze") || strings.HasSuffix(path, "/topology") || strings.HasSuffix(path, "/profile")) {
 		// Mesh control phases supply deadlines across their target peers.
 		freezeClient := *s.client

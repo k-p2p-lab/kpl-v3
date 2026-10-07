@@ -111,6 +111,9 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	if len(s.experimentQueue) == 0 && len(s.queueCleanup) == 0 {
 		experiments[0].State = "running"
 		experiments[0].StartedAt = time.Now().UTC()
+		if s.config.NetworkManagerURL != "" {
+			experiments[0].StartedAt = time.Time{}
+		}
 	}
 	s.state.mu.Lock()
 	for _, run := range experiments {
@@ -280,6 +283,9 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 				current.State = "running"
 				current.PhaseName = ""
 				current.StartedAt = time.Now().UTC()
+				if s.config.NetworkManagerURL != "" {
+					current.StartedAt = time.Time{}
+				}
 			})
 			s.state.mu.RLock()
 			experiment = s.state.experiments[experiment.ID]

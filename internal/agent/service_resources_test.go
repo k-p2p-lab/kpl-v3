@@ -14,6 +14,30 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
+func TestServiceResourcesIncludeStandaloneExperimentGateway(t *testing.T) {
+	id := fmt.Sprintf("%064x", 1)
+	var reads int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/containers/json" {
+			json.NewEncoder(w).Encode([]any{map[string]any{"Id": id, "State": "running", "Labels": map[string]string{"com.docker.stack.namespace": "lab", "io.kpl.network-gateway": "lab", "io.kpl.resource-monitor": "true"}}})
+			return
+		}
+		if r.Method != "GET" || r.URL.Path != "/containers/"+id+"/stats" {
+			t.Errorf("unexpected Docker request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(400)
+			return
+		}
+		reads++
+		json.NewEncoder(w).Encode(map[string]any{"read": time.Unix(int64(reads), 0), "cpu_stats": map[string]any{"online_cpus": 8, "cpu_usage": map[string]any{"total_usage": uint64(reads) * 1000000}}, "memory_stats": map[string]any{"usage": 1000, "stats": map[string]uint64{"inactive_file": 200}}})
+	}))
+	defer server.Close()
+	sampler := &serviceSampler{docker: &resourceSampler{client: server.Client(), baseURL: server.URL, previous: map[string]containerResourceStats{}}, config: ServiceMonitorConfig{Stack: "lab"}, known: map[string]bool{}}
+	report := sampler.sample(t.Context())
+	if len(report.Services) != 1 || report.Services[0].Service != "network-gateway" || report.Services[0].Resources == nil || report.Services[0].Resources.MeasuredContainers != 1 {
+		t.Fatalf("gateway omitted from control-plane resources: %+v", report)
+	}
+}
+
 func TestServiceResourcesIsolateStackAndPeersAndPreservePartialSamples(t *testing.T) {
 	id := func(i int) string { return fmt.Sprintf("%064x", i) }
 	var mu sync.Mutex

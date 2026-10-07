@@ -31,26 +31,29 @@ import (
 var errCapacityReached = errors.New("agent capacity reached")
 
 type Config struct {
-	DockerSocket  string
-	SelfContainer string
-	DockerBinary  string
-	DockerImage   string
-	DockerNetwork string
-	ID            string
-	Name          string
-	Listen        string
-	AdvertiseURL  string
-	MetricsListen string
-	MetricsURL    string
-	SelfURL       string
-	ControllerURL string
-	Token         string
-	Capacity      int
-	DataDir       string
-	Labels        map[string]string
+	AutoResetNetwork bool
+	ControlNetwork   string
+	DockerSocket     string
+	SelfContainer    string
+	DockerBinary     string
+	DockerImage      string
+	DockerNetwork    string
+	ID               string
+	Name             string
+	Listen           string
+	AdvertiseURL     string
+	MetricsListen    string
+	MetricsURL       string
+	SelfURL          string
+	ControllerURL    string
+	Token            string
+	Capacity         int
+	DataDir          string
+	Labels           map[string]string
 }
 
 type process struct {
+	gatewayURL            string
 	node                  model.Node
 	apiURL                string
 	configPath            string
@@ -66,6 +69,9 @@ type process struct {
 }
 
 type Server struct {
+	networkMu            sync.Mutex
+	networkRequest       model.ExperimentNetworkRequest // mu; admission remains closed until activation
+	experimentNetwork    *model.ExperimentNetwork       // mu
 	historyReplay        *historyReplay
 	history              *agentHistory
 	historyRevision      uint64
@@ -118,6 +124,9 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	}
 	if config.DockerNetwork == "" {
 		return nil, fmt.Errorf("docker peer overlay network is required")
+	}
+	if config.AutoResetNetwork && (config.ControlNetwork == "" || config.ControlNetwork == config.DockerNetwork) {
+		return nil, errors.New("automatic network reset requires a separate control network")
 	}
 	if config.ID == "" {
 		return nil, fmt.Errorf("agent id is required")
@@ -212,7 +221,11 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	}
 	s.logger.Info("agent startup checking Docker runtime", "id", s.config.ID)
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := s.docker.check(checkCtx)
+	checkRuntime := s.docker
+	if s.config.AutoResetNetwork {
+		checkRuntime = &dockerRuntime{binary: s.docker.binary, image: s.docker.image, network: s.config.ControlNetwork, commandContext: s.docker.commandContext}
+	}
+	err := checkRuntime.check(checkCtx)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("Docker runtime: %w", err)
@@ -553,6 +566,15 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 	// fences see the in-flight peer. Keep its mutable status separate from the
 	// configuration/response, which are encoded without the state lock.
 	proc := &process{node: cloneNodeStatus(node), cancel: cancel, done: make(chan struct{})}
+	if s.config.AutoResetNetwork {
+		network := s.experimentNetwork
+		peerConfig.ControllerURL = network.PeerGatewayURL + "/controller"
+		peerConfig.AgentURL = network.PeerGatewayURL + "/agents/" + s.config.ID
+		node.Metadata["peerNetworkId"] = network.NetworkID
+		peerConfig.Node.Metadata["peerNetworkId"] = network.NetworkID
+		proc.node.Metadata["peerNetworkId"] = network.NetworkID
+		proc.gatewayURL = network.GatewayURL
+	}
 	s.processes[request.ID] = proc
 	s.mu.Unlock()
 

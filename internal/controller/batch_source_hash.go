@@ -31,12 +31,7 @@ func (s *Server) hashBatchAnalysisSources(ctx context.Context, job *batchAnalysi
 			if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != job.status.BatchID || snapshot.result.SourceRevision != member.SourceRevision {
 				return errors.New("batch sources changed; retry after all runs stop")
 			}
-			var total int64
-			for _, file := range snapshot.files {
-				if file.name != resultNoteFile {
-					total += file.size
-				}
-			}
+			total := analysisSourceSampleBytes(snapshot.files)
 			s.analysisJobMu.Lock()
 			job.status.State, job.status.Phase = "running", fmt.Sprintf("Run %d/%d · checking-sources", i+1, len(selected))
 			job.status.TotalBytes, job.status.ProcessedBytes = total, 0
@@ -101,7 +96,7 @@ func (s *Server) batchSourceHash(ctx context.Context, id string, members []saved
 		return "", err
 	}
 	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return analysisSourceHashPrefix + hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Server) reuseBatchAnalysis(ctx context.Context, job *batchAnalysisJob) error {

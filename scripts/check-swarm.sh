@@ -86,8 +86,8 @@ swarm=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailabl
 [ "$swarm" = 'active true' ] || fail 'Run this check against an active Swarm manager.'
 
 # Inspect only the required fields; avoid dumping task/container inventories.
-control=$(docker node inspect --format '{{.ID}} {{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}' "$KPL_CONTROL_NODE_ID")
-[ "$control" = "$KPL_CONTROL_NODE_ID linux ready active" ] || fail 'The exact control node must be Linux, Ready and Active.'
+control=$(docker node inspect --format '{{.ID}} {{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}} {{.Spec.Role}}' "$KPL_CONTROL_NODE_ID")
+[ "$control" = "$KPL_CONTROL_NODE_ID linux ready active manager" ] || fail 'The exact control node must be a Linux, Ready, Active Swarm manager.'
 network=$(docker network inspect --format '{{.Name}} {{.Driver}} {{.Attachable}}' "$peer_network")
 [ "$network" = "$peer_network overlay true" ] || fail 'The named Peer network must be an attachable overlay.'
 if [ -n "${KPL_PEER_SUBNET:-}" ]; then

@@ -225,7 +225,7 @@ func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {
 		if e != nil {
 			return analysisJobStatus{}, e
 		}
-		if current != status.SourceRevision || status.SourceHash == "" || status.AnalysisVersion != currentAnalysisVersion {
+		if current != status.SourceRevision || !reusableSourceHash(status.SourceHash) || status.AnalysisVersion != currentAnalysisVersion {
 			status.Stale = true
 		}
 	}
@@ -249,7 +249,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" && existing.status.SourceRevision == revision {
+	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) && existing.status.SourceRevision == revision {
 		return existing.status, nil
 	}
 	count := 0
@@ -284,7 +284,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	now := time.Now().UTC()
 	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}}
 	job.status.SavedAnalysisID = existing.status.savedAnalysisID()
-	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && existing.status.SourceHash != "" {
+	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
 		job.previous = &previous
 	}
@@ -316,11 +316,9 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			return err
 		}
 		defer snapshot.close()
-		var total, hashTotal int64
+		var total int64
+		hashTotal := analysisSourceSampleBytes(snapshot.files)
 		for _, file := range snapshot.files {
-			if file.name != resultNoteFile {
-				hashTotal += file.size
-			}
 			if file.name == "events.jsonl" || file.name == "observations.jsonl" {
 				total += file.size
 			}

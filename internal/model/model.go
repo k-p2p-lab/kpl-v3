@@ -99,6 +99,7 @@ type AgentHeartbeat struct {
 const AgentAdmissionRetryHeader = "X-KPL-Admission-Retry"
 
 type CreateNodeRequest struct {
+	PeerNetworkID       string     `json:"peerNetworkId,omitempty"`
 	NetworkMutable      bool       `json:"networkMutable,omitempty"`
 	ProfileRevision     uint64     `json:"profileRevision,omitempty"`
 	ExperimentStartedAt time.Time  `json:"experimentStartedAt,omitzero"`
@@ -135,6 +136,7 @@ type PublishRequest struct {
 }
 
 type Experiment struct {
+	PeerNetworkID     string  `json:"peerNetworkId,omitempty"`
 	StopRequested     bool    `json:"stopRequested,omitempty"`
 	ControllerVersion string  `json:"controllerVersion,omitempty"`
 	CleanupState      string  `json:"cleanupState,omitempty"`

@@ -90,7 +90,7 @@ case "$1 ${2:-}" in
             *"name=${stack}_controller") printf 'svccontroller\n' ;;
             *"name=${stack}_agent") printf 'svcagent\n' ;;
             *name=*) die "$@" ;;
-            *) printf 'svccontroller\nsvcagent\nsvcprometheus\nsvcgrafana\nsvcmonitor\n' ;;
+            *) printf 'svccontroller\nsvcagent\nsvcprometheus\nsvcgrafana\nsvcmonitor\n'; if [ "${KPL_TEST_NETWORK_MANAGER:-0}" = 1 ]; then printf 'svcnetwork\n'; fi ;;
         esac ;;
     'service inspect')
         if [ "${KPL_TEST_INSPECT_FAIL:-0}" = 1 ]; then printf 'mock service inspection failed\n' >&2; exit 2; fi
@@ -100,6 +100,7 @@ case "$1 ${2:-}" in
             svcprometheus) name=${stack}_prometheus ;;
             svcgrafana) name=${stack}_grafana ;;
             svcmonitor) name=${stack}_resource-monitor ;;
+            svcnetwork) name=${stack}_network-manager ;;
             *) die "$@" ;;
         esac
         case "$4" in
@@ -114,6 +115,7 @@ case "$1 ${2:-}" in
     'service ps')
         [ "${KPL_TEST_EMPTY_HISTORY:-0}" = 0 ] || exit 0
         case "$last" in
+            "${stack}_network-manager") printf 'taskN\n' ;;
             "${stack}_controller")
                 case "$*" in
                     *desired-state=running*) printf '%s\n' "${KPL_TEST_LOG_TASKS-taskC}"; exit 0 ;;
@@ -135,7 +137,7 @@ case "$1 ${2:-}" in
         esac ;;
     'service logs')
         [ "$#" = 6 ] && [ "$3" = --tail ] && [ "$5" = --timestamps ] || die "$@"
-        case "$6" in "${stack}_controller"|"${stack}_agent"|"${stack}_prometheus"|"${stack}_grafana"|"${stack}_resource-monitor") ;; *) die "$@" ;; esac
+        case "$6" in "${stack}_controller"|"${stack}_agent"|"${stack}_prometheus"|"${stack}_grafana"|"${stack}_resource-monitor"|"${stack}_network-manager") ;; *) die "$@" ;; esac
         printf 'mock service log for %s\n' "$6" ;;
     'exec '*)
         [ "$#" = 8 ] && [ "$2 $3 $4 $6" = 'containerC sh -c kpl-web-log' ] || die "$@"
@@ -144,8 +146,15 @@ case "$1 ${2:-}" in
         # Execute the real reader with a fixture file; never use the real daemon
         # or Controller data path. This verifies tail/all and missing-file errors.
         sh -c "$5" "$6" "$s/logs/${7##*/}" "$8" ;;
+    'ps --all')
+        case "$*" in *io.kpl.network-gateway*) printf 'gatewayid\n' ;; *io.kpl.managed*) : ;; *) die "$@" ;; esac ;;
+    'rm --force')
+        [ "$3" = gatewayid ] || die "$@"
+        event gateway-remove ;;
     'inspect --type')
+        if [ "$3" = container ] && [ "$last" = gatewayid ]; then printf '%s|%s|\n' "$stack" "$stack"; exit 0; fi
         [ "$3" = task ] || die "$@"
+        if [ -f "$s/removed" ] && [ "${KPL_TEST_NETWORK_MANAGER:-0}" = 1 ]; then die 'Service deletion erased task history'; fi
         if [ "$5" = '{{.NodeID}}|{{.Status.State}}|{{if .Status.ContainerStatus}}{{.Status.ContainerStatus.ContainerID}}{{end}}' ]; then
             case "$last" in
                 taskC) printf '%s|running|containerC\n' "${KPL_TEST_CONTROLLER_NODE:-control1}" ;;
@@ -158,6 +167,9 @@ case "$1 ${2:-}" in
         fi
         state=running; pid=42; code=0; issue=ok
         case "$last" in
+            taskN)
+                node=control1; container=containerN
+                if [ -f "$s/manager-stopped" ]; then state=shutdown; pid=0; fi ;;
             pendingC)
                 [ -f "$s/controller-stopped" ] || die "$@"
                 node=''; state=${KPL_TEST_PENDING_STATE:-pending}
@@ -226,6 +238,8 @@ case "$1 ${2:-}" in
                     esac ;;
                 '{{.Description.Platform.OS}} {{.Status.State}}') printf '%s %s\n' "$os" "$state" ;;
                 '{{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}') printf '%s %s %s\n' "$os" "$state" "$availability" ;;
+                '{{.Spec.Role}}') printf '%s\n' "$role" ;;
+                '{{.ID}} {{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}} {{.Spec.Role}}') printf '%s %s %s %s %s\n' "$node" "$os" "$state" "$availability" "$role" ;;
                 '{{.ID}} {{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}') printf '%s %s %s %s\n' "$node" "$os" "$state" "$availability" ;;
                 '{{.ID}}|{{.Spec.Role}}|{{.Description.Platform.OS}}|{{.Status.State}}|{{.Spec.Availability}}') printf '%s|%s|%s|%s|%s\n' "$node" "$role" "$os" "$state" "$availability" ;;
                 *) die "$format" ;;
@@ -261,13 +275,28 @@ case "$1 ${2:-}" in
             *) die "$@" ;;
         esac ;;
     'service rm')
-        [ "$*" = 'service rm svccontroller svcagent svcprometheus svcgrafana svcmonitor' ] || die "$@"
+        case "$*" in 'service rm svccontroller svcagent svcprometheus svcgrafana svcmonitor'|'service rm svccontroller svcagent svcprometheus svcgrafana svcmonitor svcnetwork') ;; *) die "$@" ;; esac
         if [ "${KPL_TEST_SERVICE_RM_FAIL:-0}" = 1 ]; then printf 'mock service removal failed\n' >&2; exit 2; fi
         shift 2
         for service do event "service-rm-$service"; done
-        : > "$s/removed" ;;
+        : > "$s/removed"
+        if [ "${KPL_TEST_NETWORK_MANAGER:-0}" = 1 ]; then
+            : > "$s/controller-stopped"
+            : > "$s/stopped-worker1"
+            : > "$s/stopped-worker2"
+        fi ;;
     'service update')
         [ "$3 $4" = '--detach=true --no-resolve-image' ] || die "$@"
+        if [ "$last" = "${stack}_network-manager" ]; then
+            [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
+            event pause-manager; : > "$s/manager-stopped"
+            exit 0
+        fi
+        if [ "$last" = "${stack}_agent" ] && [ "$6" = node.role==manager ]; then
+            [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
+            event pause-agents; : > "$s/stopped-worker1"; : > "$s/stopped-worker2"
+            exit 0
+        fi
         if [ "$last" = "${stack}_controller" ]; then
             [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
             event pause-controller; : > "$s/controller-stopped"
@@ -330,7 +359,7 @@ reset_case() {
     export KPL_USER=admin KPL_PASSWORD=private-dashboard-password GRAFANA_ADMIN_PASSWORD=private-test-password
     export KPL_DOCKER_TIMEOUT=3 KPL_CONTROLLER_STOP_TIMEOUT=3 KPL_AGENT_STOP_TIMEOUT=3
     export KPL_TEST_REPO_ROOT=$root
-    unset KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
+    unset KPL_TEST_NETWORK_MANAGER KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
     unset KPL_TEST_CONTROLLER_NODE KPL_TEST_LOG_CONTEXT_NODE KPL_TEST_LOG_TASKS KPL_TEST_LOG_EXEC_FAIL
     unset KPL_TEST_SLOW_STOP_INSPECT KPL_TEST_SERVICE_RM_FAIL KPL_TEST_STACK_RM_FAIL KPL_TEST_REMOVAL_PENDING KPL_TEST_NODE_UPDATE_FAIL
     unset KPL_TEST_SELF_ID KPL_TEST_NODE_IDS KPL_TEST_LABEL_NODES KPL_TEST_NODE_LS_FAIL KPL_TEST_NODE_INSPECT_FAIL
@@ -347,7 +376,33 @@ reject() {
 no_stack_removal() { ! grep -q '^stack-rm$' "$KPL_TEST_STATE/events"; }
 no_mutation() { [ ! -s "$KPL_TEST_STATE/events" ]; }
 
-# Full removal is scoped to verified services and never depends on task exits.
+# Reject an incompatible control worker before network/placement mutations.
+reset_case
+export KPL_CONTROL_NODE_ID=worker1
+reject deploy worker1 worker2
+no_mutation
+grep -q 'control node must be a Swarm manager' "$KPL_TEST_STATE/output"
+
+# Recognize the new owned service during lifecycle operations.
+reset_case
+export KPL_TEST_NETWORK_MANAGER=1
+run status
+
+# A normal automatic-network stack retires its gateway only after Agent and
+# manager exits. Unclean shutdown still deletes services but retains the gateway.
+reset_case
+export KPL_TEST_NETWORK_MANAGER=1
+run remove
+grep -qx 'gateway-remove' "$KPL_TEST_STATE/events"
+awk '/^clean-taskA2$/ { clean=NR } /^gateway-remove$/ { gateway=NR } /^stack-rm$/ { stack=NR } END { exit !(clean && clean<gateway && gateway<stack) }' "$KPL_TEST_STATE/events"
+reset_case
+export KPL_TEST_NETWORK_MANAGER=1 KPL_TEST_AGENT_STOP=failed
+run remove
+grep -qx 'stack-rm' "$KPL_TEST_STATE/events"
+if grep -qx 'gateway-remove' "$KPL_TEST_STATE/events"; then exit 1; fi
+grep -q 'Gateway cleanup is unverified' "$KPL_TEST_STATE/output"
+
+# Full removal of a legacy stack never depends on task exits.
 no_shutdown_checks() {
     ! grep -q '^service ps\|^inspect --type task\|^node inspect\|^service update' "$KPL_TEST_STATE/calls"
 }
@@ -835,7 +890,7 @@ no_mutation
 reset_case
 run logs
 grep -Fxq 'service logs --tail 100 --timestamps lab_controller' "$KPL_TEST_STATE/calls"
-for component in agent resource-monitor prometheus grafana; do
+for component in agent network-manager resource-monitor prometheus grafana; do
     run logs "$component"
     grep -Fxq "service logs --tail 100 --timestamps lab_$component" "$KPL_TEST_STATE/calls"
 done
@@ -1116,4 +1171,5 @@ cmp "$scratch/original.env" "$scratch/generated.env"
 no_mutation
 
 sh "$root/scripts/test-swarm-peer-network.sh"
+sh "$root/scripts/test-swarm-network-gateway.sh"
 printf '%s\n' 'PASS: Manager commands enforce direct stack removal, verified node cleanup, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'

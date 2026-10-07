@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -46,6 +47,12 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 	}
 	s.mu.Lock()
 	proc.containerID = id
+	if proc.gatewayURL != "" {
+		endpoint, parseErr := url.Parse(apiURL)
+		if parseErr == nil {
+			apiURL = proc.gatewayURL + "/peers/" + endpoint.Hostname()
+		}
+	}
 	proc.apiURL = apiURL
 	metadata := make(map[string]string, len(proc.node.Metadata)+1)
 	for key, value := range proc.node.Metadata {

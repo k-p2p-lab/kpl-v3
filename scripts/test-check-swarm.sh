@@ -30,7 +30,7 @@ case "$1 $2" in
         esac ;;
     'node inspect')
         if [ "$5" = control1 ]; then
-            printf '%s\n' "${KPL_TEST_CONTROL:-control1 linux ready active}"
+            printf '%s\n' "${KPL_TEST_CONTROL:-control1 linux ready active manager}"
         else
             case "$5" in
                 worker1)
@@ -122,7 +122,8 @@ calls_before=$(wc -l < "$KPL_TEST_CALLS")
 env KPL_AGENT_METRICS_PORT=19091 sh "$root/scripts/check-swarm.sh" --config-only > "$scratch/output"
 [ "$(wc -l < "$KPL_TEST_CALLS")" -eq "$calls_before" ]
 reject KPL_CONTROL_NODE_ID=
-reject KPL_TEST_CONTROL='different1 linux ready active'
+reject KPL_TEST_CONTROL='control1 linux ready active worker'
+reject KPL_TEST_CONTROL='different1 linux ready active manager'
 reject KPL_TEST_CONTROL='control1 linux ready drain'
 reject KPL_TEST_CONTROL='control1 windows ready active'
 reject KPL_TEST_MANAGER='active false'

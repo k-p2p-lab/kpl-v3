@@ -28,10 +28,10 @@ swarm_reset_peer_network() {
     # same name while this command was checking the original network.
     reset_id=$(dock network inspect --format '{{.Id}}' "$KPL_PEER_NETWORK") || fail 'Cannot inspect the Peer network; it must exist before reset.'
     case "$reset_id" in ''|*[!a-zA-Z0-9]*) fail 'Docker returned an invalid or ambiguous Peer network ID.' ;; esac
-    reset_format='{{.Name}}|{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{.Internal}}|{{.Ingress}}|{{.ConfigOnly}}|{{.EnableIPv6}}|{{.ConfigFrom.Network}}|{{.IPAM.Driver}}|{{len .IPAM.Options}}|{{len .IPAM.Config}}|{{len .Containers}}|{{index .Labels "io.kpl.application"}}|{{index .Labels "io.kpl.stack"}}|{{len .Labels}}|{{range $key, $value := .Options}}{{if ne $key "com.docker.network.driver.overlay.vxlanid_list"}}custom{{end}}{{end}}'
-    reset_expected="$KPL_PEER_NETWORK|overlay|swarm|true|false|false|false|false||default|0|1|0|$application|$KPL_STACK_NAME|2|"
+    reset_format='{{.Name}}|{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{.Internal}}|{{.Ingress}}|{{.ConfigOnly}}|{{.EnableIPv6}}|{{.ConfigFrom.Network}}|{{.IPAM.Driver}}|{{len .IPAM.Options}}|{{len .IPAM.Config}}|{{len .Containers}}|{{index .Labels "io.kpl.application"}}|{{index .Labels "io.kpl.stack"}}|{{range $key, $value := .Labels}}{{if and (ne $key "io.kpl.application") (ne $key "io.kpl.stack") (ne $key "io.kpl.execution")}}custom{{end}}{{end}}|{{range $key, $value := .Options}}{{if ne $key "com.docker.network.driver.overlay.vxlanid_list"}}custom{{end}}{{end}}'
+    reset_expected="$KPL_PEER_NETWORK|overlay|swarm|true|false|false|false|false||default|0|1|0|$application|$KPL_STACK_NAME||"
     reset_metadata=$(dock network inspect --format "$reset_format" "$reset_id") || fail 'Cannot inspect Peer network ownership and settings.'
-    [ "$reset_metadata" = "$reset_expected" ] || fail 'Peer network reset requires an empty helper-owned IPv4 overlay with default IPAM, only the two KPL ownership labels, and no custom options.'
+    [ "$reset_metadata" = "$reset_expected" ] || fail 'Peer network reset requires an empty helper-owned IPv4 overlay with default IPAM, only KPL ownership/execution labels, and no custom options.'
     # JSON preserves empty address values across Docker CLI versions which use
     # either strings or netip types. AuxAddress is the CLI's typed Go field.
     reset_ipam_format='{{range .IPAM.Config}}{{json .Subnet}}|{{json .Gateway}}|{{json .IPRange}}|{{len .AuxAddress}}{{end}}'

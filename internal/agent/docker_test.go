@@ -113,7 +113,7 @@ func TestDockerCLIHelper(t *testing.T) {
 		} else if os.Getenv("KPL_DOCKER_NO_IP") == "1" {
 			fmt.Print(`{"kpl-v3-peers":{"IPAddress":""}}`)
 		} else {
-			fmt.Print(`{"kpl-v3-peers":{"IPAddress":"172.25.0.8"}}`)
+			fmt.Printf(`{"kpl-v3-peers":{"IPAddress":"172.25.0.8","NetworkID":%q}}`, os.Getenv("KPL_DOCKER_ATTACHED_NETWORK_ID"))
 		}
 	case "wait":
 		code := os.Getenv("KPL_DOCKER_EXIT")

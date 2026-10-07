@@ -15,10 +15,11 @@ services:
       KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with scripts/swarm.sh}"
       KPL_PROMETHEUS_URL: http://prometheus:9090
       KPL_AGENT_DISCOVERY_DNS: tasks.${KPL_STACK_NAME:-kpl}_agent
+      KPL_NETWORK_MANAGER_URL: http://network-manager:18082
       PROMETHEUS_PORT: "${PROMETHEUS_PORT:-9090}"
       GRAFANA_PORT: "${GRAFANA_PORT:-3000}"
     volumes: [controller-data:/var/lib/kpl/data]
-    networks: [peers, monitoring]
+    networks: [control, monitoring]
     ports:
       - target: 8080
         published: ${KPL_HTTP_PORT:-8080}
@@ -47,13 +48,14 @@ services:
       KPL_SWARM_NODE_ID: '{{.Node.ID}}'
       KPL_SWARM_NODE_HOSTNAME: '{{.Node.Hostname}}'
       KPL_PEER_NETWORK: "${KPL_PEER_NETWORK:-kpl-swarm-peers}"
+      KPL_CONTROL_NETWORK: "${KPL_STACK_NAME:-kpl}_control"
       KPL_AGENT_CAPACITY: "${KPL_AGENT_CAPACITY:-20}"
       KPL_AGENT_METRICS_PORT: "${KPL_AGENT_METRICS_PORT:-9091}"
       KPL_CONTROLLER_URL: http://${KPL_STACK_NAME:-kpl}_controller:8080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-data:/var/lib/kpl/agent
-    networks: [peers, monitoring]
+    networks: [control, monitoring]
     ports:
       - target: 9091
         published: ${KPL_AGENT_METRICS_PORT:-9091}
@@ -67,6 +69,37 @@ services:
       endpoint_mode: dnsrr
       placement:
         constraints: ['node.platform.os == linux', 'node.labels.kpl.${KPL_STACK_NAME:-kpl}.agent == true']
+      update_config: {parallelism: 1, order: stop-first}
+      rollback_config: {parallelism: 1, order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+
+  # Owns replacement of the empty experiment overlay before each Run.
+  network-manager:
+    image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
+    user: '0:0'
+    command: [network-manager]
+    labels:
+      io.kpl.resource-monitor: 'true'
+    environment:
+      KPL_USER: "${KPL_USER:?Set KPL_USER}"
+      KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
+      KPL_STACK_NAME: "${KPL_STACK_NAME:-kpl}"
+      KPL_SWARM_TASK_NAME: '{{.Task.Name}}'
+      KPL_PEER_NETWORK: "${KPL_PEER_NETWORK:-kpl-swarm-peers}"
+      KPL_PEER_SUBNET: "${KPL_PEER_SUBNET:-}"
+      KPL_CONTROL_NETWORK: "${KPL_STACK_NAME:-kpl}_control"
+      KPL_CONTROLLER_URL: http://controller:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - network-manager-data:/var/lib/kpl/network
+    networks: [control]
+    stop_grace_period: 4m
+    deploy:
+      labels:
+        io.kpl.application: kp2plab-v3
+      replicas: 1
+      placement:
+        constraints: ['node.platform.os == linux', 'node.role == manager', 'node.id == ${KPL_CONTROL_NODE_ID:?Set the persistent control node ID}']
       update_config: {parallelism: 1, order: stop-first}
       rollback_config: {parallelism: 1, order: stop-first}
       restart_policy: {condition: any, delay: 5s}
@@ -172,12 +205,16 @@ networks:
   peers:
     external: true
     name: "${KPL_PEER_NETWORK:-kpl-swarm-peers}"
+  control:
+    driver: overlay
+    attachable: true
   monitoring:
     driver: overlay
 
 volumes:
   agent-data:
   controller-data:
+  network-manager-data:
   prometheus-data:
   grafana-data:
 

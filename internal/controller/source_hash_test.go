@@ -7,12 +7,96 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
+
+func TestAnalysisSourceSamplingBoundsIOAndPreservesLogicalPositions(t *testing.T) {
+	data := strings.Repeat("0123456789abcdef", 1<<16)
+	whole := hashTestFile(t, "events.jsonl", data)
+	var read int64
+	baseline, err := analysisSourceHash(t.Context(), []resultFile{whole}, func(n int64) { read += n })
+	if err != nil || !currentSourceHash(baseline) || read != 65536 || read != analysisSourceSampleBytes([]resultFile{whole}) {
+		t.Fatalf("sampling read=%d hash=%s err=%v", read, baseline, err)
+	}
+	cut := 123457
+	parts := []resultFile{hashTestFile(t, "part1", data[:cut]), hashTestFile(t, "part2", data[cut:])}
+	segmented := resultFile{name: whole.name, size: whole.size, parts: parts}
+	got, err := analysisSourceHash(t.Context(), []resultFile{segmented}, nil)
+	if err != nil || got != baseline {
+		t.Fatalf("archive changed sampled positions: %s %v", got, err)
+	}
+	// A change at a sampled interior position must invalidate the cache.
+	offsets := sourceSampleOffsets(whole.name, whole.size)
+	f, err := os.OpenFile(whole.file.Name(), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteAt([]byte("x"), offsets[10]); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := analysisSourceHash(t.Context(), []resultFile{whole}, nil)
+	if err != nil || changed == baseline {
+		t.Fatalf("sampled edit was missed: %v", err)
+	}
+	// Document the deliberate tradeoff: this fingerprint is not a full hash.
+	if _, err := f.WriteAt([]byte(data[offsets[10]:offsets[10]+1]), offsets[10]); err != nil {
+		t.Fatal(err)
+	}
+	gap := int64(-1)
+	for i := 1; i < len(offsets); i++ {
+		if offsets[i] > offsets[i-1]+sourceSampleSize {
+			gap = offsets[i-1] + sourceSampleSize
+			break
+		}
+	}
+	if gap < 0 {
+		t.Fatal("large fixture has no unsampled gap")
+	}
+	if _, err := f.WriteAt([]byte("x"), gap); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := analysisSourceHash(t.Context(), []resultFile{whole}, nil)
+	if err != nil || unchanged != baseline {
+		t.Fatalf("unexpected unsampled read: %s %v", unchanged, err)
+	}
+}
+
+func TestAnalysisKeepsLegacyFullHashUntilSourceRevisionChanges(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	resultFixture(t, s, "run", "completed", time.Unix(1, 0))
+	if _, err := s.startAnalysisJob(t.Context(), "run", false); err != nil {
+		t.Fatal(err)
+	}
+	first := awaitAnalysisJob(t, s, "run")
+	s.analysisWorkers.Wait()
+	first.SourceHash = "sha256:" + strings.Repeat("0", 64)
+	if err := s.persistAnalysisJob(first); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(s.config, nil)
+	status, err := restarted.startAnalysisJob(t.Context(), "run", false)
+	if err != nil || status.ID != first.ID || status.State != "completed" || status.Stale {
+		t.Fatalf("unchanged legacy cache was invalidated: %+v %v", status, err)
+	}
+	path := filepath.Join(s.config.DataDir, currentRunsDirectory, "run", "scenario.yaml")
+	if err := os.Chtimes(path, time.Unix(999, 0), time.Unix(999, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.startAnalysisJob(t.Context(), "run", false); err != nil {
+		t.Fatal(err)
+	}
+	baseline := awaitAnalysisJob(t, restarted, "run")
+	restarted.analysisWorkers.Wait()
+	if baseline.State != "completed" || baseline.ID == first.ID || !currentSourceHash(baseline.SourceHash) {
+		t.Fatalf("sample baseline: %+v", baseline)
+	}
+}
 
 func hashTestFile(t *testing.T, name, contents string) resultFile {
 	t.Helper()

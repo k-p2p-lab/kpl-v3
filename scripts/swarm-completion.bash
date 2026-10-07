@@ -86,14 +86,14 @@ _kpl_swarm_complete() {
             ;;
         logs)
             if (( COMP_CWORD == index )); then
-                _kpl_swarm_offer controller agent resource-monitor prometheus grafana access auth --tail
+                _kpl_swarm_offer controller agent network-manager resource-monitor prometheus grafana access auth --tail
                 return 0
             fi
             case ${COMP_WORDS[index]-} in
                 --*) ;;
                 *) component=${COMP_WORDS[index]}; index=$((index + 1)) ;;
             esac
-            case $component in controller|agent|resource-monitor|prometheus|grafana|access|auth) ;; *) return 0 ;; esac
+            case $component in controller|agent|network-manager|resource-monitor|prometheus|grafana|access|auth) ;; *) return 0 ;; esac
             while (( index < COMP_CWORD )); do
                 case ${COMP_WORDS[index]} in
                     --tail)

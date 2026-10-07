@@ -52,6 +52,9 @@ func (s *serviceSampler) sample(ctx context.Context) model.ServiceResourceReport
 				continue
 			}
 			full := c.Labels["com.docker.swarm.service.name"]
+			if c.Labels["io.kpl.network-gateway"] == s.config.Stack {
+				full = s.config.Stack + "_network-gateway"
+			}
 			if !strings.HasPrefix(full, s.config.Stack+"_") {
 				continue
 			}

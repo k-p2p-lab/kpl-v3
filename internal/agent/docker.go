@@ -131,6 +131,13 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	if err != nil {
 		return "", "", err
 	}
+	network := d.network
+	if id := node.Metadata["peerNetworkId"]; id != "" {
+		if !dockerNetworkName.MatchString(id) {
+			return "", "", errors.New("invalid experiment network ID")
+		}
+		network = id
+	}
 	args := []string{"create", "--name", name,
 		"--label", managedContainerLabel,
 		"--label", "io.kpl.agent=" + node.AgentID,
@@ -138,7 +145,7 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 		"--label", "io.kpl.node=" + node.ID,
 		"--label", "io.kpl.generation=" + strconv.FormatUint(node.Generation, 10),
 		"--label", "io.kpl.network=" + d.network,
-		"--network", d.network, "--user", "0:0", "--cap-drop", "ALL",
+		"--network", network, "--user", "0:0", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges", "--init",
 		"--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=2",
 	}
@@ -210,9 +217,12 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	if err != nil {
 		return "", "", fmt.Errorf("inspect peer container address: %w", err)
 	}
-	var networks map[string]struct{ IPAddress string }
+	var networks map[string]struct{ IPAddress, NetworkID string }
 	if err := json.Unmarshal(output, &networks); err != nil {
 		return "", "", fmt.Errorf("decode peer container address: %w", err)
+	}
+	if expected := node.Metadata["peerNetworkId"]; expected != "" && networks[d.network].NetworkID != expected {
+		return "", "", errors.New("Peer container is not attached to the prepared network ID")
 	}
 	ip := net.ParseIP(networks[d.network].IPAddress)
 	if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsUnspecified() {

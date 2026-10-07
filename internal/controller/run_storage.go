@@ -224,7 +224,7 @@ func (reader joinedResultReader) ReadAt(data []byte, offset int64) (int, error) 
 			continue
 		}
 		length := min(int64(len(data)-read), part.size-offset)
-		n, err := part.file.ReadAt(data[read:read+int(length)], offset)
+		n, err := part.reader().ReadAt(data[read:read+int(length)], offset)
 		read += n
 		if err != nil && !(err == io.EOF && int64(n) == length) {
 			return read, err

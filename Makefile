@@ -67,7 +67,7 @@ swarm-reset-network:
 
 swarm-restart:
 	sh scripts/swarm.sh remove
-	sleep 5 >> /dev/null
+	sleep 5
 	sh scripts/swarm.sh publish
 	sh scripts/swarm.sh deploy $(if $(strip $(NODES)),$(NODES),--workers)
 

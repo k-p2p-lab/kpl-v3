@@ -22,6 +22,7 @@ import (
 )
 
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,199}$`)
+var dockerEndpointID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type ManagerConfig struct {
 	Stack, PeerNetwork, ControlNetwork, Subnet, ControllerURL, Token, SelfContainer, DataDir string
@@ -351,13 +352,28 @@ func (m *Manager) unusedNetwork(ctx context.Context, network *networkInfo) error
 			}
 		}
 	}
-	for id := range network.Containers {
-		if !identifier.MatchString(id) {
-			return errors.New("invalid network endpoint identity")
+	for id, raw := range network.Containers {
+		var endpoint struct{ Name, EndpointID string }
+		if err := json.Unmarshal(raw, &endpoint); err != nil {
+			return fmt.Errorf("invalid Peer network endpoint %q: %w", id, err)
 		}
-		data, err := m.command(ctx, nil, "inspect", "--format", "{{index .Config.Labels \"io.kpl.network-gateway\"}}", id)
-		if err != nil || strings.TrimSpace(string(data)) != m.config.Stack {
-			return errors.New("Peer network has an endpoint other than the experiment gateway")
+		// Docker reports its per-overlay LB sandbox in Containers, using
+		// lb-<network name> and <network name>-endpoint. It has no container
+		// object to inspect. Match that exact pair, never just the lb- prefix
+		// or a container's display name, and leave its removal to Docker.
+		if network.Driver == "overlay" && network.Scope == "swarm" && !network.Ingress &&
+			id == "lb-"+network.Name && endpoint.Name == network.Name+"-endpoint" && dockerEndpointID.MatchString(endpoint.EndpointID) {
+			continue
+		}
+		if !identifier.MatchString(id) {
+			return fmt.Errorf("invalid Peer network endpoint identity %q", id)
+		}
+		data, err := m.command(ctx, nil, "inspect", "--type", "container", "--format", "{{index .Config.Labels \"io.kpl.network-gateway\"}}", id)
+		if err != nil {
+			return fmt.Errorf("cannot verify Peer network endpoint %q (name=%q): %w", id, endpoint.Name, err)
+		}
+		if strings.TrimSpace(string(data)) != m.config.Stack {
+			return fmt.Errorf("Peer network has an endpoint other than the experiment gateway: id=%q name=%q", id, endpoint.Name)
 		}
 	}
 	return nil

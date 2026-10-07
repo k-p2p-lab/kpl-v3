@@ -141,6 +141,12 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 			return []byte(n.ID), nil
 		case "connect":
 			f.mutations = append(f.mutations, call)
+			// Attaching the gateway also creates Docker's load-balancer
+			// sandbox, which appears in network inspect but is not a container.
+			f.network.Containers = map[string]json.RawMessage{
+				"gateway-container":    json.RawMessage(`{"Name":"kpl-network-gateway"}`),
+				"lb-" + f.network.Name: json.RawMessage(fmt.Sprintf(`{"Name":%q,"EndpointID":%q}`, f.network.Name+"-endpoint", strings.Repeat("a", 64))),
+			}
 			return nil, nil
 		}
 	case "ps":
@@ -151,6 +157,9 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 	case "rm":
 		f.mutations = append(f.mutations, call)
 		f.gateway = false
+		if f.network != nil {
+			delete(f.network.Containers, "gateway-container")
+		}
 		return nil, nil
 	case "create":
 		if f.network == nil {
@@ -175,7 +184,10 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 			return []byte("sha256:test-image"), nil
 		}
 		if strings.Contains(call, "io.kpl.network-gateway") {
-			return []byte("kpl"), nil
+			if args[len(args)-1] == "gateway-container" && f.gateway {
+				return []byte("kpl"), nil
+			}
+			return nil, errors.New("No such container: " + args[len(args)-1])
 		}
 		return fmt.Appendf(nil, `{"kpl-control":{"IPAddress":"10.90.0.2","NetworkID":"control-network"},"kpl-peers":{"IPAddress":"10.11.0.2","NetworkID":%q}}`, f.network.ID), nil
 	}

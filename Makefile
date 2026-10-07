@@ -62,5 +62,14 @@ swarm-remove-node:
 swarm-remove:
 	sh scripts/swarm.sh remove
 
+swarm-reset-network:
+	sh scripts/swarm.sh reset-peer-network
+
+swarm-restart:
+	sh scripts/swarm.sh remove
+	sh scripts/swarm.sh reset-peer-network
+	sh scripts/swarm.sh publish
+	sh scripts/swarm.sh deploy $(if $(strip $(NODES)),$(NODES),--workers)
+
 validate:
 	go run ./cmd/kpl validate --scenario examples/smoke.yaml

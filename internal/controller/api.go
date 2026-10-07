@@ -182,6 +182,8 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/scenarios/", s.handleScenarioAction)
 	mux.HandleFunc("/api/v1/library-groups", s.handleLibraryGroups)
 	mux.HandleFunc("/api/v1/library-groups/", s.handleLibraryGroups)
+	mux.HandleFunc("/api/v1/downloads", s.handleLibraryDownloadRequest)
+	mux.HandleFunc("/api/v1/downloads/", s.handleLibraryDownload)
 	mux.HandleFunc("/api/v1/experiments", s.handleExperiments(ctx))
 	mux.HandleFunc("/api/v1/results", s.handleResults)
 	mux.HandleFunc("/api/v1/result-storage", s.handleResultStorage)

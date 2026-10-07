@@ -210,7 +210,7 @@
         const selecting = selectionScope === scope;
         const disabled = ready() ? "" : " disabled";
         const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !busy ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
-          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !busy ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button></div>' : "") +
+          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !busy ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + (options?.download ? '<button class="secondary-button library-download-button" type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (selected.size && ready() ? "" : " disabled") + '>Download ZIP</button>' : "") + '</div>' : "") +
           (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (busy ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
         const active = document.activeElement;
         const focusKind = container.contains(active) ? active?.hasAttribute("data-library-filter") ? "[data-library-filter]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : "" : "";
@@ -329,6 +329,20 @@
           selected = new Set(keys);
           refreshUI();
           changed();
+        } else if (action === "download") {
+          if (!selected.size || !ready() || !options?.download) return;
+          const keys = [...selected], scope = selectionScope;
+          busy = true;
+          errorText = "";
+          noticeText = "Preparing download…";
+          refreshUI();
+          try {
+            await options.download(scope, keys);
+            noticeText = "Download requested. Check your browser's downloads.";
+          } finally {
+            busy = false;
+            refreshUI();
+          }
         } else if (action === "move") {
           await assign([...selected], targetGroup);
           selected.clear();

@@ -11,3 +11,4 @@ kpl
 dist
 bin
 *.exe
+Makefile

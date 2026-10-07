@@ -268,7 +268,7 @@ test("closing detaches from server analysis and reopening completed work does no
   await first;
   await second;
   assert.match(element("resultImagesGrid").innerHTML, /data-image-group="graph-node_count"/);
-  assert.equal(element("downloadAllResultImages").download, "two-images.zip");
+  assert.equal(element("downloadAllResultImages").download, "[Example _run_]-two-images.zip");
   assert.match(element("downloadResultAnalysis").href, /two\/result\?jobId=two-job$/);
   assert.ok(calls.every((call) => !call.options.method));
   ui.remove("two");
@@ -375,7 +375,7 @@ test('batch and individual analyses use separate jobs even when batch ID equals 
   for (const data of [first, second]) data.result.batchId = 'run';
   const calls = [];
   const job = { batchId: 'run', id: 'batch-job', analysisVersion: 5, state: 'completed' };
-  const batchData = { version: 1, aggregation: 'equal-run-mean-v1', analysisId: job.id, batchId: 'run', expectedRuns: 2, missingRuns: 0, excluded: [], summary: { 'metrics.averageLatencyMs': { average: 15, deviation: 0, count: 2 } }, runs: [first, second] };
+  const batchData = { name: '한글 Batch', version: 1, aggregation: 'equal-run-mean-v1', analysisId: job.id, batchId: 'run', expectedRuns: 2, missingRuns: 0, excluded: [], summary: { 'metrics.averageLatencyMs': { average: 15, deviation: 0, count: 2 } }, runs: [first, second] };
   const { ui, element } = fixture(async (path, options) => {
     calls.push({ path, method: options.method || 'GET' });
     if (path === '/api/v1/analysis-jobs/run') return new Promise(resolve => { releaseIndividual = resolve; });
@@ -391,7 +391,7 @@ test('batch and individual analyses use separate jobs even when batch ID equals 
   assert.equal(element('batchAnalysisSummary').hidden, false);
   assert.match(element('batchAnalysisSummary').innerHTML, /contributing run counts/);
   assert.equal(element('downloadResultAnalysis').href, '/api/v1/batch-analysis-jobs/run/result?jobId=batch-job');
-  assert.match(element('downloadAllResultImages').download, /batch-mean-images.zip$/);
+  assert.equal(element('downloadAllResultImages').download, '[한글 Batch]-run-batch-mean-images.zip');
   assert.equal(calls.filter(call => call.method === 'POST').length, 0);
 });
 
@@ -793,4 +793,11 @@ test('missing saved artifacts do not stop source checking and current analysis',
   assert.match(element('resultImagesStatus').textContent, /images ready/);
   assert.match(element('downloadResultAnalysis').href, /jobId=new-job$/);
   element('resultImagesDialog').close();
+});
+
+test('image ZIP names preserve the original Run suffix and safely prefix the experiment name',()=>{
+ assert.equal(images.imageZIPFilename('한글 ER 실험','run-123'),'[한글 ER 실험]-run-123-images.zip');
+ assert.equal(images.imageZIPFilename('a/b\\c:*?"<>|\n','batch-batch-mean'),'[a_b_c________]-batch-batch-mean-images.zip');
+ assert.equal(images.imageZIPFilename('...','run-123'),'[run-123]-run-123-images.zip');
+ assert.match(images.imageZIPFilename('한'.repeat(10000),'run'),/^\[한{32}\]-run-images.zip$/);
 });

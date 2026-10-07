@@ -10,7 +10,7 @@
 #resultGroupTools { padding: .85rem 1.2rem; border-bottom: 1px solid var(--line); }
 .library-group-toolbar select, .library-group-selection select, .library-group-dialog input { min-height: var(--control-height); border: 1px solid var(--line); border-radius: .45rem; background: var(--surface); color: var(--text); padding: .4rem .6rem; font: inherit; }
 .library-group-toolbar select, .library-group-selection select { font-size: .8rem; }
-.library-group-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .55rem; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--line); }
+.library-group-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--line); }
 .library-selection-count { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .85rem; min-width: 0; font-size: .78rem; }
 .library-selection-count > span { margin-right: auto; }
 .library-group-selection select { min-width: 0; width: 100%; }
@@ -74,7 +74,7 @@
   .library-group-actions { grid-column: 2; grid-row: 1; }
 }
 @container library-tools (min-width: 42rem) {
-  .library-group-selection { grid-template-columns: minmax(0, 1fr) minmax(12rem, 20rem) auto; }
+  .library-group-selection { grid-template-columns: minmax(0, 1fr) minmax(10rem, 16rem) auto auto; }
   .library-selection-count { grid-column: auto; justify-content: flex-start; }
   .library-selection-count > span { margin-right: .5rem; }
 }
@@ -89,4 +89,10 @@
   .library-group-editor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-group-editor-actions button { min-width: 0; font-size: .78rem; }
   .library-group-editor-actions [data-library-action="delete"] { grid-column: 1 / -1; margin-top: .15rem; }
+}
+
+.library-group-selection > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
+@container library-tools (max-width: 22rem) {
+  .library-group-selection { grid-template-columns: minmax(0, 1fr) auto; }
+  .library-download-button { grid-column: 1 / -1; }
 }

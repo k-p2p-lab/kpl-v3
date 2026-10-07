@@ -762,6 +762,19 @@
     svg += `<text x="24" y="477" font-size="10">Estimated source: blue eager, orange lazy, gray unclassified. Black: publisher. Last column: unresolved hop.</text><text x="24" y="498" font-size="9">${escape(String(chart.source || "").slice(0, 108))}</text></g></svg>`;
     return svg;
   }
+  function imageZIPFilename(name, id) {
+    const cleaned = String(name || id).replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]/g, "_").replace(/^[ .]+|[ .]+$/g, "") || id;
+    const encoder = new TextEncoder();
+    let label = "", bytes = 0;
+    for (const char of cleaned) {
+      const size = encoder.encode(char).length;
+      if (bytes + size > 96) break;
+      label += char;
+      bytes += size;
+    }
+    return `[${label.replace(/[ .]+$/g, "")}]-${id}-images.zip`;
+  }
+
   const pendingJob = (job) => job && ["queued", "running"].includes(job.state);
   function jobDescription(job) {
     if (job.state === "queued")
@@ -1004,7 +1017,7 @@
           bundle.push({ name: `${id}-chart-definitions.json`, data: JSON.stringify({ charts, ...(extra || {}) }) });
           const link = $("downloadAllResultImages");
           link.href = blobURL(files.zip(bundle));
-          link.download = `${id}-images.zip`;
+          link.download = imageZIPFilename(extra?.name, id);
           link.hidden = false;
         }
         status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.`);
@@ -1145,9 +1158,9 @@
         showMetadata(data, job, saved);
         if (needsImages) {
           if (isBatch) {
-            await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
+            await prepareImages(batch.build(data, buildCharts), `${id}-batch-mean`, view, requestRevision, { name: data.name || id, summary: data.summary, batchId: id, aggregation: data.aggregation, includedRunIds: data.runs.map(a => a.result.id), excluded: data.excluded, missingRuns: data.missingRuns, reliability: data.reliability });
           } else {
-            await prepareImages(buildCharts(data), id, view, requestRevision);
+            await prepareImages(buildCharts(data), id, view, requestRevision, { name: data.result.name || id });
           }
           if (revision !== requestRevision) return;
           imagesReady = true;
@@ -1252,6 +1265,7 @@
     createUI,
     jobDescription,
     pendingJob,
+    imageZIPFilename,
     init: (options) => {
       ui = createUI(options);
     },

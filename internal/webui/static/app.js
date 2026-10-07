@@ -2696,6 +2696,8 @@ $("#deleteResultDialog").addEventListener("close", () => {
 });
 
 globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisibleKeys: visibleLibraryGroupKeys,
+  download: globalThis.KPLLibraryDownloads?.createDownloads({api,
+    getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),
   onChanged: () => { renderSavedScenarios(); renderSavedResults(); } });
 globalThis.KPLResultStorage?.init({ api, onStatus: refreshResultsForStorage });
 globalThis.KPLBatchAppend?.init({api, onBusy: (id, busy) => {

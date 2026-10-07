@@ -260,3 +260,27 @@ test('unchanged snapshots do not rebuild the filter controls after DOM attribute
   groups.refreshUI();groups.refreshUI();await groups.refresh();
   assert.equal(replacements,before);
 });
+
+test('selection downloads preserve selection and suppress duplicate requests while preparing', async()=>{
+  const pending=deferred(),downloads=[];
+  const h=harness(async()=>initial(),{download:async(scope,keys)=>{downloads.push({scope,keys});return pending.promise}});
+  await h.initialized;
+  await h.action('select','results');
+  h.check('batch:one',true);
+  await h.action('download','results');
+  await h.action('download','results');
+  assert.deepEqual(downloads,[{scope:'results',keys:['batch:one']}]);
+  pending.resolve();await nextTurn();
+  assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
+  assert.doesNotMatch(h.groups.selectionMarkup('batch:one','One'),/ disabled/);
+});
+
+test('failed download preparation restores controls and leaves the selection retryable',async()=>{
+  let attempts=0;
+  const h=harness(async()=>initial(),{download:async()=>{attempts++;throw new Error('source unavailable')}});
+  await h.initialized;await h.action('select');h.check('scenario:one',true);
+  await h.action('download');await h.action('download');
+  assert.equal(attempts,2);
+  assert.match(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
+  assert.doesNotMatch(h.groups.selectionMarkup('scenario:one','One'),/ disabled/);
+});

@@ -42,6 +42,9 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	libraryDownloadsMu         sync.Mutex
+	libraryDownloads           map[string]libraryDownload
+	libraryDownloadSlots       chan struct{}
 	startedAt                  time.Time
 	serviceResources           *serviceResourceStore
 	resourceMeasurementsMu     sync.Mutex
@@ -124,6 +127,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	server := &Server{
+		libraryDownloadSlots:   make(chan struct{}, 2),
 		agentLookupIP:          net.DefaultResolver.LookupIPAddr,
 		startedAt:              time.Now().UTC(),
 		serviceResources:       &serviceResourceStore{nodes: make(map[string]serviceResourceEntry)},

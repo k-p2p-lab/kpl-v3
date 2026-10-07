@@ -28,6 +28,9 @@ type fakeNetworkDocker struct {
 	mutations                              []string
 	remoteAttached, legacyService, offline bool
 	failCreate, failStart                  bool
+	removing                               bool
+	removeLag, createLag, createConflicts  int
+	createCalls                            int
 }
 
 func fixtureNetwork(t *testing.T) *networkInfo {
@@ -83,6 +86,17 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 	case "network":
 		switch args[1] {
 		case "ls":
+			if f.removing {
+				if f.removeLag > 0 {
+					f.removeLag--
+				} else {
+					f.network, f.removing = nil, false
+				}
+			}
+			if f.network != nil && f.sequence > 0 && !f.removing && f.createLag > 0 {
+				f.createLag--
+				return nil, nil
+			}
 			if f.network == nil {
 				return nil, nil
 			}
@@ -109,9 +123,20 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 				return nil, errors.New("network was not removed by captured ID")
 			}
 			f.mutations = append(f.mutations, call)
-			f.network = nil
+			if f.removeLag > 0 {
+				f.removing = true
+			} else {
+				f.network = nil
+			}
 			return nil, nil
 		case "create":
+			f.createCalls++
+			if f.network != nil || f.createConflicts > 0 {
+				if f.createConflicts > 0 {
+					f.createConflicts--
+				}
+				return nil, errors.New("Error response from daemon: network with name kpl-peers already exists")
+			}
 			f.mutations = append(f.mutations, call)
 			if f.failCreate {
 				return nil, errors.New("daemon creation response unavailable")

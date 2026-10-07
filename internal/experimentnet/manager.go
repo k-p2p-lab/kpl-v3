@@ -92,7 +92,7 @@ func dockerCommand(ctx context.Context, input io.Reader, args ...string) ([]byte
 	return stdout.Bytes(), nil
 }
 
-func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
+func (m *Manager) networkIDs(ctx context.Context) ([]string, error) {
 	// Listing distinguishes confirmed absence from an ambiguous inspect failure.
 	// --quiet alone still truncates IDs; inspect returns the complete identity.
 	ids, err := m.command(ctx, nil, "network", "ls", "--quiet", "--no-trunc", "--filter", "name=^"+regexp.QuoteMeta(m.config.PeerNetwork)+"$")
@@ -100,11 +100,21 @@ func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
 		return nil, err
 	}
 	fields := strings.Fields(string(ids))
-	if len(fields) == 0 {
-		return nil, nil
+	for _, id := range fields {
+		if !identifier.MatchString(id) {
+			return nil, errors.New("invalid Peer network ID in Docker list")
+		}
 	}
-	if len(fields) != 1 || !identifier.MatchString(fields[0]) {
-		return nil, errors.New("ambiguous Peer network")
+	return fields, nil
+}
+
+func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
+	fields, err := m.networkIDs(ctx)
+	if err != nil || len(fields) == 0 {
+		return nil, err
+	}
+	if len(fields) != 1 {
+		return nil, fmt.Errorf("ambiguous Peer network %q: IDs=%q", m.config.PeerNetwork, fields)
 	}
 	data, err := m.command(ctx, nil, "network", "inspect", fields[0])
 	if err != nil {
@@ -271,23 +281,13 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 			return result, err
 		}
 	}
-	args := []string{"network", "create", "--driver", "overlay", "--attachable", "--subnet", allocation.Subnet,
-		"--label", "io.kpl.application=kp2plab-v3", "--label", "io.kpl.stack=" + m.config.Stack, "--label", "io.kpl.execution=" + request.Epoch}
-	if allocation.Gateway != "" {
-		args = append(args, "--gateway", allocation.Gateway)
+	oldID := ""
+	if network != nil {
+		oldID = network.ID
 	}
-	args = append(args, m.config.PeerNetwork)
-	data, err := m.command(ctx, nil, args...)
+	id, err := m.createFreshNetwork(ctx, request, allocation, oldID)
 	if err != nil {
-		return result, fmt.Errorf("create fresh Peer network (response may be ambiguous): %w", err)
-	}
-	id := strings.TrimSpace(string(data))
-	created, err := m.inspect(ctx)
-	if err != nil {
-		return result, fmt.Errorf("fresh Peer network could not be verified: %w", err)
-	}
-	if created == nil || created.ID != id || created.Labels["io.kpl.execution"] != request.Epoch || (network != nil && network.ID == id) || created.IPAM.Config[0].Subnet != allocation.Subnet || created.IPAM.Config[0].Gateway != allocation.Gateway {
-		return result, errors.New("fresh Peer network could not be verified")
+		return result, err
 	}
 	result, err = m.createGateway(ctx, request, id, allocation.Subnet)
 	if err != nil {

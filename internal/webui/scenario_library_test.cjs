@@ -620,6 +620,24 @@ test('a successful submission closes the original editor normally', async () => 
   assert.equal(state.scenarioSubmitting, false);
 });
 
+test('Run queues multiple submissions during an active experiment with a fresh key after each acceptance',async()=>{
+  const keys=[],storage=new Map();let sequence=0;
+  const {api,state,elements}=fixture(async(url,options)=>{
+    keys.push(options.headers.get('Idempotency-Key'));
+    return response({id:`run-${keys.length}`,name:'Next',state:'queued',queuePosition:keys.length});
+  });
+  api.sessionStorage={getItem:name=>storage.get(name),setItem:(name,value)=>storage.set(name,value),removeItem:name=>storage.delete(name)};
+  api.crypto={randomUUID:()=>`request-${++sequence}`};
+  state.snapshot={experiments:[{id:'active',state:'running'}]};
+  api.renderSavedScenarios();
+  assert.equal(elements.get('#runScenario').disabled,false);
+  await api.submitScenarioRun();
+  assert.match(elements.get('#toast').textContent,/Queued experiment: Next\. 1 submission ahead/);
+  await api.submitScenarioRun();
+  assert.match(elements.get('#toast').textContent,/2 submissions ahead/);
+  assert.deepEqual(keys,['request-1','request-2']);
+});
+
 test('saved scenario runs submit their source ID and refresh groups without waiting for it', async () => {
   const requests=[];let rejectRefresh,refreshOptions;
   const {api,state,elements}=fixture(async(url,options)=>{

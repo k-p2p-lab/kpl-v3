@@ -68,6 +68,8 @@ type Server struct {
 	runs                       sync.WaitGroup
 	nodeSeq                    atomic.Uint64
 	repeatBatches              map[string]*repeatBatch
+	experimentQueue            []*repeatBatch // cancelMu; one submitted sequence at a time
+	queueCleanup               []string       // run IDs whose cleanup must precede new work
 	resultDownloads            map[string]int
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}
@@ -1482,6 +1484,8 @@ func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error 
 }
 
 func (s *Server) persistExperiment(experiment model.Experiment) error {
+	// Position belongs to this Controller's live scheduler, not saved results.
+	experiment.QueuePosition = 0
 	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, safeName(experiment.ID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create run directory: %w", err)

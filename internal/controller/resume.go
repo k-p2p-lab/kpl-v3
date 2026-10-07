@@ -252,9 +252,11 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 		s.cancels[memberID] = cancel
 	}
 	s.state.notify()
-	s.runs.Add(1)
-	go s.runRepeatedScenarios(ctx, batch, pending, spec)
-	return pending[0], nil
+	s.enqueueExperimentsLocked(ctx, batch, pending, spec)
+	s.state.mu.RLock()
+	first := s.state.experiments[pending[0].ID]
+	s.state.mu.RUnlock()
+	return first, nil
 }
 
 func readResumeFile(root *os.Root, name string, limit int) ([]byte, error) {

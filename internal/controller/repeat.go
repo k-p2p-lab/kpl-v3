@@ -23,6 +23,8 @@ type repeatBatch struct {
 	repetitions int
 	members     []string
 	cleanupRuns []string
+	ready       chan struct{}
+	queuedIDs   []string
 }
 
 func (s *Server) cancelRepeatLocked(runID string) bool {
@@ -106,8 +108,10 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	if err != nil {
 		return model.Experiment{}, err
 	}
-	experiments[0].State = "running"
-	experiments[0].StartedAt = time.Now().UTC()
+	if len(s.experimentQueue) == 0 && len(s.queueCleanup) == 0 {
+		experiments[0].State = "running"
+		experiments[0].StartedAt = time.Now().UTC()
+	}
 	s.state.mu.Lock()
 	for _, run := range experiments {
 		s.state.experiments[run.ID] = run
@@ -130,9 +134,14 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 		s.repeatBatches[experiment.ID] = batch
 		s.cancels[experiment.ID] = cancel
 	}
-	s.runs.Add(1)
-	go s.runRepeatedScenarios(ctx, batch, experiments, spec)
-	return experiments[0], nil
+	s.enqueueExperimentsLocked(ctx, batch, experiments, spec)
+	s.state.mu.RLock()
+	first := s.state.experiments[experiments[0].ID]
+	s.state.mu.RUnlock()
+	if first.State == "running" {
+		first.Timing = experiments[0].Timing
+	}
+	return first, nil
 }
 
 // Caller holds cancelMu; the global order is cancelMu -> persistMu -> state.mu.
@@ -217,13 +226,33 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 		// state before releasing admission to a new scheduler.
 		s.state.mu.Lock()
 		for _, experiment := range experiments {
+			run := s.state.experiments[experiment.ID]
+			if !run.StartedAt.IsZero() && run.CleanupState != "" && run.CleanupState != "complete" {
+				s.rememberQueueCleanupLocked(run.ID)
+			}
 			delete(s.state.runTimings, experiment.ID)
 		}
 		s.state.mu.Unlock()
+		s.finishQueuedExperimentsLocked(batch)
 		s.cancelMu.Unlock()
 	}()
+	select {
+	case <-ctx.Done():
+		s.cancelQueuedIterations(experiments, "Experiment submission was canceled before it started")
+		return
+	case <-batch.ready:
+	}
+	if err := s.waitQueueCleanup(ctx, experiments[0].ID, spec); err != nil {
+		s.cancelQueuedIterations(experiments, "Experiment submission was canceled while waiting for previous Peer cleanup")
+		return
+	}
 	if len(batch.cleanupRuns) > 0 {
 		if err := s.cleanupBeforeResume(ctx, batch.cleanupRuns, spec); err != nil {
+			s.cancelMu.Lock()
+			for _, id := range batch.cleanupRuns {
+				s.rememberQueueCleanupLocked(id)
+			}
+			s.cancelMu.Unlock()
 			for _, run := range experiments {
 				s.updateExperiment(run.ID, func(current *model.Experiment) {
 					current.CleanupState = "failed"
@@ -287,6 +316,7 @@ func (s *Server) cancelQueuedIterations(experiments []model.Experiment, reason s
 	for _, experiment := range experiments {
 		s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 			current.State = "canceled"
+			current.PhaseName = ""
 			current.FinishedAt = time.Now().UTC()
 			current.Error = reason
 		})

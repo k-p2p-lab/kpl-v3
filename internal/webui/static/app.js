@@ -681,7 +681,7 @@ function renderRuns(runs) {
     const sourceSize = runSourceSize(run);
     return `<article class="run-item">
       <div class="run-title"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span class="status-pill ${escapeHTML(run.state)}">${escapeHTML(run.state)}</span></div>
-      <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? "Waiting to start" : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
+      <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? run.phaseName || (run.queuePosition > 0 ? `Queued · ${run.queuePosition} submission${run.queuePosition === 1 ? "" : "s"} ahead` : "Waiting to start") : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
       ${run.repetitions > 1 ? `<div class="run-meta"><span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span></div>` : ""}
       <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
       ${runTimingMarkup(run, stopping)}
@@ -2466,7 +2466,9 @@ async function submitScenarioRun() {
       $("#scenarioDialog").close();
       globalThis.KPLDashboardTabs?.show("experiments");
     }
-    showToast(repetitions > 1 ? `Queued ${repetitions} runs: ${run.name}.` : `Submitted experiment: ${run.name}.`);
+    showToast(run.state === "queued"
+      ? `Queued ${repetitions > 1 ? `${repetitions} runs` : "experiment"}: ${run.name}. ${run.queuePosition > 0 ? `${run.queuePosition} submission${run.queuePosition === 1 ? "" : "s"} ahead.` : "Waiting to start."}`
+      : repetitions > 1 ? `Queued ${repetitions} runs: ${run.name}.` : `Submitted experiment: ${run.name}.`);
     if (scenarioId) {
       // Submission already succeeded. Refresh the server-assigned membership
       // without making a slow or failed group read look like a failed run.

@@ -144,6 +144,7 @@ type Experiment struct {
 	Agents            []Agent `json:"agents,omitempty"`
 
 	ExecutionID    string            `json:"executionId,omitempty"`
+	QueuePosition  int               `json:"queuePosition,omitempty"`
 	Superseded     bool              `json:"superseded,omitempty"`
 	PreviousRunIDs []string          `json:"previousRunIds,omitempty"`
 	ID             string            `json:"id"`

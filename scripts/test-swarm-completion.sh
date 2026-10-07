@@ -55,7 +55,7 @@ lacks() {
 empty() { [[ ${#COMPREPLY[@]} == 0 ]]; }
 
 complete_words swarm ''
-for command in init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove help --help --env-file; do has "$command"; done
+for command in init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove reset-peer-network help --help --env-file; do has "$command"; done
 complete_words swarm lo
 has logs; has login; lacks deploy
 complete_words swarm --env-file
@@ -110,6 +110,8 @@ has worker-b; lacks worker-a; lacks idworker1; lacks --workers
 complete_words swarm --env-file custom.env deploy idworker1 ''
 has worker-b; lacks worker-a; lacks idworker1
 complete_words swarm deploy --workers ''
+empty
+complete_words swarm reset-peer-network ''
 empty
 
 # Literal keys match the config helper. No current config/password values are

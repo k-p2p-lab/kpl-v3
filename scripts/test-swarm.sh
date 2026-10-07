@@ -1115,4 +1115,5 @@ if sh "$root/scripts/swarm.sh" --env-file "$scratch/generated.env" init > "$KPL_
 cmp "$scratch/original.env" "$scratch/generated.env"
 no_mutation
 
+sh "$root/scripts/test-swarm-peer-network.sh"
 printf '%s\n' 'PASS: Manager commands enforce direct stack removal, verified node cleanup, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'

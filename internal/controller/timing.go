@@ -242,6 +242,11 @@ func (s *state) estimateRunFinishesLocked(runs []model.Experiment, now time.Time
 		blocked := false
 		for _, i := range indices {
 			run := runs[i]
+			// Earlier submissions and their cleanup have no reliable finish
+			// time yet. Never show an ETA as if this batch were already active.
+			if run.QueuePosition > 0 || run.State == "queued" && run.PhaseName != "" {
+				blocked = true
+			}
 			if run.State == "failed" || run.State == "canceled" || run.State == "interrupted" {
 				blocked = true
 			}

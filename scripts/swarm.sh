@@ -22,6 +22,7 @@ Usage: sh scripts/swarm.sh [--env-file PATH] COMMAND [NODE... | SELECTOR]
   add-node NODE... | SELECTOR     Enable one Agent per selected Linux node
   remove-node NODE... | SELECTOR  Stop Agents and wait for their Peer cleanup
   remove               Delete stack services even when tasks or nodes are unhealthy
+  reset-peer-network   Recreate an unused helper-owned Peer overlay after removal
 Environment overrides the config file. NODE is a Swarm node ID or hostname.
 Init/configure accept literal KEY=VALUE arguments; quote values containing spaces.
 Use one selector without NODE arguments:
@@ -44,6 +45,8 @@ For access/auth, --context selects its node's Docker daemon for file reads only;
 service/task discovery still uses the caller's manager Docker context.
 Removal preserves experiment/monitoring volumes and the external Peer network.
 Full remove does not wait for clean task exits or verify standalone Peer cleanup.
+Network reset requires removed services, Ready nodes and no attached containers.
+It preserves the IPv4 subnet/gateway and refuses custom network settings.
 EOF
 }
 
@@ -62,11 +65,11 @@ command_name=${1:-help}
 case "$command_name" in
     help|-h|--help) usage; exit 0 ;;
     init|configure|config|credentials) swarm_config_command "$command_name" "$@"; exit ;;
-    deploy|status|add-node|remove-node|remove|nodes|login|publish|check|access|logs|scenario) ;;
+    deploy|status|add-node|remove-node|remove|reset-peer-network|nodes|login|publish|check|access|logs|scenario) ;;
     *) usage >&2; fail "Unknown command: $command_name" ;;
 esac
 case "$command_name" in
-    status|remove|nodes|login|check|access) [ "$#" -eq 0 ] || fail "$command_name takes no arguments." ;;
+    status|remove|reset-peer-network|nodes|login|check|access) [ "$#" -eq 0 ] || fail "$command_name takes no arguments." ;;
     add-node|remove-node) [ "$#" -gt 0 ] || fail "$command_name requires at least one node or a selector." ;;
     scenario)
         [ "$#" -le 1 ] || fail 'Usage: scenario [FILE]'
@@ -261,6 +264,11 @@ control_node_host() {
 case "$command_name" in
     nodes) dock node ls; exit ;;
     check) timeout -s TERM -k 5 "$docker_timeout" sh "$root/scripts/check-swarm.sh"; exit ;;
+    reset-peer-network)
+        . "$root/scripts/swarm-peer-network.sh"
+        swarm_reset_peer_network
+        exit
+        ;;
     access)
         : "${KPL_CONTROL_NODE_ID:?Set KPL_CONTROL_NODE_ID}"
         swarm_validate_setting KPL_CONTROL_NODE_ID "$KPL_CONTROL_NODE_ID"

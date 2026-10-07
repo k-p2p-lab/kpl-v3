@@ -112,6 +112,13 @@ func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, coun
 			if e == nil {
 				e = json.Unmarshal(data, &run)
 			}
+			if e == nil {
+				s.state.mu.RLock()
+				if live, exists := s.state.experiments[id]; exists {
+					run = live
+				}
+				s.state.mu.RUnlock()
+			}
 			s.state.persistMu.Unlock()
 			s.cancelMu.Unlock()
 			return run, e

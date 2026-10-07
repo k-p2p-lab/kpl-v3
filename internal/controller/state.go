@@ -600,6 +600,12 @@ func experimentBefore(a, b model.Experiment) bool {
 	if !a.StartedAt.Equal(b.StartedAt) {
 		return a.StartedAt.After(b.StartedAt)
 	}
+	if (a.State == "queued") != (b.State == "queued") {
+		return a.State == "queued"
+	}
+	if a.State == "queued" && a.QueuePosition != b.QueuePosition {
+		return a.QueuePosition < b.QueuePosition
+	}
 	aGroup, bGroup := a.BatchID, b.BatchID
 	if aGroup == "" {
 		aGroup = a.ID

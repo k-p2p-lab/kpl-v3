@@ -67,7 +67,7 @@ _kpl_swarm_complete() {
         index=$((index + 2))
     fi
     if (( COMP_CWORD == index )); then
-        _kpl_swarm_offer init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove help --help
+        _kpl_swarm_offer init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove reset-peer-network help --help
         if (( index == 1 )); then _kpl_swarm_offer --env-file; fi
         return 0
     fi

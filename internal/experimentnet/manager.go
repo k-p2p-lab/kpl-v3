@@ -93,7 +93,8 @@ func dockerCommand(ctx context.Context, input io.Reader, args ...string) ([]byte
 
 func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
 	// Listing distinguishes confirmed absence from an ambiguous inspect failure.
-	ids, err := m.command(ctx, nil, "network", "ls", "--quiet", "--filter", "name=^"+regexp.QuoteMeta(m.config.PeerNetwork)+"$")
+	// --quiet alone still truncates IDs; inspect returns the complete identity.
+	ids, err := m.command(ctx, nil, "network", "ls", "--quiet", "--no-trunc", "--filter", "name=^"+regexp.QuoteMeta(m.config.PeerNetwork)+"$")
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +114,14 @@ func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
 		return nil, errors.New("invalid Peer network inspection")
 	}
 	n := &networks[0]
-	if n.ID != fields[0] || n.Name != m.config.PeerNetwork || n.Driver != "overlay" || n.Scope != "swarm" || !n.Attachable || n.Internal || n.Ingress || n.ConfigOnly || n.EnableIPv6 || n.ConfigFrom.Network != "" || n.IPAM.Driver != "default" || len(n.IPAM.Options) != 0 || len(n.IPAM.Config) != 1 {
-		return nil, errors.New("Peer network must be a default attachable IPv4 overlay")
+	if n.ID != fields[0] || n.Name != m.config.PeerNetwork {
+		return nil, fmt.Errorf("Peer network identity mismatch: listed ID=%q, inspected ID=%q, name=%q (expected %q)", fields[0], n.ID, n.Name, m.config.PeerNetwork)
+	}
+	if n.Driver != "overlay" || n.Scope != "swarm" || !n.Attachable || n.Internal || n.Ingress || n.ConfigOnly || n.EnableIPv6 || n.ConfigFrom.Network != "" {
+		return nil, fmt.Errorf("Peer network must be an attachable IPv4 Swarm overlay: driver=%q scope=%q attachable=%t internal=%t ingress=%t configOnly=%t ipv6=%t configFrom=%q", n.Driver, n.Scope, n.Attachable, n.Internal, n.Ingress, n.ConfigOnly, n.EnableIPv6, n.ConfigFrom.Network)
+	}
+	if n.IPAM.Driver != "default" || len(n.IPAM.Options) != 0 || len(n.IPAM.Config) != 1 {
+		return nil, fmt.Errorf("Peer network must use default IPAM with one IPv4 allocation and no custom IPAM options: driver=%q options=%d allocations=%d", n.IPAM.Driver, len(n.IPAM.Options), len(n.IPAM.Config))
 	}
 	if n.Labels["io.kpl.application"] != "kp2plab-v3" || n.Labels["io.kpl.stack"] != m.config.Stack {
 		return nil, errors.New("Peer network ownership mismatch")
@@ -275,7 +282,10 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 	}
 	id := strings.TrimSpace(string(data))
 	created, err := m.inspect(ctx)
-	if err != nil || created == nil || created.ID != id || created.Labels["io.kpl.execution"] != request.Epoch || (network != nil && network.ID == id) || created.IPAM.Config[0].Subnet != allocation.Subnet || created.IPAM.Config[0].Gateway != allocation.Gateway {
+	if err != nil {
+		return result, fmt.Errorf("fresh Peer network could not be verified: %w", err)
+	}
+	if created == nil || created.ID != id || created.Labels["io.kpl.execution"] != request.Epoch || (network != nil && network.ID == id) || created.IPAM.Config[0].Subnet != allocation.Subnet || created.IPAM.Config[0].Gateway != allocation.Gateway {
 		return result, errors.New("fresh Peer network could not be verified")
 	}
 	result, err = m.createGateway(ctx, request, id, allocation.Subnet)

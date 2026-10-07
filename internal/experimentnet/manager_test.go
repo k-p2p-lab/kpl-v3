@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,7 +86,13 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 			if f.network == nil {
 				return nil, nil
 			}
-			return []byte(f.network.ID), nil
+			// Docker truncates network IDs even with --quiet unless --no-trunc
+			// is requested; inspect and create return complete IDs.
+			id := f.network.ID
+			if !slices.Contains(args, "--no-trunc") && len(id) > 12 {
+				id = id[:12]
+			}
+			return []byte(id), nil
 		case "inspect":
 			if f.network == nil {
 				return nil, errors.New("network absent")
@@ -170,9 +177,24 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 		if strings.Contains(call, "io.kpl.network-gateway") {
 			return []byte("kpl"), nil
 		}
-		return []byte(fmt.Sprintf(`{"kpl-control":{"IPAddress":"10.90.0.2","NetworkID":"control-network"},"kpl-peers":{"IPAddress":"10.11.0.2","NetworkID":%q}}`, f.network.ID)), nil
+		return fmt.Appendf(nil, `{"kpl-control":{"IPAddress":"10.90.0.2","NetworkID":"control-network"},"kpl-peers":{"IPAddress":"10.11.0.2","NetworkID":%q}}`, f.network.ID), nil
 	}
 	return nil, fmt.Errorf("unexpected Docker operation: %s", call)
+}
+
+func TestManagerInspectKeepsFullDockerNetworkID(t *testing.T) {
+	m, fake, _ := managerFixture(t)
+	fake.network.ID = "fsf1dmx3i9q75an49z36jycxd"
+	network, err := m.inspect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if network == nil || network.ID != fake.network.ID {
+		t.Fatalf("network identity was not preserved: %+v", network)
+	}
+	if len(fake.mutations) != 0 {
+		t.Fatal("inspection changed Docker state")
+	}
 }
 
 func TestManagerFreshNetworkEachAttemptAndIdempotentAcknowledgment(t *testing.T) {
@@ -297,5 +319,61 @@ func TestManagerRejectsMalformedBodyBeforeDocker(t *testing.T) {
 		if result.Code != http.StatusBadRequest || len(fake.calls) != 0 {
 			t.Fatalf("status=%d Docker calls=%v", result.Code, fake.calls)
 		}
+	}
+}
+
+func TestManagerNetworkRejectionReportsTheFailedCheckBeforeMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*networkInfo)
+		want   string
+	}{
+		{"identity", func(n *networkInfo) { n.ID += "replacement" }, "Peer network identity mismatch:"},
+		{"name", func(n *networkInfo) { n.Name = "another-network" }, "Peer network identity mismatch:"},
+		{"driver", func(n *networkInfo) { n.Driver = "bridge" }, `driver="bridge"`},
+		{"attachable", func(n *networkInfo) { n.Attachable = false }, "attachable=false"},
+		{"IPv6", func(n *networkInfo) { n.EnableIPv6 = true }, "ipv6=true"},
+		{"IPAM-driver", func(n *networkInfo) { n.IPAM.Driver = "custom" }, `default IPAM with one IPv4 allocation and no custom IPAM options: driver="custom"`},
+		{"IPAM-options", func(n *networkInfo) { n.IPAM.Options = map[string]string{"custom": "value"} }, "options=1"},
+		{"missing-allocation", func(n *networkInfo) { n.IPAM.Config = nil }, "allocations=0"},
+		{"multiple-allocations", func(n *networkInfo) { n.IPAM.Config = append(n.IPAM.Config, n.IPAM.Config[0]) }, "allocations=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, fake, request := managerFixture(t)
+			original := m.command
+			m.command = func(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
+				if len(args) >= 2 && args[0] == "network" && args[1] == "inspect" {
+					inspected := *fake.network
+					tc.change(&inspected)
+					return json.Marshal([]networkInfo{inspected})
+				}
+				return original(ctx, input, args...)
+			}
+			_, err := m.prepare(t.Context(), request)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("wanted %q, got %v", tc.want, err)
+			}
+			if len(fake.mutations) != 0 {
+				t.Fatalf("invalid network changed Docker state: %v", fake.mutations)
+			}
+		})
+	}
+}
+
+func TestManagerRetainsInspectionErrorForNewNetwork(t *testing.T) {
+	m, fake, request := managerFixture(t)
+	original := m.command
+	m.command = func(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "network" && args[1] == "inspect" && fake.sequence > 0 {
+			return nil, errors.New("daemon inspect unavailable")
+		}
+		return original(ctx, input, args...)
+	}
+	result, err := m.prepare(t.Context(), request)
+	if err == nil || !strings.Contains(err.Error(), "fresh Peer network could not be verified: daemon inspect unavailable") || result.NetworkID != "" {
+		t.Fatalf("inspection error was lost: result=%+v error=%v", result, err)
+	}
+	if fake.gateway {
+		t.Fatal("gateway was created for an unverified network")
 	}
 }

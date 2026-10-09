@@ -173,7 +173,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		node, err := s.createNode(context.Background(), request)
+		node, err := s.admitNode(r.Context(), context.Background(), request)
 		if errors.Is(err, errPeerHistoryFull) || errors.Is(err, errTelemetryBacklogFull) {
 			w.Header().Set(model.AgentAdmissionRetryHeader, "not-created")
 			w.Header().Set("Retry-After", "1")

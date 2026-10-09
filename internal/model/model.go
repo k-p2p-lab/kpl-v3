@@ -14,6 +14,7 @@ const (
 )
 
 type Agent struct {
+	CreateReplay      bool              `json:"createReplay,omitempty"`
 	Disabled          bool              `json:"disabled,omitempty"`
 	Resources         *AgentResources   `json:"resources,omitempty"`
 	StartupReconciled bool              `json:"startupReconciled,omitempty"`
@@ -99,6 +100,7 @@ type AgentHeartbeat struct {
 const AgentAdmissionRetryHeader = "X-KPL-Admission-Retry"
 
 type CreateNodeRequest struct {
+	AgentStartedAt      time.Time  `json:"agentStartedAt,omitzero"`
 	PeerNetworkID       string     `json:"peerNetworkId,omitempty"`
 	NetworkMutable      bool       `json:"networkMutable,omitempty"`
 	ProfileRevision     uint64     `json:"profileRevision,omitempty"`

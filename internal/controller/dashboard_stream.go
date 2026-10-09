@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"maps"
 	"time"
@@ -114,18 +115,7 @@ func newDashboardFrame(snapshot model.Snapshot, at time.Time) (*dashboardFrame, 
 }
 
 func (s *Server) dashboardStreamSnapshot() (*dashboardFrame, error) {
-	s.snapshotMu.Lock()
-	defer s.snapshotMu.Unlock()
-	if s.dashboardFrame != nil && time.Since(s.dashboardFrame.at) < snapshotInterval {
-		return s.dashboardFrame, nil
-	}
-	// This is the start of the read, so a concurrent notification stays pending.
-	generatedAt := time.Now()
-	frame, err := newDashboardFrame(s.state.dashboardSnapshot(), generatedAt)
-	if err == nil {
-		s.dashboardFrame = frame
-	}
-	return frame, err
+	return s.dashboardStreamSnapshotContext(context.Background(), nil)
 }
 
 // Each connection diffs against its own last frame, so skipped/coalesced frames

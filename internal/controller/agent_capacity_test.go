@@ -226,9 +226,6 @@ func TestAgentCapacityRejectionRetriesWithoutFailingTheJoin(t *testing.T) {
 			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if attempts.Add(1) == 1 {
 					w.WriteHeader(http.StatusTooManyRequests)
-					if cancelAfterRejection {
-						cancel()
-					}
 					return
 				}
 				var request model.CreateNodeRequest
@@ -239,6 +236,19 @@ func TestAgentCapacityRejectionRetriesWithoutFailingTheJoin(t *testing.T) {
 			}))
 			defer endpoint.Close()
 			server := New(ServerConfig{DataDir: t.TempDir()}, nil)
+			if cancelAfterRejection {
+				// Cancel only after the client received the refusal. Cancelling in
+				// the handler can instead lose the response and leave admission unknown.
+				transport := http.DefaultTransport.(*http.Transport).Clone()
+				defer transport.CloseIdleConnections()
+				server.client.Transport = discoveryTransport(func(r *http.Request) (*http.Response, error) {
+					response, err := transport.RoundTrip(r)
+					if err == nil && response.StatusCode == http.StatusTooManyRequests {
+						cancel()
+					}
+					return response, err
+				})
+			}
 			if _, err := server.state.registerAgent(model.Agent{ID: "a", URL: endpoint.URL, Capacity: 2}); err != nil {
 				t.Fatal(err)
 			}

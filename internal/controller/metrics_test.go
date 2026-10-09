@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -327,6 +328,7 @@ func TestMetricsConcurrentScrapesAndIngestion(t *testing.T) {
 	}
 	handler := server.apiTestHandler(context.Background())
 	var workers sync.WaitGroup
+	var successfulScrapes atomic.Int32
 	for worker := 0; worker < 4; worker++ {
 		workers.Add(1)
 		go func() {
@@ -356,13 +358,21 @@ func TestMetricsConcurrentScrapesAndIngestion(t *testing.T) {
 			for i := 0; i < 10; i++ {
 				recorder := httptest.NewRecorder()
 				handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+				if recorder.Code == http.StatusServiceUnavailable {
+					// The third scrape may exceed the two-request admission limit.
+					continue
+				}
 				if recorder.Code != http.StatusOK {
 					t.Errorf("concurrent scrape failed: %d %s", recorder.Code, recorder.Body.String())
 					return
 				}
+				successfulScrapes.Add(1)
 			}
 		}()
 	}
 	workers.Wait()
+	if successfulScrapes.Load() == 0 {
+		t.Fatal("no scrape completed")
+	}
 	requireMetricValue(t, gatherTestMetrics(t, server.state), "kpl_events_total", map[string]string{"run_id": "run", "agent_id": "agent", "event_type": "deliver", "topic": "topic"}, 80)
 }

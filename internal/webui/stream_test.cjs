@@ -175,7 +175,7 @@ test('watchdog recovers both a stalled connection attempt and a silently stalled
 test('heartbeats keep an idle dashboard live without rerendering or accepting stale streams', () => {
   const {context,state,streams,timers,rendered,documentEvents} = fixture();
   context.connectStream();
-  // A heartbeat cannot mask a missing initial snapshot.
+  // A preparing heartbeat extends the initial wait without marking it Live.
   streams[0].receive('heartbeat',{});
   assert.equal([...timers.values()][0].delay,30000);
   streams[0].receive('snapshot',baseline());
@@ -226,4 +226,24 @@ test('hiding a page cancels its session probe and network restoration opens just
   assert.equal(streams[1].closed,1);
   assert.equal(state.stream,streams[2]);
   assert.equal(timers.size,1);
+});
+
+
+test('preparing heartbeats replace the initial watchdog without rendering or claiming Live', async () => {
+  const {context,state,streams,timers,statuses,rendered} = fixture();
+  context.connectStream();
+  let previous = state.streamWatchdogTimer;
+  for (let i = 0; i < 5; i++) {
+    streams[0].receive('heartbeat', {});
+    assert.equal(timers.has(previous), false);
+    assert.equal(timers.size, 1);
+    assert.equal(timers.get(state.streamWatchdogTimer).delay, 30000);
+    previous = state.streamWatchdogTimer;
+  }
+  assert.equal(statuses.length, 0);
+  assert.equal(rendered.length, 0);
+  assert.equal(state.streamSnapshot, null);
+  fireTimer(timers, 30000);
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(streams[0].closed, 1, 'a silent producer must still reconnect');
 });

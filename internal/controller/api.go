@@ -151,7 +151,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFileFS(w, r, webui.FS(), "login.html")
 	})
-	mux.Handle("/metrics", promhttp.HandlerFor(s.state.metrics.registry, promhttp.HandlerOpts{}))
+	mux.Handle("/metrics", promhttp.HandlerFor(s.state.metrics.registry, promhttp.HandlerOpts{MaxRequestsInFlight: 2}))
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/ui-config", s.handleUIConfig)
 	mux.HandleFunc("/api/v1/prometheus/agent-targets", s.handlePrometheusAgentTargets)
@@ -510,6 +510,13 @@ func (s *Server) handleEventBatch(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	if !s.acquireTelemetryDecoder(r.Context()) {
+		s.telemetryRejected.Add(1)
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "Controller telemetry admission is busy; retry this batch")
+		return
+	}
+	defer s.releaseTelemetryDecoder()
 	var batch model.EventBatch
 	if err := decodeJSON(w, r, &batch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -714,7 +721,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		var err error
 		event := "snapshot"
 		if view == "dashboard" {
-			frame, frameErr := s.dashboardStreamSnapshot()
+			frame, frameErr := s.dashboardStreamSnapshotContext(r.Context(), func() error {
+				return writeStreamEvent(r.Context(), w, "heartbeat", []byte("{}"))
+			})
 			if frameErr != nil {
 				return frameErr
 			}
@@ -725,7 +734,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 			previous = frame
 		} else {
-			data, generatedAt, err = s.streamSnapshotAt()
+			data, generatedAt, err = s.streamSnapshotAtContext(r.Context(), func() error {
+				return writeStreamEvent(r.Context(), w, "heartbeat", []byte("{}"))
+			})
 		}
 		if err != nil {
 			return err
@@ -780,20 +791,7 @@ func (s *Server) streamSnapshot() ([]byte, error) {
 }
 
 func (s *Server) streamSnapshotAt() ([]byte, time.Time, error) {
-	s.snapshotMu.Lock()
-	defer s.snapshotMu.Unlock()
-	if s.snapshotData != nil && time.Since(s.snapshotAt) < snapshotInterval {
-		return s.snapshotData, s.snapshotAt, nil
-	}
-	// Timestamp the beginning of the read, not the end of JSON encoding.
-	// Notifications during encoding must still be delivered by a later read.
-	generatedAt := time.Now()
-	data, err := json.Marshal(s.state.snapshot())
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	s.snapshotData, s.snapshotAt = data, generatedAt
-	return data, generatedAt, nil
+	return s.streamSnapshotAtContext(context.Background(), nil)
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {

@@ -96,7 +96,13 @@ type Server struct {
 	scenarioSummaries          map[string][]scenarioSummaryCacheEntry
 	scenarioSummaryFlights     map[string][]*scenarioSummaryFlight
 	scenarioRecordCheck        func([]byte) error
+	telemetryGateOnce          sync.Once
+	telemetrySlots             chan struct{}
+	telemetryWaiters           atomic.Int32
+	telemetryRejected          atomic.Uint64
 	snapshotMu                 sync.Mutex
+	snapshotFlight             *rawSnapshotFlight
+	dashboardFlight            *dashboardSnapshotFlight
 	dashboardFrame             *dashboardFrame
 	snapshotData               []byte
 	snapshotAt                 time.Time
@@ -155,6 +161,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 		},
 	}
 	server.state.metrics.registry.MustRegister(newServiceResourceCollector(server))
+	server.registerTelemetryMetrics()
 	return server
 }
 
@@ -763,6 +770,7 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 			}
 		}
 	}
+	s.releaseUncertainCreates(runID, generation, succeeded)
 	return errors.Join(stopErrors...)
 }
 
@@ -1062,7 +1070,7 @@ func (s *Server) matchingNodes(runID, group, state, nodeType string) []model.Nod
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
 	var nodes []model.Node
-	for _, node := range s.state.nodes {
+	for node := range s.state.activeNodesLocked() {
 		if node.RunID != runID || group != "" && node.Group != group || nodeType != "" && node.Type != nodeType {
 			continue
 		}
@@ -1121,7 +1129,7 @@ func (s *Server) capturePublishCohort(request *model.PublishRequest, publisher m
 	request.TargetNodesByTopic = make(map[string]int, len(topics))
 	for _, topic := range topics {
 		targets := make([]string, 0)
-		for _, node := range s.state.nodes {
+		for node := range s.state.activeNodesLocked() {
 			if node.ID != publisher.ID && node.RunID == request.RunID && node.State == model.NodeReady &&
 				agentIsOnline(s.state.agents[node.AgentID], now) && nodeSubscribesToTopic(node, topic) {
 				targets = append(targets, node.ID)
@@ -1432,6 +1440,9 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if method == http.MethodPost && path == "/api/v1/nodes" {
+			return &uncertainNodeCreateError{err}
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -1470,7 +1481,11 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 			}
 			return nil
 		}
-		return json.NewDecoder(resp.Body).Decode(output)
+		err := json.NewDecoder(resp.Body).Decode(output)
+		if err != nil && method == http.MethodPost && path == "/api/v1/nodes" {
+			return &uncertainNodeCreateError{err}
+		}
+		return err
 	}
 	return nil
 }

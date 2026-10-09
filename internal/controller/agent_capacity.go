@@ -195,12 +195,17 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 			s.releaseReservation(request.ID)
 			return err
 		}
-		err = s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", effective, &node)
+		node, err = s.createOnAgent(ctx, agent, effective)
 		created := false
 		if err == nil {
 			created = s.recordCreatedNode(effective, agent.ID, node, agent.StartedAt)
 		}
 		releaseProfile()
+		var uncertain *uncertainNodeCreateError
+		if errors.As(err, &uncertain) {
+			s.retainUncertainCreate(request, agent.ID)
+			return fmt.Errorf("create node %s on agent %s (admission unconfirmed; reservation held until cleanup): %w", request.ID, agent.ID, err)
+		}
 		var deferred *agentAdmissionDeferredError
 		if errors.As(err, &deferred) {
 			s.deferAgentAdmission(agent, deferred, request.RunID)

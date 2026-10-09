@@ -496,7 +496,9 @@ function connectStream() {
   stream.addEventListener("snapshot", event => receive(event, false));
   stream.addEventListener("snapshot_delta", event => receive(event, true));
   stream.addEventListener("heartbeat", () => {
-    if (state.stream === stream && !reconnecting && state.streamSnapshot) markLive();
+    if (state.stream !== stream || reconnecting) return;
+    if (state.streamSnapshot) markLive();
+    else armWatchdog(streamConnectTimeoutMs); // Server is preparing the first snapshot.
   });
   stream.onerror = reconnect;
   armWatchdog(streamConnectTimeoutMs);

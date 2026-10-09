@@ -34,8 +34,12 @@ type messageMetric struct {
 }
 
 // This compact per-message index outlives the 300-row recent-events feed.
-// All access is protected by state.mu; deleting a result releases its index.
+// dataMu protects observations independently of Controller inventory/persistence.
+// Never acquire dataMu while holding state.mu or state.persistMu.
+// Deleting a result releases its index.
 type runMetricAccumulator struct {
+	dataMu                           sync.RWMutex
+	compactWindow                    bool
 	research                         *researchAccumulator
 	seen                             map[string]struct{} // Legacy, unsequenced event IDs only.
 	sequences                        map[measurementSessionKey]sequenceRanges
@@ -45,14 +49,13 @@ type runMetricAccumulator struct {
 	window                           sessionWindowAccumulator
 	bandwidth                        bandwidthAccumulator
 	onBandwidth                      func(bandwidthInterval)
-	// The state read lock permits concurrent dashboard/Prometheus readers.
+	// summaryMu serializes immutable cache construction; acquire before dataMu.
 	summaryMu        sync.Mutex
 	revision         uint64
 	cachedRevision   uint64
 	cachedAt         time.Time
 	cachedRun        string
 	cachedMetrics    model.Metrics
-	cachedSamples    []propagationSample
 	cachedHistograms map[propagationSeriesKey]*propagationHistogram
 }
 
@@ -61,6 +64,25 @@ func newRunMetricAccumulator() *runMetricAccumulator {
 		seen: make(map[string]struct{}), messages: make(map[messageMetricKey]*messageMetric),
 		control:   make(map[gossipSubControlKey]*model.GossipSubControlMetric),
 		sequences: make(map[measurementSessionKey]sequenceRanges),
+	}
+}
+
+// Live window metrics use the session index; offline research additionally
+// needs the legacy per-message receiver index for its detailed exports.
+func newLiveRunMetricAccumulator() *runMetricAccumulator {
+	a := newRunMetricAccumulator()
+	a.compactWindow = true
+	return a
+}
+
+func (a *runMetricAccumulator) compactLegacyWindowIndex() {
+	for key, message := range a.messages {
+		if !message.published {
+			delete(a.messages, key)
+			continue
+		}
+		// Keep only publication identity for exactly-once aggregate counts.
+		a.messages[key] = &messageMetric{published: true}
 	}
 }
 
@@ -77,6 +99,12 @@ func eventIdentity(event model.TraceEvent) string {
 }
 
 func (a *runMetricAccumulator) hasEvent(event model.TraceEvent) bool {
+	a.dataMu.RLock()
+	defer a.dataMu.RUnlock()
+	return a.hasEventLocked(event)
+}
+
+func (a *runMetricAccumulator) hasEventLocked(event model.TraceEvent) bool {
 	if event.SessionID != "" && event.Sequence > 0 {
 		return a.sequences[measurementSessionKey{event.NodeID, event.SessionID}].through(event.Sequence) != 0
 	}
@@ -88,7 +116,13 @@ func (a *runMetricAccumulator) hasEvent(event model.TraceEvent) bool {
 // observe tolerates delivery/duplicate telemetry arriving before publication.
 // Event IDs distinguish actual network duplicates from HTTP batch retries.
 func (a *runMetricAccumulator) observe(event model.TraceEvent) bool {
-	if a.hasEvent(event) {
+	a.dataMu.Lock()
+	defer a.dataMu.Unlock()
+	return a.observeLocked(event)
+}
+
+func (a *runMetricAccumulator) observeLocked(event model.TraceEvent) bool {
+	if a.hasEventLocked(event) {
 		return false
 	}
 	if event.SessionID != "" && event.Sequence > 0 {
@@ -103,12 +137,34 @@ func (a *runMetricAccumulator) observe(event model.TraceEvent) bool {
 	if a.research != nil {
 		a.research.observe(event)
 	}
+	wasWindow := a.window.enabled
 	a.window.observe(event)
+	if a.compactWindow && !wasWindow && a.window.enabled {
+		a.compactLegacyWindowIndex()
+	}
 	a.observeGossipSubControl(event)
 	if interval := a.bandwidth.observe(event); interval != nil && a.onBandwidth != nil {
 		a.onBandwidth(*interval)
 	}
 	if event.Type != "publish" && event.Type != "deliver" && event.Type != "duplicate" {
+		return true
+	}
+	if a.compactWindow && a.window.enabled {
+		switch event.Type {
+		case "publish":
+			if event.MessageID != "" {
+				key := messageMetricKey{event.Topic, event.MessageID}
+				if a.messages[key] != nil {
+					return true
+				}
+				a.messages[key] = &messageMetric{published: true}
+			}
+			a.published++
+		case "deliver":
+			a.delivered++
+		case "duplicate":
+			a.duplicates++
+		}
 		return true
 	}
 	var message *messageMetric
@@ -238,24 +294,35 @@ func (a *runMetricAccumulator) summarize(runID string, asOf ...time.Time) (model
 // readers. Offline exports still call summarizeContext for exact, uncached data.
 // A settled, unchanged run can reuse its result indefinitely; pending delivery
 // deadlines must be reevaluated as wall time advances, even with no new events.
-func (a *runMetricAccumulator) liveSummary(runID string, now time.Time) (model.Metrics, []propagationSample) {
+func (a *runMetricAccumulator) liveSummary(runID string, now time.Time) model.Metrics {
 	a.summaryMu.Lock()
 	defer a.summaryMu.Unlock()
 	return a.liveSummaryLocked(runID, now)
 }
 
-func (a *runMetricAccumulator) liveSummaryLocked(runID string, now time.Time) (model.Metrics, []propagationSample) {
+func (a *runMetricAccumulator) liveSummaryLocked(runID string, now time.Time) model.Metrics {
+	a.dataMu.RLock()
+	defer a.dataMu.RUnlock()
 	if !a.cachedAt.IsZero() && a.cachedRun == runID && !now.Before(a.cachedAt) &&
 		a.cachedRevision == a.revision && (now.Sub(a.cachedAt) < snapshotInterval || a.cachedMetrics.PendingPublications == 0) {
-		return a.cachedMetrics, a.cachedSamples
+		return a.cachedMetrics
 	}
-	a.cachedMetrics, a.cachedSamples = a.summarize(runID, now)
-	a.cachedHistograms = nil
+	var samples []propagationSample
+	a.cachedMetrics, samples, _ = a.summarizeLocked(context.Background(), runID, now)
+	// Monitoring needs aggregate buckets, not another retained copy of every
+	// receipt. Exact sample exports are rebuilt from the preserved source logs.
+	a.cachedHistograms = propagationHistograms(samples)
 	a.cachedRevision, a.cachedAt, a.cachedRun = a.revision, now, runID
-	return a.cachedMetrics, a.cachedSamples
+	return a.cachedMetrics
 }
 
 func (a *runMetricAccumulator) summarizeContext(ctx context.Context, runID string, asOf ...time.Time) (model.Metrics, []propagationSample, error) {
+	a.dataMu.RLock()
+	defer a.dataMu.RUnlock()
+	return a.summarizeLocked(ctx, runID, asOf...)
+}
+
+func (a *runMetricAccumulator) summarizeLocked(ctx context.Context, runID string, asOf ...time.Time) (model.Metrics, []propagationSample, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Metrics{}, nil, err
 	}

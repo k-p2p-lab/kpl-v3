@@ -45,8 +45,8 @@ func (c *bandwidthCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	rows := make(map[key]*row)
 	now := time.Now()
-	c.state.mu.RLock()
-	for run, a := range c.state.runMetrics {
+	for run, a := range c.state.metricAccumulators() {
+		a.dataMu.RLock()
 		for _, s := range a.bandwidth.sessions {
 			k := key{run, s.agentID}
 			r := rows[k]
@@ -88,8 +88,8 @@ func (c *bandwidthCollector) Collect(ch chan<- prometheus.Metric) {
 				}
 			}
 		}
+		a.dataMu.RUnlock()
 	}
-	c.state.mu.RUnlock()
 	for k, r := range rows {
 		ch <- prometheus.MustNewConstMetric(c.timestamp, prometheus.GaugeValue, float64(r.at.Unix())+float64(r.at.Nanosecond())/1e9, k.run, k.agent)
 		ch <- prometheus.MustNewConstMetric(c.sessions, prometheus.GaugeValue, float64(r.final), k.run, k.agent, "final")

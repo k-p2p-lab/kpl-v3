@@ -61,28 +61,30 @@ type propagationHistogram struct {
 func (a *runMetricAccumulator) livePrometheusSummary(runID string, now time.Time) (model.Metrics, map[propagationSeriesKey]*propagationHistogram) {
 	a.summaryMu.Lock()
 	defer a.summaryMu.Unlock()
-	result, samples := a.liveSummaryLocked(runID, now)
-	if a.cachedHistograms == nil {
-		a.cachedHistograms = make(map[propagationSeriesKey]*propagationHistogram)
-		for _, sample := range samples {
-			histogram := a.cachedHistograms[sample.key]
-			if histogram == nil {
-				histogram = &propagationHistogram{buckets: make(map[float64]uint64, len(propagationBounds))}
-				for _, bound := range propagationBounds {
-					histogram.buckets[bound] = 0
-				}
-				a.cachedHistograms[sample.key] = histogram
-			}
-			histogram.count++
-			histogram.sum += sample.seconds
+	result := a.liveSummaryLocked(runID, now)
+	return result, a.cachedHistograms
+}
+
+func propagationHistograms(samples []propagationSample) map[propagationSeriesKey]*propagationHistogram {
+	histograms := make(map[propagationSeriesKey]*propagationHistogram)
+	for _, sample := range samples {
+		histogram := histograms[sample.key]
+		if histogram == nil {
+			histogram = &propagationHistogram{buckets: make(map[float64]uint64, len(propagationBounds))}
 			for _, bound := range propagationBounds {
-				if sample.seconds <= bound {
-					histogram.buckets[bound]++
-				}
+				histogram.buckets[bound] = 0
+			}
+			histograms[sample.key] = histogram
+		}
+		histogram.count++
+		histogram.sum += sample.seconds
+		for _, bound := range propagationBounds {
+			if sample.seconds <= bound {
+				histogram.buckets[bound]++
 			}
 		}
 	}
-	return result, a.cachedHistograms
+	return histograms
 }
 
 func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
@@ -101,8 +103,7 @@ func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		histograms[key] = current
 		return current
 	}
-	c.state.mu.RLock()
-	for runID, accumulator := range c.state.runMetrics {
+	for runID, accumulator := range c.state.metricAccumulators() {
 		if runID == "" {
 			continue
 		}
@@ -113,6 +114,7 @@ func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			histograms[runPropagationKey{runID, key.agentID, key.topic}] = histogram
 		}
 	}
+	c.state.mu.RLock()
 	for _, node := range c.state.nodes {
 		if node.RunID == "" || node.AgentID == "" {
 			continue

@@ -28,6 +28,8 @@ var errTelemetryBacklogFull = errors.New("Agent telemetry backlog is full; retry
 
 var errPeerHistoryFull = errors.New("Agent terminal evidence is awaiting delivery or local storage; retry after recovery")
 
+var errNodeExists = errors.New("node already exists")
+
 // Compact terminal identities live in one local database; run fences remain
 // directly addressable files. No full record index is loaded into the Go heap.
 // Maintenance never holds Server.mu while accessing disk.
@@ -110,7 +112,7 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 			return fmt.Errorf("check retired Peer identity: %w", err)
 		}
 		if used {
-			return fmt.Errorf("node %q already exists in retired history", request.ID)
+			return fmt.Errorf("%w in retired history: %q", errNodeExists, request.ID)
 		}
 		stored, exists, err := s.history.fence(request.RunID)
 		if err != nil {
@@ -153,7 +155,7 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 		}
 		if _, exists := s.processes[request.ID]; exists {
 			s.mu.Unlock()
-			return fmt.Errorf("node %q already exists", request.ID)
+			return fmt.Errorf("%w: %q", errNodeExists, request.ID)
 		}
 		occupied := s.capacityUsedLocked()
 		if occupied >= s.capacityLocked() {

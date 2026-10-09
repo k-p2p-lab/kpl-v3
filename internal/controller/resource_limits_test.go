@@ -112,16 +112,16 @@ func TestLiveSummaryRefreshesPendingDeadlinesAndLateEvidence(t *testing.T) {
 		a.observe(e)
 	}
 	now := windowTestEpoch.Add(15 * time.Second)
-	first, _ := a.liveSummary("run", now)
+	first := a.liveSummary("run", now)
 	if first.PendingPublications != 1 {
 		t.Fatalf("pending=%d", first.PendingPublications)
 	}
-	settled, _ := a.liveSummary("run", now.Add(10*time.Second))
+	settled := a.liveSummary("run", now.Add(10*time.Second))
 	if settled.PendingPublications != 0 {
 		t.Fatal("cache froze pending publication")
 	}
 	a.observe(windowEvent("receiver", "r", 2, "measurement_checkpoint", 22))
-	updated, _ := a.liveSummary("run", now.Add(11*time.Second))
+	updated := a.liveSummary("run", now.Add(11*time.Second))
 	exact, _ := a.summarize("run", now.Add(11*time.Second))
 	if !reflect.DeepEqual(updated, exact) {
 		t.Fatal("late evidence did not invalidate cached summary")

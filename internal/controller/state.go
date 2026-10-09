@@ -41,6 +41,7 @@ type state struct {
 	nodes                   map[string]model.Node
 	activeNodeIDs           map[string]struct{}
 	reservations            map[string]string
+	uncertainCreates        map[string]uncertainCreate
 	agentAdmissionUntil     map[string]time.Time
 	agentSnapshots          map[string]time.Time
 	nodeReportTimes         map[string]time.Time
@@ -145,6 +146,7 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 		for nodeID, agentID := range s.reservations {
 			if agentID == agent.ID {
 				delete(s.reservations, nodeID)
+				delete(s.uncertainCreates, nodeID)
 			}
 		}
 		for _, node := range s.nodes {
@@ -242,6 +244,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	h.Agent.Version = firstNonEmpty(h.Agent.Version, previous.Version)
 	h.Agent.PeerImage = firstNonEmpty(h.Agent.PeerImage, previous.PeerImage)
 	h.Agent.RunDrain = h.Agent.RunDrain || previous.RunDrain
+	h.Agent.CreateReplay = h.Agent.CreateReplay || previous.CreateReplay
 	h.Agent.StartupReconciled = h.Agent.StartupReconciled || previous.StartupReconciled
 	if h.Agent.Capacity == 0 {
 		h.Agent.Capacity = s.agentReportedCapacities[h.Agent.ID]
@@ -293,6 +296,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		metricNodes = append(metricNodes, node)
 		if s.reservations[node.ID] == h.Agent.ID {
 			delete(s.reservations, node.ID)
+			delete(s.uncertainCreates, node.ID)
 			releasedReservations++
 		}
 		if node.State != model.NodeStopping && node.State != model.NodeStopped && node.State != model.NodeFailed {
@@ -402,22 +406,39 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 			s.recordRunWriteError(runID, resultErr)
 		}
 	}()
-	s.persistMu.Lock()
+	// Wait for run readers before taking persistence/inventory locks. Slow
+	// metric reconstruction must not stall heartbeat or experiment control.
+	var accumulator *runMetricAccumulator
+	for {
+		s.mu.RLock()
+		accumulator = s.runMetrics[runID]
+		s.mu.RUnlock()
+		if accumulator == nil {
+			accumulator = newLiveRunMetricAccumulator()
+		}
+		accumulator.dataMu.Lock()
+		s.persistMu.Lock()
+		s.mu.RLock()
+		current := s.runMetrics[runID]
+		s.mu.RUnlock()
+		if current == nil || current == accumulator {
+			break
+		}
+		// Another first batch published the accumulator while we waited.
+		s.persistMu.Unlock()
+		accumulator.dataMu.Unlock()
+	}
+	defer accumulator.dataMu.Unlock()
 	defer s.persistMu.Unlock()
 	if runID != "" {
 		if deleted, err := s.resultDeletedLocked(runID); err != nil || deleted {
 			return err
 		}
 	}
-	s.mu.RLock()
-	accumulator := s.runMetrics[runID]
-	if accumulator == nil {
-		accumulator = newRunMetricAccumulator()
-	}
-	pending := make(map[string]struct{})
+	pending := make(map[string]struct{}, len(events))
 	accepted := make([]model.TraceEvent, 0, len(events))
 	for _, event := range events {
-		if accumulator.hasEvent(event) {
+		if accumulator.hasEventLocked(event) {
 			continue
 		}
 		if id := eventIdentity(event); id != "" {
@@ -428,7 +449,6 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 		}
 		accepted = append(accepted, event)
 	}
-	s.mu.RUnlock()
 	if len(accepted) == 0 {
 		return nil
 	}
@@ -439,11 +459,11 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 			return err
 		}
 	}
+	for _, event := range accepted {
+		accumulator.observeLocked(event)
+	}
 	s.mu.Lock()
 	s.runMetrics[runID] = accumulator
-	for _, event := range accepted {
-		accumulator.observe(event)
-	}
 	// Component samples and full topology adjacency belong in saved logs. Keep
 	// them from displacing network events or retaining large lists in live SSE.
 	for _, event := range accepted {
@@ -659,17 +679,20 @@ func (s *state) snapshotForView(dashboard bool) model.Snapshot {
 			}
 		}
 	}
-	if accumulator := s.runMetrics[runID]; accumulator != nil {
-		result.Metrics, _ = accumulator.liveSummary(runID, result.GeneratedAt)
+	accumulator := s.runMetrics[runID]
+	s.mu.RUnlock()
+	if accumulator != nil {
+		result.Metrics = accumulator.liveSummary(runID, result.GeneratedAt)
 		if result.Metrics.Bandwidth != nil {
 			bandwidth := *result.Metrics.Bandwidth
+			accumulator.dataMu.RLock()
 			bandwidth.CurrentRates = accumulator.bandwidth.currentRates(result.GeneratedAt)
+			accumulator.dataMu.RUnlock()
 			result.Metrics.Bandwidth = &bandwidth
 		}
 	} else {
 		result.Metrics.RunID = runID
 	}
-	s.mu.RUnlock()
 	result.Edges = networkEdgesAt(topologyNodes, agents, result.GeneratedAt)
 	return result
 }
@@ -737,4 +760,15 @@ func firstNonEmpty(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// Copy pointers under the inventory lock, then inspect runs independently.
+func (s *state) metricAccumulators() map[string]*runMetricAccumulator {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	runs := make(map[string]*runMetricAccumulator, len(s.runMetrics))
+	for id, accumulator := range s.runMetrics {
+		runs[id] = accumulator
+	}
+	return runs
 }

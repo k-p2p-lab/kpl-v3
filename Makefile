@@ -48,7 +48,7 @@ swarm-scenario:
 	sh scripts/swarm.sh scenario $(SCENARIO)
 
 swarm-deploy:
-	sh scripts/swarm.sh deploy $(NODES)
+	sh scripts/swarm.sh deploy $(if $(strip $(NODES)),$(NODES),--workers)
 
 swarm-status:
 	sh scripts/swarm.sh status

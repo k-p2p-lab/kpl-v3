@@ -53,6 +53,7 @@ type Config struct {
 }
 
 type process struct {
+	admissionDone         chan struct{}
 	gatewayURL            string
 	node                  model.Node
 	apiURL                string
@@ -433,14 +434,15 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 		image = s.docker.image
 	}
 	return model.Agent{
-		Resources:  s.resources,
-		ID:         s.config.ID,
-		Name:       s.config.Name,
-		URL:        strings.TrimRight(s.config.AdvertiseURL, "/"),
-		MetricsURL: s.config.MetricsURL,
-		Hostname:   hostname,
-		Version:    model.BuildVersion(),
-		PeerImage:  image, RunDrain: true, StartupReconciled: s.startupReconciled,
+		CreateReplay: true,
+		Resources:    s.resources,
+		ID:           s.config.ID,
+		Name:         s.config.Name,
+		URL:          strings.TrimRight(s.config.AdvertiseURL, "/"),
+		MetricsURL:   s.config.MetricsURL,
+		Hostname:     hostname,
+		Version:      model.BuildVersion(),
+		PeerImage:    image, RunDrain: true, StartupReconciled: s.startupReconciled,
 		Capacity:         s.capacityLocked(),
 		DefaultCapacity:  s.config.Capacity,
 		CapacityRevision: s.capacityRevision,
@@ -475,6 +477,19 @@ func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartb
 }
 
 func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest) (model.Node, error) {
+	return s.admitNode(ctx, ctx, request)
+}
+
+func (s *Server) admitNode(ctx, processParent context.Context, request model.CreateNodeRequest) (model.Node, error) {
+	hash, err := s.createRequestHash(request)
+	if err != nil {
+		return model.Node{}, err
+	}
+	if hash != "" {
+		if node, found, err := s.replayCreate(ctx, request.ID, hash); found || err != nil {
+			return node, err
+		}
+	}
 	if request.ID == "" || request.RunID == "" || request.Group == "" {
 		return model.Node{}, fmt.Errorf("id, runId, and group are required")
 	}
@@ -498,6 +513,11 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 	}
 	resolvedConfig.Network = networkConfig
 	if err := s.lockAdmission(ctx, request); err != nil {
+		if hash != "" && errors.Is(err, errNodeExists) {
+			if node, found, replayErr := s.replayCreate(ctx, request.ID, hash); found || replayErr != nil {
+				return node, replayErr
+			}
+		}
 		return model.Node{}, err
 	}
 	now := time.Now().UTC()
@@ -533,7 +553,7 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		StartedAt: now,
 		LastSeen:  now,
 	}
-	processCtx, cancel := context.WithCancel(ctx)
+	processCtx, cancel := context.WithCancel(processParent)
 	networkJSON, _ := json.Marshal(resolvedConfig.Network.Initial())
 	node.Metadata["network"] = string(networkJSON)
 	node.Metadata["networkRequested"] = string(requestedNetwork)
@@ -566,6 +586,12 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 	// fences see the in-flight peer. Keep its mutable status separate from the
 	// configuration/response, which are encoded without the state lock.
 	proc := &process{node: cloneNodeStatus(node), cancel: cancel, done: make(chan struct{})}
+	if hash != "" {
+		proc.admissionDone = make(chan struct{})
+		proc.node.Metadata["createRequestHash"] = hash
+		proc.node.Metadata["createAdmission"] = "pending"
+		defer close(proc.admissionDone)
+	}
 	if s.config.AutoResetNetwork {
 		network := s.experimentNetwork
 		peerConfig.ControllerURL = network.PeerGatewayURL + "/controller"
@@ -593,9 +619,19 @@ func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest
 		err = processCtx.Err()
 	}
 	if err != nil {
+		if hash != "" {
+			s.mu.Lock()
+			proc.node.Metadata["createAdmission"] = "failed"
+			s.mu.Unlock()
+		}
 		cancel()
 		s.finishProcess(request.ID, proc, err, nil)
 		return model.Node{}, err
+	}
+	if hash != "" {
+		s.mu.Lock()
+		proc.node.Metadata["createAdmission"] = "accepted"
+		s.mu.Unlock()
 	}
 	go s.runDockerProcess(processCtx, proc, data, request.Lifetime)
 	return node, nil
@@ -896,7 +932,7 @@ func heartbeatNodeStatus(proc *process) model.Node {
 	node.OverlayObservedAt = time.Time{}
 	node.Metadata = make(map[string]string)
 	// Preserve lifecycle evidence and topic labels used by Controller metrics.
-	for _, key := range []string{"cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode", "meshFreezeEnabled", "meshFrozen"} {
+	for _, key := range []string{"createRequestHash", "createAdmission", "cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode", "meshFreezeEnabled", "meshFrozen"} {
 		if value, exists := proc.node.Metadata[key]; exists {
 			node.Metadata[key] = value
 		}

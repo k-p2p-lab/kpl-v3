@@ -51,7 +51,7 @@ test('Agent metrics links escape labels and open safely in a new tab', () => {
 
 test('available slots count only online Agents and clamp occupied capacity at zero', () => {
   const elements = new Map();
-  const context = {};
+  const context = {state: {topology: {enabled: false, loading: false}}};
   vm.createContext(context);
   vm.runInContext(functions, context);
   context.$ = selector => {

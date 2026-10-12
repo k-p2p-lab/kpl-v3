@@ -896,6 +896,8 @@
       controller = null;
       researchTools?.cancel();
       if (preserve !== true) {
+        currentData = null;
+        researchTools?.clearData?.();
         clearImages();
         displayedAnalysis = null;
         imagesReady = false;

@@ -85,6 +85,7 @@ func TestDashboardActiveViewMatchesFullSnapshotFiltering(t *testing.T) {
 	}
 	full, active := dashboardSnapshot(s.snapshot()), dashboardSnapshot(s.dashboardSnapshot())
 	full.GeneratedAt = active.GeneratedAt
+	full.Topology = &model.TopologySummary{Included: true, Total: 2, Ready: 1, Starting: 1}
 	if !reflect.DeepEqual(full, active) {
 		t.Fatalf("active view changed dashboard semantics:\nfull=%+v\nactive=%+v", full, active)
 	}

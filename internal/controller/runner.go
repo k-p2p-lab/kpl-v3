@@ -104,6 +104,8 @@ type Server struct {
 	snapshotFlight             *rawSnapshotFlight
 	dashboardFlight            *dashboardSnapshotFlight
 	dashboardFrame             *dashboardFrame
+	dashboardSummaryFlight     *dashboardSnapshotFlight
+	dashboardSummaryFrame      *dashboardFrame
 	snapshotData               []byte
 	snapshotAt                 time.Time
 }
@@ -1569,6 +1571,9 @@ func (s *Server) persistExperiment(experiment model.Experiment) error {
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if duration <= 0 {
 		return nil
 	}
@@ -1578,6 +1583,6 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return nil
+		return ctx.Err()
 	}
 }

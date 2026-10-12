@@ -196,10 +196,24 @@ func TestServerRunWaitsForFinalMeasurementDrain(t *testing.T) {
 	defer mu.Unlock()
 	var start, stop model.TraceEvent
 	var publish, deliver, checkpoint, finalBandwidth model.TraceEvent
-	for i, event := range received {
-		if event.Sequence != uint64(i+1) {
-			t.Fatalf("source sequence not continuous at %d: %+v", i, event)
+	seen := make(map[string]model.TraceEvent)
+	for _, event := range received {
+		if event.EventID == "" {
+			t.Fatal("source event has no retry identity")
 		}
+		// Cancellation can race with the checkpoint response after the handler
+		// accepted it. The drain must retry that unacknowledged batch with the
+		// same identities and contents; continuity applies to unique events.
+		if previous, repeated := seen[event.EventID]; repeated {
+			if !reflect.DeepEqual(previous, event) {
+				t.Fatalf("retried source event changed: %+v, previous: %+v", event, previous)
+			}
+			continue
+		}
+		if event.Sequence != uint64(len(seen)+1) {
+			t.Fatalf("source sequence not continuous after %d unique events: %+v", len(seen), event)
+		}
+		seen[event.EventID] = event
 		if event.Type == "bandwidth" && event.Bandwidth != nil && event.Bandwidth.Final {
 			finalBandwidth = event
 		}

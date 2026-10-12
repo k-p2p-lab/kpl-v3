@@ -229,16 +229,21 @@
           <div>
             <p class="eyebrow">LIVE TOPOLOGY</p>
             <h2>Network overview</h2>
-            <p class="panel-note" id="topologyLinkCount">0 Peers · 0 ready · 0 starting · 0 visible links</p>
+            <p class="panel-note" id="topologyLinkCount">Overview off</p>
           </div>
-          <div class="legend" aria-label="Node state legend">
-            <span><i class="legend-dot boot"></i>Boot</span>
-            <span><i class="legend-dot ready"></i>Worker</span>
-            <span><i class="legend-dot starting"></i>Starting</span>
-            <span><i class="legend-dot issue"></i>Issue</span>
+          <div class="topology-header-controls">
+            <label class="topology-switch"><input type="checkbox" role="switch" id="topologyEnabled" aria-controls="topologyContent"><span>Overview</span><span id="topologyEnabledState">Off</span></label>
+            <div class="legend" aria-label="Node state legend">
+              <span><i class="legend-dot boot"></i>Boot</span>
+              <span><i class="legend-dot ready"></i>Worker</span>
+              <span><i class="legend-dot starting"></i>Starting</span>
+              <span><i class="legend-dot issue"></i>Issue</span>
+            </div>
           </div>
         </header>
         <div class="panel-body" id="panel-topology-body">
+          <p class="empty-copy" id="topologyNotice" role="status">Overview is off. Turn it on to load the live topology.</p>
+          <div id="topologyContent" hidden>
           <div class="topology-toolbar">
             <fieldset class="topology-layers" aria-label="Visible relationship layers">
               <legend>Layers</legend>
@@ -267,6 +272,7 @@
             <header><h3 id="topologyDetailsHeading">Peer details</h3><button id="clearTopologySelection" type="button" disabled>Clear selection</button></header>
             <div id="topologyDetails"><p class="topology-detail-hint">Hover over or select a Peer to inspect its relationships.</p></div>
           </section>
+          </div>
         </div>
       </article>
 

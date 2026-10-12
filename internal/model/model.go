@@ -239,14 +239,24 @@ type GossipSubControlMetric struct {
 	PeerExchangeRecords int    `json:"peerExchangeRecords"`
 }
 
+// TopologySummary retains cluster population counts when graph data is omitted.
+type TopologySummary struct {
+	Included bool `json:"included"`
+	Total    int  `json:"total"`
+	Ready    int  `json:"ready"`
+	Starting int  `json:"starting"`
+	Other    int  `json:"other"`
+}
+
 type Snapshot struct {
-	GeneratedAt time.Time    `json:"generatedAt"`
-	Agents      []Agent      `json:"agents"`
-	Nodes       []Node       `json:"nodes"`
-	Experiments []Experiment `json:"experiments"`
-	Edges       []Edge       `json:"edges"`
-	Events      []TraceEvent `json:"events"`
-	Metrics     Metrics      `json:"metrics"`
+	Topology    *TopologySummary `json:"topology,omitempty"`
+	GeneratedAt time.Time        `json:"generatedAt"`
+	Agents      []Agent          `json:"agents"`
+	Nodes       []Node           `json:"nodes"`
+	Experiments []Experiment     `json:"experiments"`
+	Edges       []Edge           `json:"edges"`
+	Events      []TraceEvent     `json:"events"`
+	Metrics     Metrics          `json:"metrics"`
 }
 
 type PeerProcessConfig struct {

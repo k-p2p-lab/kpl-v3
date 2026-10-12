@@ -33,6 +33,22 @@ function fixture({ request = async () => [], render = async () => {} } = {}) {
 }
 const settled = () => new Promise(resolve => setImmediate(resolve));
 
+test('clearing the active analysis releases message options while retaining imported files', async () => {
+  const { ui, element } = fixture();
+  element('#researchFiles').listeners.change({ target: { files: [
+    { name: 'complete.json', size: 2, text: async () => '{}' },
+  ] } });
+  await settled();
+  const imports = element('#researchRuns').innerHTML;
+  ui.setData({ research: { messages: [{ topic: 'topic', id: 'message' }] } });
+  assert.match(element('#researchMessage').innerHTML, /topic \/ message/);
+  ui.clearData();
+  assert.equal(element('#researchMessage').innerHTML, '');
+  assert.equal(element('#drawResearchMessage').disabled, true);
+  assert.equal(element('#researchTools').hidden, true);
+  assert.equal(element('#researchRuns').innerHTML, imports);
+});
+
 for (const [stale, analysisVersion] of [[true, 5], [true, 6], [false, 6]]) {
   test(`comparison checks the server stale marker before loading summaries: stale=${stale}, version=${analysisVersion}`, async () => {
     const requests = [];

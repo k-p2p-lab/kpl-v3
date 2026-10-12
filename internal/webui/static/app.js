@@ -16,6 +16,7 @@ const state = {
   pendingStops: new Set(), pendingResumes: new Set(), pendingAppends: new Set(), deletedResultIDs: new Set(),
   pendingDelete: null, deletingResultId: null, loginRedirecting: false,
   topology: {
+    enabled: false, loading: false,
     layout: {},
     filters: { transport: false, kademlia: false, gossipsub: false, topic: "" },
     selected: null, hovered: null, graph: null,
@@ -401,7 +402,7 @@ function scheduleSnapshotRender(snapshot) {
 function applySnapshotDelta(snapshot, patch) {
   if (!snapshot) throw new Error("Snapshot delta arrived before a full snapshot");
   const next = { ...snapshot };
-  for (const key of ["generatedAt", "edges", "events", "metrics"]) {
+  for (const key of ["generatedAt", "edges", "events", "metrics", "topology"]) {
     if (Object.hasOwn(patch, key)) next[key] = patch[key];
   }
   for (const key of ["agents", "nodes", "experiments"]) {
@@ -444,7 +445,8 @@ function connectStream() {
   clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
   state.streamSnapshot = null;
-  const stream = new EventSource("/api/v1/stream?view=dashboard");
+  const includeTopology = state.topology?.enabled === true;
+  const stream = new EventSource(`/api/v1/stream?view=dashboard&topology=${includeTopology ? 1 : 0}`);
   state.stream = stream;
   let reconnecting = false;
   const reconnect = async () => {
@@ -489,6 +491,10 @@ function connectStream() {
     try {
       const data = JSON.parse(event.data);
       state.streamSnapshot = delta ? applySnapshotDelta(state.streamSnapshot, data) : data;
+      if (includeTopology) {
+        if (state.streamSnapshot.topology?.included === false) throw new Error("Topology baseline is missing");
+        state.topology.loading = false;
+      }
       scheduleSnapshotRender(state.streamSnapshot);
       markLive();
     } catch { void reconnect(); }
@@ -546,7 +552,8 @@ function setupDashboardTabHandling() {
 
 function render(snapshot) {
   const agents = snapshot.agents || [];
-  const {nodes, edges} = topologyData(snapshot.nodes || [], snapshot.edges || [], agents);
+  const graphIncluded = state.topology?.enabled !== false && !state.topology?.loading && snapshot.topology?.included !== false;
+  const {nodes, edges} = graphIncluded ? topologyData(snapshot.nodes || [], snapshot.edges || [], agents) : {nodes: [], edges: []};
   const metricRun = (snapshot.experiments || []).find((run) => run.id === snapshot.metrics?.runId);
   // Snapshots retain final summaries; the carousel shows only a running run.
   const metrics = metricRun?.state === "running" ? snapshot.metrics : {};
@@ -558,13 +565,15 @@ function render(snapshot) {
   rememberAgents([...agents.map((agent) => agent.id), ...nodes.map((node) => node.agentId)]);
   const online = agents.filter((agent) => agent.state === "online").length;
   const capacity = agents.filter((agent) => agent.state === "online" && !agent.disabled).reduce((sum, agent) => sum + Math.max(0, agent.capacity - agent.activeNodes), 0);
-  const population = peerPopulation(nodes);
+  const population = snapshot.topology || peerPopulation(nodes);
   setText($("#agentMetric"), `${online} / ${agents.length}`);
   setText($("#capacityMetric"), `Available slots: ${formatNumber(capacity)}`);
   setText($("#peerMetric"), formatNumber(population.ready));
   setText($("#peerPopulationMetric"), `Topology: ${formatNumber(population.total)} · Starting: ${formatNumber(population.starting)}`
     + (population.other ? ` · Other: ${formatNumber(population.other)}` : ""));
-  setText($("#connectionMetric"), `Transport links: ${formatNumber(filterTopologyEdges(nodes, edges, { transport: true }).length)}`);
+  setText($("#connectionMetric"), graphIncluded
+    ? `Transport links: ${formatNumber(filterTopologyEdges(nodes, edges, { transport: true }).length)}`
+    : state.topology?.enabled === false ? "Transport links: N/A · Overview off" : "Transport links: N/A · Loading topology");
   setText($("#latencyMetric"), measurement.latencySamples > 0 ? `${formatNumber(measurement.p95LatencyMs, 1)} ms` : "N/A");
   setText($("#averageLatencyMetric"), measurement.latencySamples > 0 ? `Average: ${formatNumber(measurement.averageLatencyMs, 1)} ms · Samples: ${formatNumber(measurement.latencySamples)}` : "No eligible latency samples");
   const delivery = deliveryMetricView(metrics);
@@ -2079,11 +2088,53 @@ function svgElement(tag, attributes = {}, text) {
   return element;
 }
 
+function setTopologyEnabled(enabled) {
+  const topology = state.topology;
+  if (topology.enabled === enabled) return;
+  topology.enabled = enabled;
+  topology.loading = enabled;
+  $("#topologyEnabled").checked = enabled;
+  setText($("#topologyEnabledState"), enabled ? "On" : "Off");
+  pauseStream();
+  stopTopologyMotion();
+  if (!enabled) {
+    topology.graph = null;
+    topology.layout = {};
+    topology.signature = topology.domSignature = null;
+    topology.selected = topology.hovered = topology.drag = null;
+    topology.autoFit = true;
+    $("#topology").replaceChildren();
+    $("#topology").classList.remove("is-panning");
+    setHTML($("#topologyDetails"), '<p class="topology-detail-hint">Hover over or select a Peer to inspect its relationships.</p>');
+    $("#clearTopologySelection").disabled = true;
+    if (state.snapshot) {
+      const population = state.snapshot.topology || peerPopulation(state.snapshot.nodes || []);
+      state.snapshot = { ...state.snapshot, nodes: [], edges: [], topology: { ...population, included: false } };
+    }
+  }
+  setText($("#connectionMetric"), enabled ? "Transport links: N/A · Loading topology" : "Transport links: N/A · Overview off");
+  renderTopology(state.snapshot?.nodes || [], state.snapshot?.edges || []);
+  connectStream();
+}
+
 function renderTopology(nodes, edges) {
-  ({ nodes, edges } = topologyData(nodes, edges, state.snapshot?.agents || []));
-  const populationLabel = peerPopulationLabel(peerPopulation(nodes));
   const topology = state.topology;
   stopTopologyMotion();
+  const waiting = topology.loading || state.snapshot?.topology?.included === false;
+  const visible = topology.enabled !== false && !waiting;
+  $("#topologyContent").hidden = !visible;
+  $("#topologyNotice").hidden = visible;
+  if (!visible) {
+    const population = state.snapshot?.topology;
+    setText($("#topologyNotice"), topology.enabled === false
+      ? "Overview is off. Turn it on to load the live topology."
+      : "Loading topology…");
+    setText($("#topologyLinkCount"), (population ? peerPopulationLabel(population) + " · " : "")
+      + (topology.enabled === false ? "Overview off" : "Loading topology…"));
+    return;
+  }
+  ({ nodes, edges } = topologyData(nodes, edges, state.snapshot?.agents || []));
+  const populationLabel = peerPopulationLabel(peerPopulation(nodes));
   if (isDashboardPanelHidden("network")) {
     const links = filterTopologyEdges(nodes, edges, topology.filters).length;
     setText($("#topologyLinkCount"), `${populationLabel} · ${formatNumber(links)} visible links`);
@@ -2233,14 +2284,14 @@ function stopTopologyMotion() {
 
 function startTopologyMotion() {
   const topology = state.topology, motion = topology.motion;
-  if (!motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph?.nodes.length || motion.frame !== null) return;
+  if (topology.enabled === false || topology.loading || !motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph?.nodes.length || motion.frame !== null) return;
   motion.frame = requestAnimationFrame(animateTopology);
 }
 
 function animateTopology(timestamp) {
   const topology = state.topology, motion = topology.motion;
   motion.frame = null;
-  if (!motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph) return;
+  if (topology.enabled === false || topology.loading || !motion.enabled || document.hidden || isDashboardPanelHidden("network") || !topology.graph) return;
   // Cap work at 30 frames/s and avoid a jump after a background-tab pause.
   if (topology.drag || timestamp - motion.lastFrame < 1000 / 30) { startTopologyMotion(); return; }
   motion.lastFrame = timestamp;
@@ -2346,6 +2397,7 @@ function renderTopologyDetails(node) {
 }
 
 function setupTopologyControls() {
+  $("#topologyEnabled").addEventListener("change", event => setTopologyEnabled(event.target.checked));
   const motion = state.topology.motion;
   const preference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
   const applyPreference = () => {

@@ -24,6 +24,7 @@ var errAnalysisQueueFull = errors.New("analysis queue is full; try again after a
 
 type analysisJobStatus struct {
 	SavedAnalysisID string    `json:"savedAnalysisId,omitempty"`
+	ArtifactSlot    int       `json:"artifactSlot,omitempty"`
 	SourceHash      string    `json:"sourceHash,omitempty"`
 	Reused          bool      `json:"reused,omitempty"`
 	SourceRevision  string    `json:"sourceRevision,omitempty"`
@@ -44,6 +45,22 @@ type analysisJobStatus struct {
 	SnapshotAt      time.Time `json:"snapshotAt"`
 	Error           string    `json:"error,omitempty"`
 	ResultURL       string    `json:"resultUrl,omitempty"`
+}
+
+// A replacement writes the inactive slot before committing its reference in
+// job metadata. Legacy metadata selects slot zero. Local publication uses two slots.
+func analysisArtifactFile(name string, slot int) string {
+	if slot == 1 {
+		return strings.TrimSuffix(name, ".json") + "-next.json"
+	}
+	return name
+}
+
+func (status analysisJobStatus) nextArtifactSlot() int {
+	if status.SavedAnalysisID != "" {
+		return 1 - status.ArtifactSlot
+	}
+	return 0
 }
 
 // Saved artifacts are explicitly selected while a replacement is in progress.
@@ -197,7 +214,7 @@ func (s *Server) loadAnalysisJob(id string) (*analysisJob, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("analysis job metadata contains trailing data")
 	}
-	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
+	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) || status.ArtifactSlot < 0 || status.ArtifactSlot > 1 {
 		return nil, errors.New("invalid analysis job metadata")
 	}
 	switch status.State {
@@ -284,6 +301,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	now := time.Now().UTC()
 	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}}
 	job.status.SavedAnalysisID = existing.status.savedAnalysisID()
+	job.status.ArtifactSlot = existing.status.ArtifactSlot
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
 		job.previous = &previous
@@ -479,24 +497,17 @@ func (s *Server) saveAnalysisJob(ctx context.Context, job *analysisJob, analysis
 		return err
 	}
 	defer current.Close()
-	// Invalidate the old artifact reference durably before replacing either
-	// file. A crash or failed metadata write cannot serve a new file under an
-	// old saved-analysis ID after restart.
-	if job.status.SavedAnalysisID != "" {
-		status := job.status
-		status.SavedAnalysisID = ""
-		if err := writeAnalysisJSON(root, analysisJobFile, status); err != nil {
-			return err
-		}
-		job.status = status
-	}
-	if err := artifact.publish(analysisResultFile); err != nil {
+	// Preserve the referenced snapshot until both new files and the single
+	// metadata commit are durable. A partial write never changes its identity.
+	slot := job.status.nextArtifactSlot()
+	if err := artifact.publish(analysisArtifactFile(analysisResultFile, slot)); err != nil {
 		return err
 	}
-	if err := compact.publish(analysisSummaryFile); err != nil {
+	if err := compact.publish(analysisArtifactFile(analysisSummaryFile, slot)); err != nil {
 		return err
 	}
 	completed := job.status
+	completed.ArtifactSlot, completed.SavedAnalysisID = slot, ""
 	completed.State, completed.Phase, completed.Progress = "completed", "completed", 100
 	completed.ProcessedBytes = completed.TotalBytes
 	completed.FinishedAt, completed.UpdatedAt = time.Now().UTC(), time.Now().UTC()
@@ -584,6 +595,7 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 		if strings.HasSuffix(r.URL.Path, "/summary") {
 			name = analysisSummaryFile
 		}
+		name = analysisArtifactFile(name, job.status.ArtifactSlot)
 		manifest, err := readRunArchive(root, id)
 		if err != nil {
 			return resultFile{}, err

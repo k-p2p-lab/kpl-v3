@@ -119,7 +119,7 @@ func (s *Server) loadBatchAnalysis(id string) (*batchAnalysisJob, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil, errors.New("batch analysis metadata contains trailing data")
 	}
-	if status.Version != batchAnalysisVersion || status.BatchID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) {
+	if status.Version != batchAnalysisVersion || status.BatchID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) || status.ArtifactSlot < 0 || status.ArtifactSlot > 1 {
 		return nil, errors.New("invalid batch analysis metadata")
 	}
 	switch status.State {
@@ -295,6 +295,7 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	now := time.Now().UTC()
 	status := batchAnalysisStatus{analysisJobStatus: analysisJobStatus{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}, BatchID: id, Membership: membership, TotalRuns: len(selected), ExpectedRuns: expected, RunIDs: []string{}}
 	status.SavedAnalysisID = existing.status.savedAnalysisID()
+	status.ArtifactSlot = existing.status.ArtifactSlot
 	for _, run := range selected {
 		status.RunIDs = append(status.RunIDs, run.ID)
 	}
@@ -499,19 +500,12 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Clear the persisted old-artifact reference before publishing a replacement.
-	if job.status.SavedAnalysisID != "" {
-		status := job.status
-		status.SavedAnalysisID = ""
-		if err := s.persistBatchAnalysis(status); err != nil {
-			return err
-		}
-		job.status = status
-	}
-	if err := artifact.publish(batchResultFile); err != nil {
+	slot := job.status.nextArtifactSlot()
+	if err := artifact.publish(analysisArtifactFile(batchResultFile, slot)); err != nil {
 		return err
 	}
 	status := job.status
+	status.ArtifactSlot, status.SavedAnalysisID = slot, ""
 	status.State, status.Phase, status.Progress = "completed", "completed", 100
 	status.CompletedRuns = status.TotalRuns
 	status.ProcessedBytes = status.TotalBytes
@@ -599,7 +593,7 @@ func (s *Server) handleBatchArtifact(w http.ResponseWriter, r *http.Request, id 
 			return resultFile{}, err
 		}
 		defer root.Close()
-		return openResultFile(root, batchResultFile)
+		return openResultFile(root, analysisArtifactFile(batchResultFile, job.status.ArtifactSlot))
 	}()
 	if err != nil {
 		writeBatchAnalysisError(w, err)

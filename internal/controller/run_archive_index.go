@@ -144,7 +144,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 			s.archiveProgress()
 		}
 		if err == nil && legacy {
-			for _, name := range append(append([]string{}, resultSourceFiles[:]...), analysisJobFile, analysisResultFile, analysisSummaryFile) {
+			for _, name := range append(append([]string{}, resultSourceFiles[:]...), analysisJobFile, analysisResultFile, analysisSummaryFile, analysisArtifactFile(analysisResultFile, 1), analysisArtifactFile(analysisSummaryFile, 1)) {
 				file, readErr := openResultFile(remote, name)
 				if errors.Is(readErr, os.ErrNotExist) {
 					continue

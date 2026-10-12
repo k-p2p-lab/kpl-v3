@@ -138,8 +138,19 @@ func TestTopologyInspectorAndControlsStayInsideTopologyPanel(t *testing.T) {
 		}
 	}
 	visit(document)
-	if inspector == nil || !hasClass(inspector.Parent, "panel-body") || !hasClass(inspector.Parent.Parent, "topology-panel") {
+	contentPanel := byID["topologyContent"]
+	if inspector == nil || contentPanel == nil || inspector.Parent != contentPanel || !hasClass(contentPanel.Parent, "panel-body") || !hasClass(contentPanel.Parent.Parent, "topology-panel") {
 		t.Fatal("Peer inspector must be inside the network tab body")
+	}
+	if _, hidden := attribute(contentPanel, "hidden"); !hidden {
+		t.Fatal("Topology content must stay hidden until the overview is enabled")
+	}
+	toggle := byID["topologyEnabled"]
+	if toggle == nil || toggle.Data != "input" {
+		t.Fatal("missing topology overview switch")
+	}
+	if _, checked := attribute(toggle, "checked"); checked {
+		t.Fatal("Topology overview must start off")
 	}
 	previous := inspector.PrevSibling
 	for previous != nil && previous.Type != html.ElementNode {

@@ -585,14 +585,33 @@ func (s *state) inventoryLocked() model.Snapshot {
 }
 
 func (s *state) inventoryForViewLocked(dashboard bool) model.Snapshot {
+	return s.inventoryForTopologyLocked(dashboard, true)
+}
+
+func (s *state) inventoryForTopologyLocked(dashboard, includeTopology bool) model.Snapshot {
 	result := model.Snapshot{GeneratedAt: time.Now().UTC()}
 	for _, agent := range s.agents {
 		result.Agents = append(result.Agents, agent)
 	}
 	if dashboard {
+		result.Topology = &model.TopologySummary{Included: includeTopology}
+		if !includeTopology {
+			result.Nodes, result.Edges = []model.Node{}, []model.Edge{}
+		}
 		for node := range s.activeNodesLocked() {
 			if node.State != model.NodeStopping && !s.agents[node.AgentID].Disabled {
-				result.Nodes = append(result.Nodes, node)
+				result.Topology.Total++
+				switch node.State {
+				case model.NodeReady:
+					result.Topology.Ready++
+				case model.NodeStarting:
+					result.Topology.Starting++
+				default:
+					result.Topology.Other++
+				}
+				if includeTopology {
+					result.Nodes = append(result.Nodes, node)
+				}
 			}
 		}
 	} else {
@@ -651,15 +670,23 @@ func (s *state) dashboardSnapshot() model.Snapshot {
 }
 
 func (s *state) snapshotForView(dashboard bool) model.Snapshot {
+	return s.snapshotForTopologyView(dashboard, true)
+}
+
+func (s *state) snapshotForTopologyView(dashboard, includeTopology bool) model.Snapshot {
 	s.mu.RLock()
-	result := s.inventoryForViewLocked(dashboard)
-	agents := make(map[string]model.Agent, len(result.Agents))
-	for _, agent := range result.Agents {
-		agents[agent.ID] = agent
-	}
-	topologyNodes := append([]model.Node(nil), result.Nodes...)
-	for i := range topologyNodes {
-		topologyNodes[i].LastSeen = s.nodeReportTimes[topologyNodes[i].ID]
+	result := s.inventoryForTopologyLocked(dashboard, includeTopology)
+	var agents map[string]model.Agent
+	var topologyNodes []model.Node
+	if includeTopology {
+		agents = make(map[string]model.Agent, len(result.Agents))
+		for _, agent := range result.Agents {
+			agents[agent.ID] = agent
+		}
+		topologyNodes = append([]model.Node(nil), result.Nodes...)
+		for i := range topologyNodes {
+			topologyNodes[i].LastSeen = s.nodeReportTimes[topologyNodes[i].ID]
+		}
 	}
 	// Queued iterations have no observations yet and must not replace the
 	// currently running experiment's metrics simply because they were created
@@ -693,7 +720,9 @@ func (s *state) snapshotForView(dashboard bool) model.Snapshot {
 	} else {
 		result.Metrics.RunID = runID
 	}
-	result.Edges = networkEdgesAt(topologyNodes, agents, result.GeneratedAt)
+	if includeTopology {
+		result.Edges = networkEdgesAt(topologyNodes, agents, result.GeneratedAt)
+	}
 	return result
 }
 

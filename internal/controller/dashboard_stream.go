@@ -162,7 +162,7 @@ func (frame *dashboardFrame) delta(previous *dashboardFrame) ([]byte, error) {
 			patch[key] = changes
 		}
 	}
-	for _, key := range []string{"edges", "events", "metrics"} {
+	for _, key := range []string{"edges", "events", "metrics", "topology"} {
 		if !bytes.Equal(frame.fields[key], previous.fields[key]) {
 			patch[key] = frame.fields[key]
 		}

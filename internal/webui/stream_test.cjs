@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 const functions = source.slice(source.indexOf('function escapeHTML('), source.indexOf('$("#scenarioText").value = defaultScenario;'));
 
 function fixture() {
-  const streams = [], timers = new Map(), documentEvents = {}, windowEvents = {};
+  const streams = [], timers = new Map(), documentEvents = {}, windowEvents = {}, elements = new Map();
   let timerId = 0;
   class EventSource {
     constructor(url) { this.url = url; this.listeners = {}; this.closed = 0; streams.push(this); }
@@ -16,7 +16,13 @@ function fixture() {
     receive(name, data) { this.listeners[name]({ data: JSON.stringify(data) }); }
   }
   const context = {
-    state: { snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, loginRedirecting: false, reconnectTimer: null, snapshotRenderTimer: null },
+    state: { snapshot: null, stream: null, streamSnapshot: null, streamPageHidden: false, loginRedirecting: false, reconnectTimer: null, snapshotRenderTimer: null,
+      topology: {enabled: false, loading: false, motion: {frame: null, lastFrame: 0}, layout: {}, graph: null} },
+    $: selector => {
+      if (!elements.has(selector)) elements.set(selector, {classList: {remove() {}}, replaceChildren() {}, innerHTML: '', textContent: ''});
+      return elements.get(selector);
+    },
+    cancelAnimationFrame() {},
     AbortController, Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     EventSource, document: { hidden: false, addEventListener(name, callback) { documentEvents[name] = callback; } },
     window: { addEventListener(name, callback) { windowEvents[name] = callback; } },
@@ -28,10 +34,48 @@ function fixture() {
   const statuses = [], rendered = [];
   context.setConnection = (mode, label) => statuses.push({mode, label});
   context.render = snapshot => rendered.push(snapshot);
+  context.renderTopology = () => {};
   context.api = async () => ({});
   context.setupStreamLifecycle();
   return { context, state: context.state, streams, timers, documentEvents, windowEvents, statuses, rendered };
 }
+
+test('overview loads on its first On transition and stale mode responses cannot restore it after Off', () => {
+  const {context, state, streams} = fixture();
+  context.connectStream();
+  const summary = {...baseline(), nodes: [], edges: [], topology: {included: false, total: 1000, ready: 999, starting: 1, other: 0}};
+  streams[0].receive('snapshot', summary);
+  assert.equal(streams[0].url, '/api/v1/stream?view=dashboard&topology=0');
+  context.setTopologyEnabled(true);
+  assert.equal(streams.length, 2);
+  assert.equal(streams[0].closed, 1);
+  assert.equal(streams[1].url, '/api/v1/stream?view=dashboard&topology=1');
+  assert.equal(state.topology.loading, true);
+  context.setTopologyEnabled(true);
+  assert.equal(streams.length, 2, 'unchanged On state reloaded the graph');
+  streams[0].receive('snapshot_delta', {generatedAt: 'late-summary'});
+  assert.equal(state.snapshot.generatedAt, 'one');
+  streams[1].receive('snapshot', {...baseline(), topology: {included: true, total: 2, ready: 2, starting: 0, other: 0}});
+  assert.equal(state.topology.loading, false);
+  state.topology.graph = {nodes: state.snapshot.nodes};
+  state.topology.layout = {positions: new Map()};
+  context.setTopologyEnabled(false);
+  assert.equal(streams.length, 3);
+  assert.equal(streams[1].closed, 1);
+  assert.equal(streams[2].url, '/api/v1/stream?view=dashboard&topology=0');
+  assert.equal(state.topology.graph, null);
+  assert.deepEqual(plain(state.topology.layout), {});
+  assert.deepEqual(plain(state.snapshot.nodes), []);
+  assert.deepEqual(plain(state.snapshot.edges), []);
+  streams[1].receive('snapshot', {...baseline(), generatedAt: 'late-graph'});
+  assert.deepEqual(plain(state.snapshot.nodes), []);
+  streams[2].receive('snapshot', summary);
+  streams[2].receive('snapshot_delta', {topology: {...summary.topology, ready: 1000, starting: 0}});
+  assert.equal(state.snapshot.topology.ready, 1000);
+  assert.equal(state.snapshot.topology.starting, 0);
+  assert.equal(state.snapshot.topology.included, false);
+  assert.equal(state.topology.graph, null);
+});
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
 function baseline() {
   return { generatedAt:'one', agents:[{id:'a',state:'online'}], nodes:[{id:'n1'},{id:'n2'}], experiments:[{id:'r1',state:'running'},{id:'r2',state:'queued'}], edges:[{source:'n1',target:'n2'}], events:[{type:'old'}], metrics:{runId:'r1'} };
@@ -41,7 +85,7 @@ test('one connection receives the initial snapshot and merges only changed rows,
   const {context,state,streams,timers,rendered} = fixture();
   context.connectStream(); context.connectStream();
   assert.equal(streams.length,1);
-  assert.equal(streams[0].url,'/api/v1/stream?view=dashboard');
+  assert.equal(streams[0].url,'/api/v1/stream?view=dashboard&topology=0');
   const original = baseline();
   streams[0].receive('snapshot',original);
   // A control's optimistic update must not corrupt the server's delta base.

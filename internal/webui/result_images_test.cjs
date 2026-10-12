@@ -81,6 +81,29 @@ async function settle(predicate) {
   assert.fail("image request did not settle");
 }
 
+test("closing an analysis releases its data and message controls", async () => {
+  const previous = globalThis.KPLResearchTools;
+  let getData, clears = 0;
+  globalThis.KPLResearchTools = { create(options) {
+    getData = options.getData;
+    return { cancel() {}, setData() {}, clearData() { clears++; } };
+  } };
+  try {
+    const data = artifact('run');
+    const { ui, element } = fixture(async url => url.includes('/result?') ? data : job('run', 'completed'));
+    await ui.open('run');
+    assert.equal(getData(), data, 'completed analysis was not retained while open');
+    const before = clears;
+    element('resultImagesDialog').close();
+    assert.equal(getData(), null, 'closed dialog still retained the full analysis');
+    assert.equal(clears, before + 1, 'message controls were not cleared');
+    assert.equal(element('resultImagesGrid').innerHTML, '');
+  } finally {
+    if (previous === undefined) delete globalThis.KPLResearchTools;
+    else globalThis.KPLResearchTools = previous;
+  }
+});
+
 test("dashboard has one per-result image dialog and no comparison workspace", () => {
   const html = fs.readFileSync(__dirname + "/static/index.html", "utf8");
   assert.match(html, /<dialog[^>]+id="resultImagesDialog"/);

@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
 const functions = source.slice(source.indexOf('function escapeHTML('),source.indexOf('$("#scenarioText").value = defaultScenario;'));
-const sandbox = {};
+const sandbox = {state: {topology: {enabled: false, loading: false}}};
 vm.createContext(sandbox);vm.runInContext(functions,sandbox);
 const sample = overrides => ({sessions:2,finalizedSessions:0,sentBytes:2048,receivedBytes:1024,rejectedSamples:0,latestAt:'2026-09-09T00:00:00Z',currentRates:{available:true,sentBitsPerSecond:8000,receivedBitsPerSecond:16000,reportingSessions:2,staleSessions:0},...overrides});
 

@@ -694,6 +694,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown stream view")
 		return
 	}
+	topologyMode := r.URL.Query().Get("topology")
+	if topologyMode != "" && (view != "dashboard" || topologyMode != "0" && topologyMode != "1") {
+		writeError(w, http.StatusBadRequest, "unknown dashboard topology mode")
+		return
+	}
 	_, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming is unavailable")
@@ -721,9 +726,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		var err error
 		event := "snapshot"
 		if view == "dashboard" {
-			frame, frameErr := s.dashboardStreamSnapshotContext(r.Context(), func() error {
+			frame, frameErr := s.dashboardStreamSnapshotForTopology(r.Context(), func() error {
 				return writeStreamEvent(r.Context(), w, "heartbeat", []byte("{}"))
-			})
+			}, topologyMode != "0")
 			if frameErr != nil {
 				return frameErr
 			}

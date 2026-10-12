@@ -57,27 +57,44 @@ func (s *Server) streamSnapshotAtContext(ctx context.Context, keepAlive func() e
 }
 
 func (s *Server) dashboardStreamSnapshotContext(ctx context.Context, keepAlive func() error) (*dashboardFrame, error) {
+	return s.dashboardStreamSnapshotForTopology(ctx, keepAlive, true)
+}
+
+func (s *Server) dashboardStreamSnapshotForTopology(ctx context.Context, keepAlive func() error, includeTopology bool) (*dashboardFrame, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	s.snapshotMu.Lock()
-	if s.dashboardFrame != nil && time.Since(s.dashboardFrame.at) < snapshotInterval {
-		frame := s.dashboardFrame
+	frame, flight := s.dashboardFrame, s.dashboardFlight
+	if !includeTopology {
+		frame, flight = s.dashboardSummaryFrame, s.dashboardSummaryFlight
+	}
+	if frame != nil && time.Since(frame.at) < snapshotInterval {
 		s.snapshotMu.Unlock()
 		return frame, nil
 	}
-	flight := s.dashboardFlight
 	if flight == nil {
 		flight = &dashboardSnapshotFlight{done: make(chan struct{})}
-		s.dashboardFlight = flight
+		if includeTopology {
+			s.dashboardFlight = flight
+		} else {
+			s.dashboardSummaryFlight = flight
+		}
 		go func() {
 			at := time.Now()
-			flight.frame, flight.err = newDashboardFrame(s.state.dashboardSnapshot(), at)
+			flight.frame, flight.err = newDashboardFrame(s.state.snapshotForTopologyView(true, includeTopology), at)
 			s.snapshotMu.Lock()
-			if flight.err == nil {
-				s.dashboardFrame = flight.frame
+			if includeTopology {
+				if flight.err == nil {
+					s.dashboardFrame = flight.frame
+				}
+				s.dashboardFlight = nil
+			} else {
+				if flight.err == nil {
+					s.dashboardSummaryFrame = flight.frame
+				}
+				s.dashboardSummaryFlight = nil
 			}
-			s.dashboardFlight = nil
 			close(flight.done)
 			s.snapshotMu.Unlock()
 		}()

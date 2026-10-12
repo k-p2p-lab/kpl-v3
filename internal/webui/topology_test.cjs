@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 const layoutSource = fs.readFileSync(path.join(__dirname, 'static/topology-layout.js'), 'utf8');
 const functions = source.slice(source.indexOf('function escapeHTML('), source.indexOf('$("#scenarioText").value = defaultScenario;'));
 function context(extra = {}) {
-  const sandbox = { Intl, Date, ...extra };
+  const sandbox = { Intl, Date, state: {topology: {enabled: true}}, ...extra };
   vm.createContext(sandbox);
   vm.runInContext(layoutSource, sandbox);
   vm.runInContext(functions, sandbox);
@@ -367,7 +367,7 @@ test('recent events show aggregated GossipSub control units and direction', () =
   assert.match(eventList.innerHTML, /→ remote-pee/);
 });
 
-function uiFixture({reducedMotion=false}={}) {
+function uiFixture({reducedMotion=false, overview=true}={}) {
   const ids=new Map();
   const frames={queue:new Map(),nextID:1,maximumQueued:0};
   frames.request=(callback)=>{const id=frames.nextID++;frames.queue.set(id,callback);frames.maximumQueued=Math.max(frames.maximumQueued,frames.queue.size);return id;};
@@ -415,6 +415,8 @@ function uiFixture({reducedMotion=false}={}) {
   vm.runInContext(layoutSource,sandbox);
   vm.runInContext(source.slice(0,source.indexOf('const defaultScenario ='))+functions,sandbox);
   const state=vm.runInContext('state',sandbox);
+  assert.equal(state.topology.enabled, false, 'new pages must default to Overview off');
+  state.topology.enabled = overview;
   const render=(nodes=[peer('one'),peer('two'),peer('three','b')],edges=[
     {source:'one',target:'two',protocol:'gossipsub',topic:'alpha'},
     {source:'two',target:'three',protocol:'kademlia'},
@@ -424,6 +426,68 @@ function uiFixture({reducedMotion=false}={}) {
     setReduced(value){preference.matches=value;preference.emit('change');},
   };
 }
+
+test('overview Off skips graph filtering, SVG construction and animation', () => {
+  const {ids, sandbox, state, frames, render} = uiFixture({overview: false});
+  sandbox.setupTopologyControls();
+  for (const name of ['layoutTopology', 'filterTopologyEdges', 'observedTopologyTopics']) {
+    sandbox[name] = () => { assert.fail(`disabled overview called ${name}`); };
+  }
+  render(Array.from({length: 1000}, (_, i) => peer(`peer-${i}`)), []);
+  sandbox.startTopologyMotion();
+  assert.equal(state.topology.graph, null);
+  assert.equal(ids.get('topology').children.length, 0);
+  assert.equal(ids.get('topologyContent').hidden, true);
+  assert.equal(ids.get('topologyNotice').hidden, false);
+  assert.match(ids.get('topologyNotice').textContent, /Overview is off/);
+  assert.equal(frames.queue.size, 0);
+});
+
+test('overview switch waits for a full baseline and clears the graph when disabled', () => {
+  const {ids, sandbox, state, frames, render} = uiFixture({overview: false});
+  const requests = [];
+  sandbox.pauseStream = () => {};
+  sandbox.connectStream = () => requests.push(state.topology.enabled);
+  sandbox.setupTopologyControls();
+  render();
+  ids.get('topologyEnabled').checked = true;
+  ids.get('topologyEnabled').emit('change');
+  assert.deepEqual(requests, [true]);
+  assert.equal(state.topology.loading, true);
+  assert.equal(ids.get('topologyContent').hidden, true);
+  assert.match(ids.get('topologyNotice').textContent, /Loading topology/);
+  state.topology.loading = false;
+  render();
+  assert.equal(ids.get('topologyContent').hidden, false);
+  assert.equal(ids.get('topology').querySelectorAll('.topology-peer').length, 3);
+  ids.get('topologyEnabled').checked = false;
+  ids.get('topologyEnabled').emit('change');
+  assert.deepEqual(requests, [true, false]);
+  assert.equal(state.topology.graph, null);
+  assert.equal(ids.get('topology').children.length, 0);
+  assert.equal(ids.get('topologyContent').hidden, true);
+  assert.equal(frames.queue.size, 0);
+  assert.deepEqual(plain(state.snapshot.nodes), []);
+});
+
+test('overview Off preserves population metrics without reading graph arrays', () => {
+  const elements = new Map();
+  const api = context({state: {topology: {enabled: false}}, $: selector => {
+    if (!elements.has(selector)) elements.set(selector, {textContent: ''});
+    return elements.get(selector);
+  }});
+  for (const name of ['rememberAgents', 'renderRuns', 'renderAgents', 'renderEvents', 'renderTopology']) api[name] = () => {};
+  api.topologyData = () => assert.fail('off metrics filtered the graph');
+  api.filterTopologyEdges = () => assert.fail('off metrics counted graph edges');
+  api.render({generatedAt: '2026-10-12T00:00:00Z', agents: [], experiments: [], metrics: {},
+    topology: {included: false, total: 1000, ready: 999, starting: 1, other: 0},
+    get nodes() { assert.fail('off metrics accessed topology nodes'); },
+    get edges() { assert.fail('off metrics accessed topology edges'); },
+  });
+  assert.equal(elements.get('#peerMetric').textContent, '999');
+  assert.equal(elements.get('#peerPopulationMetric').textContent, 'Topology: 1,000 · Starting: 1');
+  assert.equal(elements.get('#connectionMetric').textContent, 'Transport links: N/A · Overview off');
+});
 
 test('rendered graph controls preserve selection and camera while filtering and streaming churn', () => {
   const {ids,document,sandbox,state,frames}=uiFixture();

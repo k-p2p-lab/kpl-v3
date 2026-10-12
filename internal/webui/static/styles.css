@@ -223,6 +223,11 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.4rem clamp(1rem, 3vw
 .legend-dot.boot { background: var(--cyan); }
 .legend-dot.starting { background: var(--amber); }
 .legend-dot.issue { background: var(--red); }
+.topology-panel > .panel-header { flex-wrap: wrap; }
+.topology-header-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: .6rem 1rem; min-width: 0; }
+.topology-switch { display: inline-flex; align-items: center; gap: .5rem; min-height: var(--control-height); padding: .25rem .6rem; border: 1px solid var(--line); border-radius: .4rem; white-space: nowrap; cursor: pointer; font-size: .8rem; }
+.topology-switch input { margin: 0; accent-color: var(--cyan); }
+#topologyEnabledState { min-width: 1.4rem; color: var(--muted); }
 .count-badge { min-width: 2rem; padding: 0.25rem 0.45rem; border-radius: 999px; text-align: center; color: var(--cyan); background: rgba(57, 214, 208, 0.1); font-size: 0.8rem; }
 
 .topology-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem 1.25rem; padding: 0.9rem 1.2rem 0.6rem; }

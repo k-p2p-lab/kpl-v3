@@ -326,6 +326,12 @@
     );
     return {
       cancel: stop,
+      clearData() {
+        stop();
+        panel.hidden = true;
+        $("researchMessage").innerHTML = "";
+        $("drawResearchMessage").disabled = true;
+      },
       setData(data) {
         panel.hidden = false;
         const messages = data.research?.messages || [];

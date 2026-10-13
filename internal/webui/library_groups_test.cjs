@@ -8,7 +8,7 @@ const deferred = () => { let resolve,reject; const promise=new Promise((yes,no)=
 
 function harness(api, configuration={}) {
   const listeners = new Map();
-  const document = {querySelector:()=>null,querySelectorAll:()=>[],addEventListener:(type,handler,capture)=>{
+  const document = {querySelector:selector=>configuration.bars?.[selector]||null,querySelectorAll:()=>[],addEventListener:(type,handler,capture)=>{
     const entries=listeners.get(type)||[];entries.push({handler,capture});listeners.set(type,entries);
   }};
   let changes=0;
@@ -283,4 +283,55 @@ test('failed download preparation restores controls and leaves the selection ret
   assert.equal(attempts,2);
   assert.match(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
   assert.doesNotMatch(h.groups.selectionMarkup('scenario:one','One'),/ disabled/);
+});
+
+test('CSV ZIP is limited to Saved Results selection and reports progress without changing selection',async()=>{
+  const pending=deferred(),downloads=[];
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const h=harness(async()=>initial(),{bars,download:async()=>{},downloadCSV:(scope,keys,options)=>{downloads.push({scope,keys,options});return pending.promise}});
+  await h.initialized;await h.action('select','scenarios');h.check('scenario:one',true);
+  assert.doesNotMatch(bars['#scenarioGroupTools'].innerHTML,/download-csv/);
+  await h.action('download-csv','scenarios');assert.equal(downloads.length,0);
+  await h.action('select','results');h.check('batch:one',true);
+  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="download-csv"[^>]*>Download CSV ZIP/);
+  await h.action('download-csv','results');
+  assert.equal(downloads.length,1);
+  assert.deepEqual(downloads[0].keys,['batch:one']);
+  downloads[0].options.onProgress('CSV ZIP 1/2 · <unsafe>');
+  assert.match(bars['#resultGroupTools'].innerHTML,/CSV ZIP 1\/2 · &lt;unsafe&gt;/);
+  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="cancel-download"/);
+  await h.action('download-csv','results');await h.action('select','results');await h.action('clear','results');
+  assert.equal(downloads.length,1);
+  assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
+  pending.resolve();await nextTurn();
+  assert.match(bars['#resultGroupTools'].innerHTML,/Download requested/);
+  assert.doesNotMatch(bars['#resultGroupTools'].innerHTML,/cancel-download/);
+  assert.doesNotMatch(h.groups.selectionMarkup('batch:one','One'),/ disabled/);
+});
+
+test('canceling CSV ZIP unlocks selection and leaves accepted server analysis running',async()=>{
+  let signal;
+  const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  const h=harness(async()=>initial(),{bars:{'#resultGroupTools':bar},downloadCSV:(scope,keys,options)=>{
+    signal=options.signal;
+    return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('Canceled','AbortError'))));
+  }});
+  await h.initialized;await h.action('select','results');h.check('run:single',true);
+  await h.action('download-csv','results');
+  assert.equal(signal.aborted,false);
+  await h.action('cancel-download','results');
+  assert.equal(signal.aborted,true);
+  assert.match(bar.innerHTML,/CSV download canceled.*continues on the server/);
+  assert.match(h.groups.selectionMarkup('run:single','Single'),/ checked/);
+  assert.doesNotMatch(h.groups.selectionMarkup('run:single','Single'),/ disabled/);
+});
+
+test('CSV export errors keep selected results retryable and preserve original ZIP action',async()=>{
+  let csvAttempts=0,original=0;
+  const h=harness(async()=>initial(),{download:async()=>{original++},downloadCSV:async()=>{csvAttempts++;throw new Error('analysis unavailable')}});
+  await h.initialized;await h.action('select','results');h.check('batch:one',true);
+  await h.action('download-csv','results');await h.action('download-csv','results');
+  assert.equal(csvAttempts,2);
+  await h.action('download','results');assert.equal(original,1);
+  assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
 });

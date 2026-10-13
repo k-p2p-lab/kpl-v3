@@ -14,6 +14,8 @@
 .library-selection-count { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .85rem; min-width: 0; font-size: .78rem; }
 .library-selection-count > span { margin-right: auto; }
 .library-group-selection select { min-width: 0; width: 100%; }
+.library-selection-downloads { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .55rem; min-width: 0; }
+.library-selection-downloads > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
 .library-text-button { background: none; border: 0; color: var(--cyan); cursor: pointer; font: inherit; font-size: .78rem; padding: .15rem 0; min-height: 1.75rem; white-space: nowrap; }
 .library-text-button:disabled { opacity: .45; cursor: default; }
 .library-group-status { margin: .6rem 0 0; font-size: .77rem; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
@@ -94,5 +96,6 @@
 .library-group-selection > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
 @container library-tools (max-width: 22rem) {
   .library-group-selection { grid-template-columns: minmax(0, 1fr) auto; }
-  .library-download-button { grid-column: 1 / -1; }
+  .library-selection-downloads { grid-column: 1 / -1; }
+  .library-selection-downloads > button { flex: 1 1 auto; }
 }

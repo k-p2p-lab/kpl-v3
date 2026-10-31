@@ -293,6 +293,21 @@ test("CSV score gaps survive export, import and curve rendering",()=>{
   assert.deepEqual(F.parseImport('x,y\n0,1\n','legacy.csv').curves[0].points,[{x:0,y:1}]);
 });
 
+test("chart CSV keeps user labels literal while preserving signed measurements", () => {
+  for (const text of ['=1+1', '+SUM(1,2)', '-1+2', '@SUM(1,2)', ' \t=1+1', '\r\n=1+1']) {
+    const chart = {title: text, series: [{name: text, points: [{x: -2, y: -3.5, error: .5, label: text}]}]};
+    const original = JSON.stringify(chart), rows = F.csvRows(F.chartCSV(chart));
+    assert.equal(rows[1][0], "'" + text);
+    assert.equal(rows[1][1], "'" + text);
+    assert.equal(rows[1][7], "'" + text);
+    assert.deepEqual(rows[1].slice(2, 5), ['-2', '-3.5', '0.5']);
+    assert.equal(JSON.stringify(chart), original, 'CSV escaping must not modify the displayed chart');
+    assert.deepEqual(F.parseImport(F.chartCSV(chart), 'signed.csv').curves[0].points, [{x: -2, y: -3.5}]);
+  }
+  const normal = F.csvRows(F.chartCSV({title: '한글, "quoted"', series: [{name: 'workers', points: [{x: 0, y: null}]}]}));
+  assert.deepEqual(normal[1].slice(0, 4), ['한글, "quoted"', 'workers', '0', '']);
+});
+
 test("partial score CSV preserves missing values through raw and peak-normalized curves",()=>{
   const points=[{x:0,y:0},{x:5,y:null,breakBefore:true},{x:10,y:-3,breakBefore:true},{x:15,y:2}];
   const csv=F.chartCSV({title:'Partial score evidence',series:[{name:'workers',points}]});

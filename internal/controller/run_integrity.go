@@ -21,6 +21,10 @@ const ownershipDirectory = "run-ownership"
 // Persist ownership before sending a create, including requests whose response
 // is lost. Metadata survives Controller restart and deletion of an old attempt.
 func (s *Server) rememberRunAgent(id string, agent model.Agent) error {
+	return s.rememberRunAgentWithPersistence(id, agent, s.persistExperiment)
+}
+
+func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, persist func(model.Experiment) error) error {
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
 	s.state.mu.RLock()
@@ -58,11 +62,16 @@ func (s *Server) rememberRunAgent(id string, agent model.Agent) error {
 	if err != nil {
 		return err
 	}
-	if err = s.persistExperiment(run); err != nil {
+	if err = persist(run); err != nil {
 		return err
 	}
 	s.state.mu.Lock()
-	s.state.experiments[id] = run
+	// Stop requests and storage failures can update live state without
+	// persistMu during the writes above. Commit only the ownership field;
+	// replacing the earlier Run copy would erase their cancellation/evidence.
+	current := s.state.experiments[id]
+	current.Agents = run.Agents
+	s.state.experiments[id] = current
 	s.state.mu.Unlock()
 	return nil
 }

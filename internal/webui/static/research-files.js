@@ -324,7 +324,13 @@
     const panels = chart.panels || [chart];
     const hasBreaks = panels.some(panel => (panel.series || []).some(series =>
       (series.points || []).some(point => point.breakBefore)));
-    const quote = (v) => '"' + String(v ?? "").replace(/"/g, '""') + '"',
+    // Quoting alone does not make a spreadsheet formula literal. Escape
+    // textual labels, retaining actual signed numeric samples unchanged.
+    const quote = (v) => {
+      let text = String(v ?? "");
+      if (typeof v === "string" && /^\s*[=+@-]/.test(text)) text = "'" + text;
+      return '"' + text.replace(/"/g, '""') + '"';
+    },
       rows = [
         ["panel", "series", "x", "y", "y_sd", "x_sd", "color_value", "label", "n", ...(hasBreaks ? ["break_before"] : [])],
       ];

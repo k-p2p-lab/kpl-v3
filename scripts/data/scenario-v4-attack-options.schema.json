@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kpl:scenario-v4:worker-attacks",
+  "title": "KPL scenario v4 worker attack options",
+  "description": "Worker attack option projection. The Go scenario parser is authoritative for full scenarios, effective overlays, role/router, identity mappings and supported runtime updates. Defaults are annotations.",
+  "$comment": "Validate only the new worker attack option projection or the runtimeAttackPatch definition. Version, generation, target group existence, identity ambiguity, finite YAML numbers, integer/duration overflow and libp2p capacity require Go validation.",
+  "type": "object",
+  "properties": {
+    "sink": {
+      "$ref": "#/$defs/sink"
+    },
+    "censorship": {
+      "$ref": "#/$defs/censorship"
+    },
+    "messageDelay": {
+      "$ref": "#/$defs/messageDelay"
+    },
+    "connectionAttack": {
+      "$ref": "#/$defs/connectionAttack"
+    },
+    "graftFlood": {
+      "$ref": "#/$defs/graftFlood"
+    },
+    "ihaveSpam": {
+      "$ref": "#/$defs/ihaveSpam"
+    },
+    "iwantWithholding": {
+      "$ref": "#/$defs/iwantWithholding"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "probability": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 1
+    },
+    "positiveDuration": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(?=.*[1-9])(?:[0-9]+(?:\\.[0-9]+)?(?:ns|us|µs|μs|ms|s|m|h))+$",
+      "$comment": "Positive duration subset for external tools; the Go parser accepts Go duration syntax and rejects overflow."
+    },
+    "selector": {
+      "type": "object",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "nodeIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "peerIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "nonEmptySelector": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/selector"
+        }
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "groups"
+          ],
+          "properties": {
+            "groups": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "nodeIds"
+          ],
+          "properties": {
+            "nodeIds": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "peerIds"
+          ],
+          "properties": {
+            "peerIds": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    "sink": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        }
+      },
+      "additionalProperties": false
+    },
+    "censorship": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "publishers": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": [
+                  "topics"
+                ],
+                "properties": {
+                  "topics": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "required": [
+                  "publishers"
+                ],
+                "properties": {
+                  "publishers": {
+                    "$ref": "#/$defs/nonEmptySelector"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "messageDelay": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "delay": {
+          "$ref": "#/$defs/positiveDuration"
+        },
+        "maxPendingMessages": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1024
+        },
+        "maxPendingBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 16777216
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "delay"
+            ]
+          }
+        }
+      ]
+    },
+    "connectionAttack": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "targets": {
+          "$ref": "#/$defs/selector"
+        },
+        "targetConnections": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 8
+        },
+        "retryInterval": {
+          "$ref": "#/$defs/positiveDuration",
+          "default": "1s"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "targets"
+            ],
+            "properties": {
+              "targets": {
+                "$ref": "#/$defs/nonEmptySelector"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "graftFlood": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "targets": {
+          "$ref": "#/$defs/selector"
+        },
+        "interval": {
+          "$ref": "#/$defs/positiveDuration",
+          "default": "1s"
+        },
+        "graftsPerPeer": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "maximum": 65536
+        },
+        "respectBackoff": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "topics"
+            ],
+            "properties": {
+              "topics": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ihaveSpam": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "targets": {
+          "$ref": "#/$defs/selector"
+        },
+        "interval": {
+          "$ref": "#/$defs/positiveDuration",
+          "default": "1s"
+        },
+        "idsPerRPC": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100,
+          "maximum": 65536
+        },
+        "rpcsPerPeer": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "maximum": 65536
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "topics"
+            ],
+            "properties": {
+              "topics": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "iwantWithholding": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "probability": {
+          "$ref": "#/$defs/probability"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "targets": {
+          "$ref": "#/$defs/selector"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimeProbabilityPatch": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "runtimeAttackPatch": {
+      "type": "object",
+      "properties": {
+        "sink": {
+          "$ref": "#/$defs/runtimeProbabilityPatch"
+        },
+        "censorship": {
+          "$ref": "#/$defs/runtimeProbabilityPatch"
+        },
+        "messageDelay": {
+          "$ref": "#/$defs/runtimeProbabilityPatch"
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    }
+  }
+}

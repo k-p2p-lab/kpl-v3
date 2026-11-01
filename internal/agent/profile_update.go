@@ -158,6 +158,15 @@ func storeProfileAcknowledgement(proc *process, response model.ProfileUpdateResp
 	effective := response.Effective
 	var prior model.RuntimeProfilePatch
 	if json.Unmarshal([]byte(proc.node.Metadata["runtimeProfile"]), &prior) == nil && model.ValidateRuntimeProfileSnapshot(prior) == nil {
+		if effective.Sink == nil {
+			effective.Sink = prior.Sink
+		}
+		if effective.Censorship == nil {
+			effective.Censorship = prior.Censorship
+		}
+		if effective.MessageDelay == nil {
+			effective.MessageDelay = prior.MessageDelay
+		}
 		if effective.Network == nil {
 			effective.Network = prior.Network
 		}
@@ -204,6 +213,9 @@ func updateProcessProfile(proc *process, metadata map[string]string) {
 		return
 	}
 	if effective.GossipSub != nil && (proc.node.Metadata["pubsubEnabled"] != "true" || proc.node.Metadata["pubsubRouter"] != "gossipsub") {
+		return
+	}
+	if effective.HasAttacks() && ((effective.Sink.Active() || effective.Censorship.Active() || effective.MessageDelay.Active()) && proc.node.Role != "worker" || proc.node.Metadata["pubsubEnabled"] != "true" || proc.node.Metadata["pubsubRouter"] != "gossipsub") {
 		return
 	}
 	appliedAt, err := time.Parse(time.RFC3339Nano, metadata["profileAppliedAt"])

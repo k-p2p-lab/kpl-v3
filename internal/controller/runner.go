@@ -42,6 +42,7 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	attackTargets              attackTargetCache
 	libraryDownloadsMu         sync.Mutex
 	libraryDownloads           map[string]libraryDownload
 	libraryDownloadSlots       chan struct{}

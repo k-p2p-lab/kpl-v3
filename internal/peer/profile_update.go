@@ -121,6 +121,22 @@ func (s *Server) executeProfileUpdate(ctx context.Context, request model.Profile
 	if err != nil {
 		return response, err
 	}
+	if err := updated.ValidateAttackRole(s.config.Node.Role); err != nil {
+		return response, err
+	}
+	if request.Set.HasAttacks() && s.attacks == nil {
+		return response, fmt.Errorf("attack runtime is not running")
+	}
+	if request.Stage == "prepare" && updated.Censorship != nil && updated.Censorship.Active() && !updated.Censorship.Publishers.Empty() && len(updated.Censorship.Publishers.Groups)+len(updated.Censorship.Publishers.NodeIDs) > 0 {
+		if err := s.attacks.fetchTargets(ctx); err != nil {
+			return response, err
+		}
+		if registry := s.attacks.registry.Load(); registry != nil {
+			if err := validateAttackPublisherTargets(updated, registry.targets); err != nil {
+				return response, err
+			}
+		}
+	}
 	if request.Stage == "prepare" {
 		if state.prepared != nil && request.Revision <= state.prepared.request.Revision && !sameProfileUpdate(state.prepared.request, request) {
 			return response, fmt.Errorf("conflicting prepared profile revision")
@@ -158,6 +174,9 @@ func (s *Server) executeProfileUpdate(ctx context.Context, request model.Profile
 		}
 		return response, fmt.Errorf("profile apply may be partial: %w", err)
 	}
+	if request.Set.HasAttacks() {
+		s.attacks.update(updated, request.Revision)
+	}
 	response.Effective = request.Set.Snapshot(updated)
 	raw, _ := json.Marshal(s.profileStatusSnapshot(updated))
 	s.profileApplied.Store(&profileAppliedState{config: updated, revision: request.Revision, appliedAt: time.Now().UTC(), json: string(raw)})
@@ -192,6 +211,7 @@ func (s *Server) profileStatusSnapshot(config model.NodeConfig) model.RuntimePro
 	snapshot := model.RuntimeProfileSnapshot(config)
 	if config.GossipSub.Enabled == nil || !*config.GossipSub.Enabled || config.GossipSub.Router != "gossipsub" {
 		snapshot.GossipSub = nil
+		snapshot.Sink, snapshot.Censorship, snapshot.MessageDelay = nil, nil, nil
 	}
 	if !s.config.NetworkMutable || config.Network.Scheduled() {
 		snapshot.Network = nil

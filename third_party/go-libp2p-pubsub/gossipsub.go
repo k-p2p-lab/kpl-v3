@@ -484,6 +484,8 @@ func WithGossipSubParams(cfg GossipSubParams) Option {
 // is the fanout map. Fanout peer lists are expired if we don't publish any
 // messages to their topic for GossipSubFanoutTTL.
 type GossipSubRouter struct {
+	iwantResponseFilter func(peer.ID, *Message) bool
+
 	p            *PubSub
 	peers        map[peer.ID]protocol.ID          // peer protocols
 	direct       map[peer.ID]struct{}             // direct peers
@@ -932,6 +934,7 @@ func (gs *GossipSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb.
 	}
 
 	ihave := make(map[string]*pb.Message)
+	var withheld map[string]struct{}
 	for _, iwant := range ctl.GetIwant() {
 		for _, mid := range iwant.GetMessageIDs() {
 			// Check if that peer has sent IDONTWANT before, if so don't send them the message
@@ -953,6 +956,21 @@ func (gs *GossipSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb.
 				continue
 			}
 
+			if gs.iwantResponseFilter != nil {
+				if _, exists := ihave[mid]; exists {
+					continue
+				}
+				if _, exists := withheld[mid]; exists {
+					continue
+				}
+				if !gs.iwantResponseFilter(p, msg) {
+					if withheld == nil {
+						withheld = make(map[string]struct{})
+					}
+					withheld[mid] = struct{}{}
+					continue
+				}
+			}
 			out := msg.Message
 			if gs.p.hopwave {
 				out = gs.hopwaveMessage(msg.Message, pb.PropagationType_LAZY_PULL)

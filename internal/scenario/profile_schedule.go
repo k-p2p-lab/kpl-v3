@@ -83,6 +83,9 @@ func (s *Scenario) validateProfileSchedules() error {
 				}
 				var err error
 				config, err = change.Set.Apply(config)
+				if err == nil {
+					err = config.ValidateAttackRole(join.Role)
+				}
 				if err != nil {
 					return fmt.Errorf("phase %q change %d, join %q: %w", schedule.Name, step+1, join.Name, err)
 				}

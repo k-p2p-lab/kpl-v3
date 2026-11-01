@@ -175,6 +175,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/network", s.handleNetwork)
 	mux.HandleFunc("/api/v1/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/api/v1/discovery", s.handleDiscovery)
+	mux.HandleFunc("/api/v1/attack-targets", s.handleAttackTargets)
 	mux.HandleFunc("/api/v1/events", s.handleEvents)
 	mux.HandleFunc("/api/v1/events/batch", s.handleEventBatch)
 	mux.HandleFunc("/api/v1/scenarios/validate", s.handleScenarioValidation)

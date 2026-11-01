@@ -246,7 +246,7 @@ func (v *validation) PushLocal(msg *Message) error {
 func (v *validation) Push(src peer.ID, msg *Message) bool {
 	vals := v.getValidators(msg)
 
-	if len(vals) > 0 || msg.Signature != nil {
+	if len(vals) > 0 || msg.Signature != nil || v.p.inboundPolicyEnabled() {
 		select {
 		case v.validateQ <- &validateReq{vals, src, msg}:
 		default:
@@ -311,6 +311,16 @@ func (v *validation) validate(vals []*validatorImpl, src peer.ID, msg *Message, 
 		v.tracer.ValidateMessage(msg)
 	}
 
+	if v.applyInboundPolicy(msg, func() { _ = v.validateAfterInboundPolicy(vals, src, msg, synchronous) }) {
+		return nil
+	}
+	return v.validateAfterInboundPolicy(vals, src, msg, synchronous)
+}
+
+func (v *validation) validateAfterInboundPolicy(vals []*validatorImpl, src peer.ID, msg *Message, synchronous bool) error {
+	if err := v.p.ctx.Err(); err != nil {
+		return err
+	}
 	var inline, async []*validatorImpl
 	for _, val := range vals {
 		if val.validateInline || synchronous {

@@ -73,3 +73,15 @@ Already frozen identical membership succeeds even after a link disappears; any d
 The root `go.mod` selects this local replacement; Docker copies it before dependency download. KPL exposes routing through `gossipsub.hopwave` and `gossipsub.params.hopwaveFactor` / `hopwaveInterval`. Operator and log contracts live in the wiki's [Protocol Options](https://github.com/k-p2p-lab/kpl-v3/wiki/Protocol-Options#hopwave).
 
 When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply the score inspection, HopWave, mesh-freeze/plan, runtime-parameter and resource-lifetime patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, mesh plan/freeze lifecycle/control tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave and mesh network tests explicitly use TCP, Noise and Yamux, matching the application transport.
+
+## Worker attack policies for scenario schema v4
+
+The KPL Peer adds opt-in worker experiments through these narrowly scoped hooks:
+
+- `WithInboundMessagePolicy` applies remote data decisions after signature/seen-ID admission and before application validation, delivery and router caching. Local publications bypass it. A dormant predicate preserves the ordinary unsigned fast path. Explicit drops use ignored validation, not invalid-message penalties. Asynchronous delay work has count/byte bounds, overflow/cancellation observations, and `WaitInboundMessagePolicy` for shutdown draining.
+- `WithIWantResponseFilter` can withhold individual otherwise eligible cached responses, preserving the message cache, ordinary eager forwarding and IHAVE behavior.
+- `SendExperimentalGossipSubControl` generates GRAFT/IHAVE only on existing PubSub transports, on the router event loop. It preserves finite queue/size/fragmentation limits and mesh freeze, can deliberately ignore GRAFT backoff, regenerates bogus-ID cache collisions and reports queue admission/drop separately from remote delivery. Attack controls are not automatically retried.
+
+Only `pubsub.go`, `validation.go`, `gossipsub.go` and the new policy/control files change upstream execution. Message selection, signed-author/group resolution, connection acquisition, seeds, statistics, and lifecycle orchestration live in KPL's `internal/peer` package. There is no protobuf, protocol ID, dependency-version or scoring-default change. `kpl_attacks_test.go` covers cache preservation, queues/backoff/cancellation and bogus IDs; root Peer tests cover real relay-chain receive policies and bounded-delay shutdown.
+
+`KPL-ATTACKS-SHA256.json` records this KPL patch snapshot and its base revision. It is separate from, and does not replace, `KPL-UPSTREAM-SHA256.json` or `KPL-HOPWAVE-SHA256.json`. Original licenses and pristine/reference hashes remain unchanged.

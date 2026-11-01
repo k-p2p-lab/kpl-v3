@@ -503,6 +503,9 @@ func (s *Server) admitNode(ctx, processParent context.Context, request model.Cre
 	if err := resolvedConfig.Validate(); err != nil {
 		return model.Node{}, fmt.Errorf("invalid node config: %w", err)
 	}
+	if err := resolvedConfig.ValidateAttackRole(request.Role); err != nil {
+		return model.Node{}, err
+	}
 	if resolvedConfig.Network.Scheduled() && resolvedConfig.Network.Schedule.Clock() == "experiment-start" && request.ExperimentStartedAt.IsZero() {
 		return model.Node{}, fmt.Errorf("experimentStartedAt is required for an experiment-start network schedule")
 	}
@@ -932,7 +935,7 @@ func heartbeatNodeStatus(proc *process) model.Node {
 	node.OverlayObservedAt = time.Time{}
 	node.Metadata = make(map[string]string)
 	// Preserve lifecycle evidence and topic labels used by Controller metrics.
-	for _, key := range []string{"createRequestHash", "createAdmission", "cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode", "meshFreezeEnabled", "meshFrozen"} {
+	for _, key := range []string{"createRequestHash", "createAdmission", "cleanupComplete", "runtime", "containerId", "containerCreatedAt", "containerStartedAt", "lifetimeBasis", "stoppedAt", "stopRequestedAt", "topics", "topicsJSON", "pubsubEnabled", "topicMode", "meshFreezeEnabled", "meshFrozen", "attackOptions", "attackStats", "attackRevision", "attackStatsObservedAt", "attackRegistryObservedAt", "pubsubAuthorId", "pubsubAuthorMode"} {
 		if value, exists := proc.node.Metadata[key]; exists {
 			node.Metadata[key] = value
 		}

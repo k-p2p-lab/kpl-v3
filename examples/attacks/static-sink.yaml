@@ -1,0 +1,50 @@
+# Scenario schema v4. See https://github.com/k-p2p-lab/kpl-v3/wiki/Worker-Attacks
+version: 4
+name: Static sink
+seed: 42
+onExit: drain
+profiles:
+  honest:
+    type: worker
+    gossipsub:
+      topics:
+      - blocks
+      - control
+  attacker:
+    type: worker
+    gossipsub:
+      topics:
+      - blocks
+      - control
+      allowPublish: false
+    sink:
+      enabled: true
+      probability: 1
+phases:
+- action: join
+  group: honest
+  role: worker
+  profile: honest
+  count: 8
+  parallel: true
+- action: join
+  group: attackers
+  role: worker
+  profile: attacker
+  count: 2
+  parallel: true
+- action: wait-ready
+  timeout: 2m
+- action: wait
+  duration: 10s
+- action: publish
+  group: honest
+  topic: blocks
+  count: 120
+  payloadSize: 1024
+  interval:
+    model: fixed
+    value: 1s
+- action: wait
+  duration: 10s
+- action: stop-all

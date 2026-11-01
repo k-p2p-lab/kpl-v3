@@ -107,7 +107,7 @@ func publicAuthPath(r *http.Request) bool {
 
 func internalAuthPath(r *http.Request) bool {
 	if r.Method == http.MethodGet {
-		return r.URL.Path == "/api/v1/bootstrap" || r.URL.Path == "/api/v1/discovery"
+		return r.URL.Path == "/api/v1/bootstrap" || r.URL.Path == "/api/v1/discovery" || r.URL.Path == "/api/v1/attack-targets"
 	}
 	if r.Method == http.MethodPost {
 		switch r.URL.Path {

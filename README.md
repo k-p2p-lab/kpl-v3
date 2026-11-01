@@ -9,3 +9,5 @@ A P2P research testbed that runs libp2p Kademlia and PubSub experiments in isola
 This repository contains the implementation and runnable examples. Project, research, deployment, and development documentation is maintained in the wiki.
 
 [Examples](examples) · [Swarm helper](scripts/swarm.sh)
+
+Scenario schema v4: [Worker attacks](https://github.com/k-p2p-lab/kpl-v3/wiki/Worker-Attacks) · [`examples/attacks`](examples/attacks).

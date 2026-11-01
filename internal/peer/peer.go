@@ -31,6 +31,7 @@ import (
 )
 
 type Server struct {
+	attacks           *attackRuntime
 	networkSchedule   *peerNetworkSchedule
 	networkApplied    atomic.Pointer[networkAppliedState]
 	profileUpdates    profileUpdateState
@@ -132,6 +133,9 @@ func newServer(ctx context.Context, config model.PeerProcessConfig, logger *slog
 		logger = slog.Default()
 	}
 	config.NodeConfig = config.NodeConfig.WithDefaults()
+	if err := config.NodeConfig.ValidateAttackRole(config.Node.Role); err != nil {
+		return nil, err
+	}
 	if err := config.NodeConfig.Validate(); err != nil {
 		return nil, fmt.Errorf("validate node config: %w", err)
 	}
@@ -195,6 +199,7 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 	bandwidthCtx, stopBandwidth := context.WithCancel(context.Background())
 	var bandwidthDone chan struct{}
 	var networkDone chan error
+	var attackDone chan error
 	defer func() {
 		stopParentWatch()
 		s.telemetry.stopMeasurement()
@@ -203,6 +208,15 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 			if err := <-networkDone; err != nil && !errors.Is(err, context.Canceled) {
 				runErr = errors.Join(runErr, err)
 			}
+		}
+		if attackDone != nil {
+			runErr = errors.Join(runErr, <-attackDone)
+		}
+		if s.attacks != nil && s.pubsub != nil {
+			drainCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			runErr = errors.Join(runErr, s.pubsub.WaitInboundMessagePolicy(drainCtx))
+			stop()
+			s.attacks.flush(true)
 		}
 		s.Close()
 		stopBandwidth()
@@ -251,6 +265,16 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 		}
 	} else if s.telemetry.startMeasurement(nil) {
 		go s.telemetry.measurementLoop(ctx)
+	}
+	if s.attacks != nil {
+		attackDone = make(chan error, 1)
+		go func() {
+			err := s.attacks.run(ctx)
+			if err != nil {
+				cancel()
+			}
+			attackDone <- err
+		}()
 	}
 	apiServer := &http.Server{
 		Handler:           s.handler(),
@@ -309,6 +333,16 @@ func (s *Server) startPubSub(ctx context.Context) error {
 	}
 	options = append(options, discoveryOptions...)
 	options = append(options, pubsub.WithRawTracer(&messageTracer{server: s}))
+	if config.Router == "gossipsub" {
+		s.attacks = newAttackRuntime(s)
+		limits := pubsub.InboundMessagePolicyLimits{Active: s.attacks.receiveActive, MaxPendingMessages: 1024, MaxPendingBytes: 16 << 20, Observe: s.attacks.observeDelay}
+		if delay := s.config.NodeConfig.MessageDelay; delay != nil {
+			limits.MaxPendingMessages = *delay.MaxPendingMessages
+			limits.MaxPendingBytes = *delay.MaxPendingBytes
+		}
+		options = append(options, pubsub.WithInboundMessagePolicy(s.attacks.decide, limits), pubsub.WithIWantResponseFilter(s.attacks.allowIWant))
+	}
+
 	s.mesh.configure(config.Enabled != nil && *config.Enabled && config.Router == "gossipsub")
 	if config.Score != nil && config.Score.IsEnabled() && config.ScoreInspectInterval != "" {
 		interval, parseErr := time.ParseDuration(config.ScoreInspectInterval)
@@ -594,6 +628,7 @@ func (s *Server) reportStatus(ctx context.Context, state, message string) error 
 	node := s.config.Node
 	s.addNetworkStatus(&node)
 	s.addProfileStatus(&node)
+	s.addAttackStatus(&node)
 	node.PeerID = s.host.ID().String()
 	node.State = state
 	node.Error = message

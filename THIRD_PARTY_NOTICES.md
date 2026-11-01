@@ -44,6 +44,8 @@ The [runtime parameter extension](third_party/go-libp2p-pubsub/runtime_params.go
 
 K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_test.go) and [HopWave](third_party/go-libp2p-pubsub/kpl_hopwave_test.go) regression tests, [patch and upgrade notes](third_party/go-libp2p-pubsub/KPL-CHANGES.md), a [SHA-256 manifest of the pristine upstream files](third_party/go-libp2p-pubsub/KPL-UPSTREAM-SHA256.json), and a [manifest of HopWave reference sources](third_party/go-libp2p-pubsub/KPL-HOPWAVE-SHA256.json). Original license files are unchanged; the reference fork retains the same licenses. The root [go.mod](go.mod) selects this local copy through a `replace` directive.
 
+The [worker attack extension](third_party/go-libp2p-pubsub/inbound_policy.go) adds an opt-in remote data policy with bounded asynchronous delay and shutdown draining, an [IWANT response filter and experimental GRAFT/IHAVE queue interface](third_party/go-libp2p-pubsub/experimental_control.go), and [regression tests](third_party/go-libp2p-pubsub/kpl_attacks_test.go). Policy selection and orchestration remain in KPL; protobufs, protocol IDs, dependency versions and scoring defaults are unchanged. The [attack patch snapshot manifest](third_party/go-libp2p-pubsub/KPL-ATTACKS-SHA256.json) is separate from the unchanged pristine/reference manifests and original license files.
+
 ## bbolt
 
 K-P2PLab uses the unmodified bbolt Go module for the Agent's local retired-Peer history store.

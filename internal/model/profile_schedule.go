@@ -9,8 +9,11 @@ import (
 // RuntimeProfilePatch contains only settings which can change without replacing
 // a Peer. Omitted fields retain their current value, including explicit zeros.
 type RuntimeProfilePatch struct {
-	GossipSub *RuntimeGossipSubConfig `json:"gossipsub,omitempty" yaml:"gossipsub,omitempty"`
-	Network   *NetworkConfig          `json:"network,omitempty" yaml:"network,omitempty"`
+	Sink         *ProbabilityAttack      `json:"sink,omitempty" yaml:"sink,omitempty"`
+	Censorship   *ProbabilityAttack      `json:"censorship,omitempty" yaml:"censorship,omitempty"`
+	MessageDelay *ProbabilityAttack      `json:"messageDelay,omitempty" yaml:"messageDelay,omitempty"`
+	GossipSub    *RuntimeGossipSubConfig `json:"gossipsub,omitempty" yaml:"gossipsub,omitempty"`
+	Network      *NetworkConfig          `json:"network,omitempty" yaml:"network,omitempty"`
 }
 
 type RuntimeGossipSubConfig struct {
@@ -39,9 +42,23 @@ type ProfileChange struct {
 	Set   RuntimeProfilePatch `json:"set" yaml:"set"`
 }
 
+func (p RuntimeProfilePatch) HasAttacks() bool {
+	return p.Sink != nil || p.Censorship != nil || p.MessageDelay != nil
+}
+
 func (p RuntimeProfilePatch) Validate() error {
-	if p.GossipSub == nil && p.Network == nil {
-		return fmt.Errorf("set requires gossipsub.params or network")
+	for name, attack := range map[string]*ProbabilityAttack{"sink": p.Sink, "censorship": p.Censorship, "messageDelay": p.MessageDelay} {
+		if attack != nil {
+			if attack.Enabled == nil && attack.Probability == nil {
+				return fmt.Errorf("%s patch must not be empty", name)
+			}
+			if err := attack.Validate(); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
+	if p.GossipSub == nil && p.Network == nil && !p.HasAttacks() {
+		return fmt.Errorf("set requires gossipsub.params, network, or attack options")
 	}
 	if p.GossipSub != nil {
 		g := p.GossipSub.Params
@@ -87,7 +104,17 @@ func (p RuntimeProfilePatch) Apply(base NodeConfig) (NodeConfig, error) {
 		return base, err
 	}
 	base = base.WithDefaults()
+	if p.HasAttacks() && (!*base.GossipSub.Enabled || base.GossipSub.Router != "gossipsub") {
+		return base, fmt.Errorf("attack runtime changes require enabled GossipSub")
+	}
 	var overlay NodeConfig
+	overlay.Sink = p.Sink
+	if p.Censorship != nil {
+		overlay.Censorship = &CensorshipConfig{ProbabilityAttack: *p.Censorship}
+	}
+	if p.MessageDelay != nil {
+		overlay.MessageDelay = &MessageDelayConfig{ProbabilityAttack: *p.MessageDelay}
+	}
 	if p.GossipSub != nil {
 		if !*base.GossipSub.Enabled || base.GossipSub.Router != "gossipsub" {
 			return base, fmt.Errorf("gossipsub runtime changes require enabled GossipSub")
@@ -106,13 +133,36 @@ func (p RuntimeProfilePatch) Apply(base NodeConfig) (NodeConfig, error) {
 }
 
 func RuntimeProfileSnapshot(config NodeConfig) RuntimeProfilePatch {
-	g := config.WithDefaults().GossipSub.Params
+	config = config.WithDefaults()
+	g := config.GossipSub.Params
 	network := config.Network.Initial()
-	return RuntimeProfilePatch{GossipSub: &RuntimeGossipSubConfig{Params: RuntimeGossipSubParams{D: g.D, DLow: g.DLow, DHigh: g.DHigh, DScore: g.DScore, DOut: g.DOut, DLazy: g.DLazy, GossipFactor: g.GossipFactor, HopwaveFactor: g.HopwaveFactor, HopwaveInterval: g.HopwaveInterval}}, Network: &network}
+	result := RuntimeProfilePatch{GossipSub: &RuntimeGossipSubConfig{Params: RuntimeGossipSubParams{D: g.D, DLow: g.DLow, DHigh: g.DHigh, DScore: g.DScore, DOut: g.DOut, DLazy: g.DLazy, GossipFactor: g.GossipFactor, HopwaveFactor: g.HopwaveFactor, HopwaveInterval: g.HopwaveInterval}}, Network: &network}
+	if config.Sink != nil {
+		value := *config.Sink
+		result.Sink = &value
+	}
+	if config.Censorship != nil {
+		value := config.Censorship.ProbabilityAttack
+		result.Censorship = &value
+	}
+	if config.MessageDelay != nil {
+		value := config.MessageDelay.ProbabilityAttack
+		result.MessageDelay = &value
+	}
+	return result
 }
 
 func (p RuntimeProfilePatch) Snapshot(config NodeConfig) RuntimeProfilePatch {
 	result := RuntimeProfileSnapshot(config)
+	if p.Sink == nil {
+		result.Sink = nil
+	}
+	if p.Censorship == nil {
+		result.Censorship = nil
+	}
+	if p.MessageDelay == nil {
+		result.MessageDelay = nil
+	}
 	if p.GossipSub == nil {
 		result.GossipSub = nil
 	}
@@ -127,7 +177,17 @@ func (g RuntimeGossipSubParams) nodeParams() GossipSubParamsConfig {
 }
 
 func ValidateRuntimeProfileSnapshot(p RuntimeProfilePatch) error {
-	if p.GossipSub == nil && p.Network == nil {
+	for name, attack := range map[string]*ProbabilityAttack{"sink": p.Sink, "censorship": p.Censorship, "messageDelay": p.MessageDelay} {
+		if attack != nil {
+			if attack.Enabled == nil || attack.Probability == nil {
+				return fmt.Errorf("incomplete runtime %s snapshot", name)
+			}
+			if err := attack.Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	if p.GossipSub == nil && p.Network == nil && !p.HasAttacks() {
 		return fmt.Errorf("empty runtime profile snapshot")
 	}
 	if p.GossipSub != nil {
@@ -152,11 +212,29 @@ func ValidateRuntimeProfileSnapshot(p RuntimeProfilePatch) error {
 
 func ValidateProfileAcknowledgement(request ProfileUpdateRequest, response ProfileUpdateResponse) error {
 	actual := response.Effective
-	if (request.Set.GossipSub == nil) != (actual.GossipSub == nil) || (request.Set.Network == nil) != (actual.Network == nil) {
+	if (request.Set.GossipSub == nil) != (actual.GossipSub == nil) || (request.Set.Network == nil) != (actual.Network == nil) || (request.Set.Sink == nil) != (actual.Sink == nil) || (request.Set.Censorship == nil) != (actual.Censorship == nil) || (request.Set.MessageDelay == nil) != (actual.MessageDelay == nil) {
 		return fmt.Errorf("profile acknowledgement fields do not match the request")
 	}
 	if err := ValidateRuntimeProfileSnapshot(actual); err != nil {
 		return err
+	}
+	for _, pair := range [][2]*ProbabilityAttack{{request.Set.Sink, actual.Sink}, {request.Set.Censorship, actual.Censorship}, {request.Set.MessageDelay, actual.MessageDelay}} {
+		if pair[0] == nil {
+			continue
+		}
+		wanted, got := pair[0], pair[1]
+		if wanted.Enabled != nil && *wanted.Enabled != *got.Enabled || wanted.Probability != nil && *wanted.Probability != *got.Probability {
+			return fmt.Errorf("profile acknowledgement does not contain requested attack values")
+		}
+	}
+	// Reconstruct only the ordinary runtime fields. Attack selector/queue settings
+	// are construction-time values and cannot be reconstructed from this ACK.
+	ordinary := request.Set
+	ordinary.Sink = nil
+	ordinary.Censorship = nil
+	ordinary.MessageDelay = nil
+	if ordinary.GossipSub == nil && ordinary.Network == nil {
+		return nil
 	}
 	var base NodeConfig
 	if actual.GossipSub != nil {
@@ -165,11 +243,12 @@ func ValidateProfileAcknowledgement(request ProfileUpdateRequest, response Profi
 	if actual.Network != nil {
 		base.Network = *actual.Network
 	}
-	updated, err := request.Set.Apply(base)
+	updated, err := ordinary.Apply(base)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(request.Set.Snapshot(updated), actual) {
+	expected := ordinary.Snapshot(updated)
+	if !reflect.DeepEqual(expected.GossipSub, actual.GossipSub) || !reflect.DeepEqual(expected.Network, actual.Network) {
 		return fmt.Errorf("profile acknowledgement does not contain the requested values")
 	}
 	return nil

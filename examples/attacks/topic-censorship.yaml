@@ -1,0 +1,69 @@
+# Scenario schema v4. See https://github.com/k-p2p-lab/kpl-v3/wiki/Worker-Attacks
+version: 4
+name: Topic censorship
+seed: 42
+onExit: drain
+profiles:
+  honest:
+    type: worker
+    gossipsub:
+      topics:
+      - blocks
+      - control
+  attacker:
+    type: worker
+    gossipsub:
+      topics:
+      - blocks
+      - control
+      allowPublish: false
+    censorship:
+      enabled: true
+      probability: 1
+      topics:
+      - blocks
+phases:
+- action: join
+  group: honest
+  role: worker
+  profile: honest
+  count: 8
+  parallel: true
+- action: join
+  group: attackers
+  role: worker
+  profile: attacker
+  count: 2
+  parallel: true
+- action: wait-ready
+  timeout: 2m
+- action: wait
+  duration: 10s
+- action: publish
+  group: honest
+  topic: blocks
+  count: 120
+  payloadSize: 1024
+  interval:
+    model: fixed
+    value: 1s
+  job: blocks-traffic
+  await: false
+- action: publish
+  group: honest
+  topic: control
+  count: 120
+  payloadSize: 1024
+  interval:
+    model: fixed
+    value: 1s
+  job: control-traffic
+  await: false
+- action: wait-jobs
+  jobs:
+  - blocks-traffic
+  - control-traffic
+  timeout: 3m
+- action: wait
+  duration: 10s
+- action: stop-all

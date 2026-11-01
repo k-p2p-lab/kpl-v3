@@ -1,0 +1,22 @@
+{
+  "kind": "KPL worker attack patch snapshot",
+  "upstreamVersion": "v0.13.1",
+  "baseKPLRevision": "a4f611a66ec3f36dd5add1cf2a7ea89b9ced40ca",
+  "pathBasis": "relative to third_party/go-libp2p-pubsub",
+  "files": {
+    "pubsub.go": "8fa19c7ceddfedd907b6f3fc99f4b4160289b3ee24be0df798dcd030bb7874cc",
+    "validation.go": "e53293eb920f720faa240844e4b2802d429abdc9df0685edc428c97864fb005d",
+    "gossipsub.go": "70ea5c5368b71e3e6e24efe2a8ca155a45fd8db28d24753d9cd35ac2a178f64e",
+    "inbound_policy.go": "37039b78eabd14a4eec18e44a908798701db7ef1ccf02b513fff30f001b89a97",
+    "experimental_control.go": "8439570145524746940ea0a8b5a73e4b85fc40d196d4c50ade2e0530c8c74d09",
+    "kpl_attacks_test.go": "79d90f9fe8aeb6062834b10859f811ccfd668d0e6971873ec5b6e6b3f87f802a",
+    "KPL-CHANGES.md": "ca3384160b8daa133e0e5ea51aed1e523c242cf4eb7a3cdb92578847770b5d2b"
+  },
+  "pristineManifestSHA256": "9bdd937c488e71fb08b1f95fcc2b8f9b9415c12ee890d000d82659631e252c3d",
+  "referenceManifestSHA256": "0d956fc0eb057720bb6554be07663cc0b2bff1d8f1da2efbb729eb610b1371ad",
+  "unchangedOriginalLicenses": {
+    "LICENSE": "74e66ee911687ef90315c9264683d9dfce242b312fbd67da3e21cb12ead9849b",
+    "LICENSE-APACHE": "7ee92352fcac2b427c4754822087d0aeb3afc99951b71bd15cc4c2e5c61c1b60",
+    "LICENSE-MIT": "b801c8d677ef9701149e05cf98f28b82a56832dd67c94d96d36d25d063b1b353"
+  }
+}

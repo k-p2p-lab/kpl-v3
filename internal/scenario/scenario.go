@@ -89,7 +89,7 @@ func (s *Scenario) Validate() error {
 	if s.Version == 0 {
 		s.Version = 1
 	}
-	if s.Version != 1 && s.Version != 2 && s.Version != 3 {
+	if s.Version != 1 && s.Version != 2 && s.Version != 3 && s.Version != 4 {
 		return fmt.Errorf("unsupported scenario version %d", s.Version)
 	}
 	if strings.TrimSpace(s.Name) == "" {
@@ -113,6 +113,9 @@ func (s *Scenario) Validate() error {
 	}
 	if shutdownTimeout <= 0 {
 		return fmt.Errorf("jobShutdownTimeout must be positive")
+	}
+	if err := s.validateAttackVersion(); err != nil {
+		return err
 	}
 	backgroundJoins := make(map[string]map[string]struct{})
 	knownJobs := make(map[string]struct{})
@@ -167,7 +170,7 @@ func (s *Scenario) Validate() error {
 		if p.Action != "publish" && p.DeliveryWindow != "" {
 			return fmt.Errorf("phase %q: deliveryWindow is only supported for publish", p.Name)
 		}
-		if (p.NodeIDs != nil || p.PeerIDs != nil) && (s.Version != 3 || p.Action != "mesh-freeze" && p.Action != "topology" && p.Action != "schedule") {
+		if (p.NodeIDs != nil || p.PeerIDs != nil) && (s.Version < 3 || p.Action != "mesh-freeze" && p.Action != "topology" && p.Action != "schedule") {
 			return fmt.Errorf("phase %q: nodeIds and peerIds require version 3 mesh-freeze, topology, or schedule", p.Name)
 		}
 		if p.Schedule != nil && p.Action != "schedule" {
@@ -178,14 +181,14 @@ func (s *Scenario) Validate() error {
 		}
 		switch p.Action {
 		case "schedule":
-			if s.Version != 3 {
+			if s.Version < 3 {
 				return fmt.Errorf("phase %q: schedule requires version 3", p.Name)
 			}
 			if err := validateSchedulePhase(p); err != nil {
 				return fmt.Errorf("phase %q: %w", p.Name, err)
 			}
 		case "topology":
-			if s.Version != 3 {
+			if s.Version < 3 {
 				return fmt.Errorf("phase %q: topology requires version 3", p.Name)
 			}
 			if err := validateTopologyPhase(p); err != nil {
@@ -195,7 +198,7 @@ func (s *Scenario) Validate() error {
 				return fmt.Errorf("phase %q: %w", p.Name, err)
 			}
 		case "mesh-freeze":
-			if s.Version != 3 {
+			if s.Version < 3 {
 				return fmt.Errorf("phase %q: mesh-freeze requires version 3", p.Name)
 			}
 			if err := validateMeshFreezePhase(p); err != nil {
@@ -227,6 +230,9 @@ func (s *Scenario) Validate() error {
 				return fmt.Errorf("phase %q lifetime: %w", p.Name, err)
 			}
 			if err := s.resolveNodeConfig(p); err != nil {
+				return fmt.Errorf("phase %q: %w", p.Name, err)
+			}
+			if err := p.Node.ValidateAttackRole(p.Role); err != nil {
 				return fmt.Errorf("phase %q: %w", p.Name, err)
 			}
 			joinedGroups[p.Group] = append(joinedGroups[p.Group], p)
@@ -351,6 +357,9 @@ func (s *Scenario) Validate() error {
 			}
 			knownJobs[p.Job] = struct{}{}
 		}
+	}
+	if err := s.validateAttackSelectors(); err != nil {
+		return err
 	}
 	return s.validateProfileSchedules()
 }

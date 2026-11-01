@@ -12,6 +12,14 @@ import (
 // are retained for v3 preview scenario compatibility; new scenarios should use
 // the nested libp2p, kademlia, and gossipsub sections.
 type NodeConfig struct {
+	Sink             *ProbabilityAttack      `json:"sink,omitempty" yaml:"sink,omitempty"`
+	Censorship       *CensorshipConfig       `json:"censorship,omitempty" yaml:"censorship,omitempty"`
+	MessageDelay     *MessageDelayConfig     `json:"messageDelay,omitempty" yaml:"messageDelay,omitempty"`
+	ConnectionAttack *ConnectionAttackConfig `json:"connectionAttack,omitempty" yaml:"connectionAttack,omitempty"`
+	GraftFlood       *GraftFloodConfig       `json:"graftFlood,omitempty" yaml:"graftFlood,omitempty"`
+	IHaveSpam        *IHaveSpamConfig        `json:"ihaveSpam,omitempty" yaml:"ihaveSpam,omitempty"`
+	IWantWithholding *IWantWithholdingConfig `json:"iwantWithholding,omitempty" yaml:"iwantWithholding,omitempty"`
+
 	Type         string          `json:"type,omitempty" yaml:"type,omitempty"`
 	Topics       []string        `json:"topics,omitempty" yaml:"topics,omitempty"`
 	D            int             `json:"d,omitempty" yaml:"d,omitempty"`
@@ -123,6 +131,7 @@ func BuiltInNodeConfig(kind string) (NodeConfig, bool) {
 
 // Merge overlays explicitly set values on top of a base configuration.
 func (c NodeConfig) Merge(overlay NodeConfig) NodeConfig {
+	attackBase := c
 	overlay.promoteLegacy()
 	if overlay.GossipSub.Subscribe != nil && overlay.GossipSub.TopicMode == "" {
 		if *overlay.GossipSub.Subscribe {
@@ -159,6 +168,7 @@ func (c NodeConfig) Merge(overlay NodeConfig) NodeConfig {
 	}
 	base := reflect.ValueOf(&c).Elem()
 	mergeNonZero(base, reflect.ValueOf(overlay))
+	c.mergeAttacks(attackBase, overlay)
 	return c
 }
 
@@ -376,6 +386,7 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 		p.HopwaveInterval = intPointer(1)
 	}
 
+	c.defaultAttacks()
 	c.Topics = append([]string(nil), c.GossipSub.Topics...)
 	c.D, c.DLow, c.DHigh = *p.D, *p.DLow, *p.DHigh
 	c.DOut, c.DLazy, c.Heartbeat = *p.DOut, *p.DLazy, p.HeartbeatInterval
@@ -387,6 +398,9 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 
 func (c NodeConfig) Validate() error {
 	c = c.WithDefaults()
+	if err := c.ValidateAttacks(); err != nil {
+		return err
+	}
 	if c.GossipSub.MeshFreeze != nil && *c.GossipSub.MeshFreeze && (c.GossipSub.Enabled == nil || !*c.GossipSub.Enabled) {
 		return fmt.Errorf("meshFreeze requires enabled GossipSub")
 	}

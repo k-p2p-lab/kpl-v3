@@ -46,6 +46,7 @@ type ProtocolMatchFn = func(protocol.ID) func(protocol.ID) bool
 
 // PubSub is the implementation of the pubsub system.
 type PubSub struct {
+	inboundPolicy *inboundMessagePolicy
 	// atomic counter for seqnos
 	// NOTE: Must be declared at the top of the struct as we perform atomic
 	// operations on this field.

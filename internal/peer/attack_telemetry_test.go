@@ -2,9 +2,58 @@ package peer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 )
+
+func TestAttackEventsPreserveClockQuality(t *testing.T) {
+	for _, mode := range []string{"synchronized", "expired", "unsynchronized"} {
+		t.Run(mode, func(t *testing.T) {
+			tel := &telemetry{node: model.Node{ID: "node", RunID: "run"}, events: make(chan model.TraceEvent, 16)}
+			offset := time.Duration(0)
+			if mode != "unsynchronized" {
+				sampledAt := time.Now()
+				if mode == "expired" {
+					sampledAt = sampledAt.Add(-controllerClockMaxAge - time.Second)
+				}
+				offset = 2 * time.Second
+				tel.acceptClockEstimate(controllerClockEstimate{offset: offset, uncertainty: 4 * time.Millisecond}, sampledAt)
+			}
+			runtime := newAttackRuntime(&Server{telemetry: tel, config: model.PeerProcessConfig{NodeConfig: model.NodeConfig{Sink: &model.ProbabilityAttack{Enabled: attackBool(true)}}}})
+			topic := "blocks"
+			before := time.Now().UTC().Add(offset)
+			if !runtime.decide(&pubsub.Message{ID: "wire-id", Message: &pb.Message{Topic: &topic}}).Drop {
+				t.Fatal("fixture did not exercise an actual attack decision")
+			}
+			runtime.flush(false)
+			runtime.flush(true)
+			after := time.Now().UTC().Add(offset)
+			if len(tel.events) != 3 {
+				t.Fatalf("missing decision or periodic/final statistics: queued=%d", len(tel.events))
+			}
+			for len(tel.events) > 0 {
+				event := <-tel.events
+				if event.Timestamp.Before(before) || event.Timestamp.After(after) {
+					t.Errorf("%s timestamp %s outside source observation window", event.Type, event.Timestamp)
+				}
+				if mode == "synchronized" {
+					if event.Fields["clockBasis"] != controllerClockBasis || event.Fields["clockOffsetMs"] != float64(2000) || event.Fields["clockUncertaintyMs"] != float64(4) {
+						t.Errorf("%s omitted the synchronized observation quality: %+v", event.Type, event.Fields)
+					}
+				} else {
+					for _, key := range []string{"clockBasis", "clockOffsetMs", "clockUncertaintyMs"} {
+						if _, exists := event.Fields[key]; exists {
+							t.Errorf("%s claimed %s clock quality in %s mode", event.Type, key, mode)
+						}
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestFinalAttackStatsPreserveStopDropAndBandwidthWhenSaturated(t *testing.T) {
 	for _, mode := range []string{"enabled", "inactive", "runtime-activation"} {

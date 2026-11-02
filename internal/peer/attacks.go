@@ -54,6 +54,7 @@ type attackRuntime struct {
 	server       *Server
 	policy       atomic.Pointer[attackPolicyState]
 	registry     atomic.Pointer[attackRegistry]
+	registryGate publicationGate
 	mu           sync.Mutex
 	counters     map[string]map[string]uint64
 	dirty        bool
@@ -376,6 +377,13 @@ func (r *attackRuntime) needsRegistry() bool {
 	return c.ConnectionAttack != nil && c.ConnectionAttack.Enabled != nil && *c.ConnectionAttack.Enabled
 }
 func (r *attackRuntime) fetchTargets(ctx context.Context) error {
+	// Periodic refresh and runtime preparation share one ordered stream of
+	// snapshots. Otherwise a delayed older response can overwrite a newer one
+	// and restart its freshness window. Waiting callers remain cancellable.
+	if err := r.registryGate.acquire(ctx); err != nil {
+		return err
+	}
+	defer r.registryGate.release()
 	endpoint := strings.TrimRight(r.server.config.ControllerURL, "/") + "/api/v1/attack-targets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -398,12 +406,18 @@ func (r *attackRuntime) fetchTargets(ctx context.Context) error {
 		return fmt.Errorf("attack registry returned %s", response.Status)
 	}
 	var targets []model.AttackTarget
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 8<<20))
+	// One extra byte distinguishes the transport's EOF from a size-limit EOF,
+	// including when excess whitespace or a second value follows a valid array.
+	body := &io.LimitedReader{R: response.Body, N: (8 << 20) + 1}
+	decoder := json.NewDecoder(body)
 	if err := decoder.Decode(&targets); err != nil {
 		return err
 	}
 	if decoder.Decode(new(any)) != io.EOF {
 		return fmt.Errorf("attack registry expected one response")
+	}
+	if body.N == 0 {
+		return fmt.Errorf("attack registry exceeds 8 MiB response limit")
 	}
 	if len(targets) > 50000 {
 		return fmt.Errorf("attack registry exceeds 50000 identity records")

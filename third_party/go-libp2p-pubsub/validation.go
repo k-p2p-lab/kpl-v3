@@ -334,7 +334,11 @@ func (v *validation) resumeAfterInboundPolicy(vals []*validatorImpl, src peer.ID
 	case v.validateQ <- &validateReq{vals: vals, src: src, msg: msg, afterInboundPolicy: true}:
 	case <-v.p.ctx.Done():
 	default:
-		v.tracer.RejectMessage(msg, RejectValidationQueueFull)
+		// This message already passed signature/seen-ID admission and emitted
+		// ValidateMessage. The pre-admission queue-full reason deliberately
+		// preserves tracking for other in-flight copies; use throttled here so
+		// score and connection-tag tracers retire this completed validation.
+		v.tracer.RejectMessage(msg, RejectValidationThrottled)
 	}
 }
 

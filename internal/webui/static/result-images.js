@@ -1035,6 +1035,9 @@
       revision++;
       controller?.abort();
       clearImages();
+      // Research previews replace the saved-result images; retrying that result
+      // must rebuild them even when its analysis snapshot has not changed.
+      imagesReady = false;
       const requestRevision = revision,
         view = new AbortController();
       controller = view;

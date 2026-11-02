@@ -81,6 +81,38 @@ async function settle(predicate) {
   assert.fail("image request did not settle");
 }
 
+test("retry restores saved-result images after a research rendering failure", async () => {
+  const previous = globalThis.KPLResearchTools;
+  let renderTools;
+  globalThis.KPLResearchTools = { create(options) {
+    renderTools = options.render;
+    return { cancel() {}, setData() {}, clearData() {} };
+  } };
+  try {
+    let fail = false, rendered = 0;
+    const { ui, element } = fixture(async url => url.includes('/result?') ? artifact('run') : job('run', 'completed'), async () => {
+      rendered++;
+      if (fail) throw new Error('PNG conversion failed');
+      return png;
+    });
+    await ui.open('run');
+    const originalImages = element('resultImagesGrid').innerHTML;
+    fail = true;
+    await renderTools([{ id: 'imported-preview', title: 'Imported preview', xLabel: 'x', yLabel: 'y', series: [{ name: 'import', points: [{ x: 0, y: 1 }] }] }], 'imported');
+    assert.match(element('resultImagesStatus').textContent, /PNG conversion failed/);
+    assert.equal(element('retryResultImages').hidden, false);
+    const beforeRetry = rendered;
+    fail = false;
+    await ui.open('run', { retry: true });
+    assert.ok(rendered > beforeRetry, 'retry treated replaced research previews as completed result images');
+    assert.equal(element('resultImagesGrid').innerHTML, originalImages);
+    assert.equal(element('retryResultImages').hidden, true);
+    element('resultImagesDialog').close();
+  } finally {
+    globalThis.KPLResearchTools = previous;
+  }
+});
+
 test("closing an analysis releases its data and message controls", async () => {
   const previous = globalThis.KPLResearchTools;
   let getData, clears = 0;

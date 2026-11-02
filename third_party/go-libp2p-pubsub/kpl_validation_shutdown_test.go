@@ -132,3 +132,50 @@ func TestKPLAsyncValidationCancellationReleasesThrottle(t *testing.T) {
 		})
 	}
 }
+
+// A delayed message has already started validation tracking. If its re-entry
+// queue is full, it must retire that state without changing the semantics of
+// an ordinary queue rejection before signature/seen-ID admission.
+func TestKPLDelayedResumeQueuePressureRetiresValidationTracking(t *testing.T) {
+	for _, delayed := range []bool{false, true} {
+		name := "before-admission"
+		if delayed {
+			name = "delayed-resume"
+		}
+		t.Run(name, func(t *testing.T) {
+			ids := newMsgIdGenerator()
+			tags := &tagTracer{idGen: ids, nearFirst: make(map[string]map[peer.ID]struct{})}
+			score := newPeerScore(&PeerScoreParams{})
+			score.idGen = ids
+			tracer := &pubsubTracer{pid: "local", raw: []RawTracer{tags, score}}
+			p := &PubSub{ctx: context.Background(), idGen: ids}
+			v := newValidation()
+			v.p, v.tracer = p, tracer
+			v.validateQ = make(chan *validateReq, 1)
+			v.validateQ <- &validateReq{}
+			topic := "blocks"
+			msg := &Message{Message: &pb.Message{Topic: &topic, From: []byte("author"), Seqno: []byte("queued"), Signature: []byte("force-validation")}, ReceivedFrom: "remote"}
+			tracer.ValidateMessage(msg)
+			tracer.DuplicateMessage(msg)
+			mid := ids.ID(msg)
+			if delayed {
+				v.resumeAfterInboundPolicy(nil, "remote", msg)
+			} else if v.Push("remote", msg) {
+				t.Fatal("full validation queue accepted a message")
+			}
+			record := score.deliveries.records[mid]
+			if delayed {
+				if len(tags.nearFirst) != 0 {
+					t.Error("delayed queue rejection retained connection-tag delivery tracking")
+				}
+				if record.status != deliveryThrottled || record.peers != nil {
+					t.Errorf("delayed queue rejection left score delivery pending: status=%d, peers=%v", record.status, record.peers)
+				}
+			} else {
+				if len(tags.nearFirst[mid]) != 1 || record.status != deliveryUnknown || len(record.peers) != 1 {
+					t.Fatal("pre-admission queue rejection retired another in-progress validation")
+				}
+			}
+		})
+	}
+}

@@ -5,15 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	agentserver "github.com/k-p2p-lab/kpl-v3/internal/agent"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 func dropCreateResponse(t *testing.T, w http.ResponseWriter) {
@@ -178,6 +181,119 @@ func TestCreateRetryStopsOnCancellationOrAgentRestart(t *testing.T) {
 				t.Fatalf("calls=%d error=%v", calls.Load(), err)
 			}
 		})
+	}
+}
+
+func TestCreateServerFailureRetainsCapacityUntilConfirmedCleanup(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, 599} {
+		for _, replay := range []bool{false, true} {
+			t.Run(fmt.Sprintf("status-%d/replay-%t", status, replay), func(t *testing.T) {
+				s := newLifecycleTestController(t)
+				var creates atomic.Int32
+				var cleaned atomic.Bool
+				endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == http.MethodDelete {
+						if !cleaned.Load() {
+							http.Error(w, "container removal pending", http.StatusConflict)
+							return
+						}
+						w.WriteHeader(http.StatusAccepted)
+						return
+					}
+					_, _ = io.Copy(io.Discard, r.Body)
+					creates.Add(1) // Admission may complete before an intermediary returns 5xx.
+					w.Header().Set("Retry-After", "0")
+					http.Error(w, "response failed after admission", status)
+				}))
+				defer endpoint.Close()
+				agent := reserveReplayAgent(t, s, endpoint.URL, replay)
+				err := s.createReservedNode(t.Context(), model.CreateNodeRequest{ID: "node", RunID: "run", Group: "workers", Generation: 2}, agent, "a", nil)
+				var uncertain *uncertainNodeCreateError
+				if !errors.As(err, &uncertain) || creates.Load() != 1 || s.state.reservations["node"] != "a" || len(s.state.uncertainCreates) != 1 {
+					t.Fatalf("5xx lost uncertain admission: calls=%d reservations=%v uncertain=%v err=%v", creates.Load(), s.state.reservations, s.state.uncertainCreates, err)
+				}
+				if _, available := s.tryReserveAgent("another"); available {
+					t.Fatal("5xx freed capacity before the admitted container was removed")
+				}
+				if err := s.state.heartbeat(model.AgentHeartbeat{Agent: model.Agent{ID: "a", StartedAt: agent.StartedAt}}); err != nil {
+					t.Fatal(err)
+				}
+				if s.state.reservations["node"] != "a" || s.state.agents["a"].ActiveNodes != 1 {
+					t.Fatal("empty inventory freed a potentially delayed admission")
+				}
+				if err := s.stopRunGeneration(t.Context(), "run", 2); err == nil || len(s.state.reservations) != 1 {
+					t.Fatalf("failed cleanup released reservation: %v", err)
+				}
+				cleaned.Store(true)
+				if err := s.stopRunGeneration(t.Context(), "run", 1); err != nil || len(s.state.reservations) != 1 {
+					t.Fatalf("older generation released reservation: %v", err)
+				}
+				if err := s.stopRunGeneration(t.Context(), "run", 2); err != nil {
+					t.Fatal(err)
+				}
+				if len(s.state.reservations) != 0 || len(s.state.uncertainCreates) != 0 || s.state.agents["a"].ActiveNodes != 0 {
+					t.Fatal("confirmed cleanup did not release the uncertain reservation")
+				}
+				if _, available := s.tryReserveAgent("after-cleanup"); !available {
+					t.Fatal("confirmed cleanup did not restore admission capacity")
+				}
+			})
+		}
+	}
+}
+
+func TestCanceledCreateLateServerFailureCannotAffectNextGenerationCapacity(t *testing.T) {
+	s := newLifecycleTestController(t)
+	started, canceled := make(chan struct{}), make(chan struct{})
+	lateResponse, responseSent := make(chan struct{}), make(chan struct{})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/nodes":
+			_, _ = io.Copy(io.Discard, r.Body)
+			close(started)
+			<-r.Context().Done()
+			close(canceled)
+			<-lateResponse
+			http.Error(w, "late failure after admitted container was removed", http.StatusServiceUnavailable)
+			close(responseSent)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusAccepted)
+		case r.URL.Path == "/api/v1/status":
+			writeJSON(w, http.StatusOK, model.AgentHeartbeat{Agent: model.Agent{ID: "a"}})
+		default:
+			t.Errorf("unexpected Agent request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer endpoint.Close()
+	var release sync.Once
+	allowLateResponse := func() { release.Do(func() { close(lateResponse) }) }
+	defer allowLateResponse()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	agent := reserveReplayAgent(t, s, endpoint.URL, true)
+	jobs := newPhaseJobs()
+	if err := jobs.startContext(ctx, "admission", func(ctx context.Context) error {
+		return s.createReservedNode(ctx, model.CreateNodeRequest{ID: "node", RunID: "run", Generation: 1}, agent, "a", nil)
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := s.runPhase(t.Context(), "run", 1, scenario.Phase{Action: "stop-all"}, nil, jobs, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	<-canceled
+	if len(s.state.uncertainCreates) != 0 || len(s.state.reservations) != 0 || s.state.agents["a"].ActiveNodes != 0 {
+		t.Fatal("stop-all did not settle the canceled creation")
+	}
+	if _, ok := s.tryReserveAgent("next-generation"); !ok {
+		t.Fatal("completed cleanup did not admit the next generation")
+	}
+	// Releasing the old HTTP response after cleanup must not resurrect its
+	// reservation or release the unrelated new generation's occupied slot.
+	allowLateResponse()
+	<-responseSent
+	if len(s.state.uncertainCreates) != 0 || len(s.state.reservations) != 1 || s.state.reservations["next-generation"] != "a" || s.state.agents["a"].ActiveNodes != 1 {
+		t.Fatal("late creation failure changed the next generation's reservation")
 	}
 }
 

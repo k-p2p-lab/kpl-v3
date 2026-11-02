@@ -132,8 +132,9 @@ func TestAmbiguousAgent503DoesNotRepeatPeerCreation(t *testing.T) {
 	}
 	agent, _ := s.tryReserveAgent("node")
 	err := s.createReservedNode(context.Background(), model.CreateNodeRequest{ID: "node", RunID: "run"}, agent, "a", nil)
-	if err == nil || !strings.Contains(err.Error(), "503") || calls.Load() != 1 || len(s.state.reservations) != 0 {
-		t.Fatalf("ambiguous create retried: %v calls=%d", err, calls.Load())
+	var uncertain *uncertainNodeCreateError
+	if !errors.As(err, &uncertain) || !strings.Contains(err.Error(), "503") || calls.Load() != 1 || s.state.reservations["node"] != "a" || len(s.state.uncertainCreates) != 1 {
+		t.Fatalf("ambiguous create retried or reservation released: %v calls=%d", err, calls.Load())
 	}
 }
 

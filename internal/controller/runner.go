@@ -1460,7 +1460,15 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		if method == http.MethodPost && strings.HasSuffix(path, "/topology") {
 			return &topologyAgentError{status: resp.StatusCode, message: fmt.Sprintf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))}
 		}
-		return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+		responseErr := fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+		if method == http.MethodPost && path == "/api/v1/nodes" && resp.StatusCode >= 500 && resp.StatusCode < 600 {
+			// A server or intermediary failure may follow successful admission.
+			// Only the explicit pre-admission responses above prove otherwise.
+			// Do not replay/re-place this request or free its slot until the Peer
+			// is reported or a matching generation fence confirms cleanup.
+			return &uncertainNodeCreateError{responseErr}
+		}
+		return responseErr
 	}
 	if output != nil {
 		if strings.HasSuffix(path, "/topology") || strings.HasSuffix(path, "/profile") {

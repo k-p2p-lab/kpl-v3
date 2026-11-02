@@ -517,35 +517,40 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 }
 
 func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.state.mu.RLock()
 	experimentStartedAt := s.state.experiments[runID].StartedAt
 	peerNetworkID := s.state.experiments[runID].PeerNetworkID
 	s.state.mu.RUnlock()
-	requests := make([]model.CreateNodeRequest, 0, phase.Count)
-	for i := 0; i < phase.Count; i++ {
-		seq := s.nodeSeq.Add(1)
-		nodeID := fmt.Sprintf("%s-%s-%05d", runID, safeName(phase.Group), seq)
-		lifetime := ""
-		if phase.Lifetime.Model != "" {
-			lifetime = phase.Lifetime.Sample(rng).String()
-		}
-		requests = append(requests, model.CreateNodeRequest{
-			PeerNetworkID:       peerNetworkID,
-			NetworkMutable:      phase.NetworkMutable,
-			ExperimentStartedAt: experimentStartedAt,
-			ID:                  nodeID,
-			RunID:               runID,
-			Generation:          generation,
-			Group:               phase.Group,
-			Role:                phase.Role,
-			Type:                phase.NodeType,
-			Profile:             phase.Profile,
-			Seed:                rng.Int63(),
-			Config:              phase.Node.WithDefaults(),
-			Lifetime:            lifetime,
-		})
+	// Preserve the original sampling order without retaining a full node
+	// configuration for every queued admission. Only dispatched requests need
+	// defaults and the potentially large profile/attack configuration.
+	type joinSample struct {
+		sequence uint64
+		seed     int64
+		lifetime time.Duration
 	}
-	delays := sampleDelays(rng, phase.Interval, phase.Count)
+	samples := make([]joinSample, phase.Count)
+	for i := 0; i < phase.Count; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		seq := s.nodeSeq.Add(1)
+		var lifetime time.Duration
+		if phase.Lifetime.Model != "" {
+			lifetime = phase.Lifetime.Sample(rng)
+		}
+		samples[i] = joinSample{sequence: seq, seed: rng.Int63(), lifetime: lifetime}
+	}
+	delays := make([]time.Duration, phase.Count)
+	for i := range delays {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		delays[i] = phase.Interval.Sample(rng)
+	}
 	agentID := phase.AgentID
 	if agentID == "" && phase.Placement == "single-agent" {
 		var err error
@@ -555,9 +560,29 @@ func (s *Server) runJoin(ctx context.Context, runID string, generation uint64, p
 		}
 	}
 	scheduled := time.Now()
+	groupName := safeName(phase.Group)
 	var lastScheduleWarning time.Time
 	return runOperations(ctx, phase.Count, phase.Parallel, phase.Parallelism, delays, false, func(operationCtx context.Context, i int) error {
-		request := requests[i]
+		sample := samples[i]
+		lifetime := ""
+		if phase.Lifetime.Model != "" {
+			lifetime = sample.lifetime.String()
+		}
+		request := model.CreateNodeRequest{
+			PeerNetworkID:       peerNetworkID,
+			NetworkMutable:      phase.NetworkMutable,
+			ExperimentStartedAt: experimentStartedAt,
+			ID:                  fmt.Sprintf("%s-%s-%05d", runID, groupName, sample.sequence),
+			RunID:               runID,
+			Generation:          generation,
+			Group:               phase.Group,
+			Role:                phase.Role,
+			Type:                phase.NodeType,
+			Profile:             phase.Profile,
+			Seed:                sample.seed,
+			Config:              phase.Node.WithDefaults(),
+			Lifetime:            lifetime,
+		}
 		var placementRNG *rand.Rand
 		if phase.Placement == "random" && agentID == "" {
 			placementRNG = rand.New(rand.NewSource(request.Seed))

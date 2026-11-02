@@ -37,6 +37,25 @@ test('run-start alignment interpolates observed time segments without extrapolat
   assert.equal(values.find(p => p.x === 20).error, null);
 });
 
+test('batch interpolation retains finite extreme observations and their contributing run counts', () => {
+  const limit = Number.MAX_VALUE;
+  const score = [{ x: 0, y: -limit }, { x: 10, y: limit }];
+  assert.equal(batch.valueAt(score, 5, 'line'), 0);
+  const middle = batch.average([score, [{ x: 5, y: 0 }]], 'line').find(point => point.x === 5);
+  assert.equal(middle.y, 0);
+  assert.equal(middle.n, 2, 'valid interpolated evidence must not be discarded as non-finite');
+  assert.equal(middle.error, 0);
+
+  const wideAxis = [{ x: -limit, y: -limit }, { x: limit, y: limit }];
+  assert.equal(batch.valueAt(wideAxis, 0, 'line'), 0);
+  approx(batch.valueAt(wideAxis, limit / 2, 'line') / limit, .5);
+  assert.equal(batch.valueAt([{ x: 0, y: 0 }, { x: 1e200, y: 1e200 }], 5e199, 'line'), 5e199);
+  assert.equal(batch.valueAt([{ x: 0, y: 0 }, { x: 1e308, y: 1e308 }], 1e-20, 'line'), 1e-20);
+  assert.equal(batch.valueAt([{ x: 0, y: 0 }, { x: 1e-200, y: 1e-200 }], 5e-201, 'line'), 5e-201);
+  assert.equal(batch.valueAt([{ x: 0, y: limit }, { x: 10, y: limit }], 5, 'line'), limit);
+  assert.equal(batch.valueAt([{ x: 0, y: -limit }, { x: 10, y: limit, breakBefore: true }], 5, 'line'), null);
+});
+
 test('batch score components keep unavailable metrics and exclude unmeasured runs from means', () => {
   const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T01:00:00Z', 20);
   let charts = batch.build(data([a, b]), images.buildCharts);

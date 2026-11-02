@@ -53,21 +53,28 @@ func (p Phase) MatchesProfile(group, profile, nodeType, role string) bool {
 }
 
 func (s *Scenario) validateProfileSchedules() error {
+	var joins []*Phase
+	generationEnd := 0
 	for index, schedule := range s.Phases {
+		if index >= generationEnd {
+			// Collect each generation once, including future joins. Scanning
+			// all sibling phases for every schedule makes small alias-based
+			// YAML inputs quadratic even when they contain only one join.
+			joins = joins[:0]
+			generationEnd = index
+			for generationEnd < len(s.Phases) && s.Phases[generationEnd].Action != "stop-all" {
+				if s.Phases[generationEnd].Action == "join" {
+					joins = append(joins, &s.Phases[generationEnd])
+				}
+				generationEnd++
+			}
+		}
 		if schedule.Action != "schedule" {
 			continue
 		}
-		begin, end := index, index+1
-		for begin > 0 && s.Phases[begin-1].Action != "stop-all" {
-			begin--
-		}
-		for end < len(s.Phases) && s.Phases[end].Action != "stop-all" {
-			end++
-		}
 		matched := false
-		for i := begin; i < end; i++ {
-			join := &s.Phases[i]
-			if join.Action != "join" || !schedule.MatchesProfile(join.Group, join.Profile, join.NodeType, join.Role) {
+		for _, join := range joins {
+			if !schedule.MatchesProfile(join.Group, join.Profile, join.NodeType, join.Role) {
 				continue
 			}
 			matched = true

@@ -169,14 +169,19 @@ func (s *Server) handleAgentCapacity(w http.ResponseWriter, r *http.Request) {
 var errAgentCapacityReached = errors.New("Agent capacity reached")
 
 func (s *Server) createReservedNode(ctx context.Context, request model.CreateNodeRequest, agent model.Agent, targetAgentID string, rng *mathrand.Rand) error {
+	available := func() bool {
+		s.state.mu.RLock()
+		defer s.state.mu.RUnlock()
+		current, exists := s.state.agents[agent.ID]
+		now := time.Now()
+		return exists && !current.Disabled && agentIsOnline(current, now) &&
+			!now.Before(s.state.agentAdmissionUntil[agent.ID]) &&
+			current.StartedAt.Equal(agent.StartedAt) && current.URL == agent.URL
+	}
 	for {
 		// Recheck after reservation: a settings edit may have disabled this
 		// Agent before the create was dispatched. Already dispatched calls finish.
-		s.state.mu.RLock()
-		current, exists := s.state.agents[agent.ID]
-		blocked := !exists || current.Disabled || time.Now().Before(s.state.agentAdmissionUntil[agent.ID])
-		s.state.mu.RUnlock()
-		if blocked {
+		if !available() {
 			s.releaseReservation(request.ID)
 			var err error
 			agent, err = s.acquireAgentWithPlacement(ctx, request.ID, targetAgentID, rng)
@@ -194,6 +199,19 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 		if err != nil {
 			s.releaseReservation(request.ID)
 			return err
+		}
+		// A profile schedule may hold this barrier while an Agent becomes
+		// unavailable or changes instance. No create has been dispatched yet.
+		// Release the profile reader before waiting for another placement so
+		// a pinned join cannot block later schedule changes indefinitely.
+		if !available() {
+			releaseProfile()
+			s.releaseReservation(request.ID)
+			agent, err = s.acquireAgentWithPlacement(ctx, request.ID, targetAgentID, rng)
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		node, err = s.createOnAgent(ctx, agent, effective)
 		created := false

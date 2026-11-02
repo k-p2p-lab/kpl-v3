@@ -283,15 +283,19 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	if count >= analysisJobLimit {
 		return analysisJobStatus{}, errAnalysisQueueFull
 	}
-	// Fail promptly for unreadable or queued results; snapshots are pinned when
-	// a worker starts, keeping queued jobs from retaining file descriptors.
-	snapshot, err := s.captureResultFiles(id, false)
+	// Admission reads only retained local metadata. Resolving archived sources
+	// here could hold cancelMu/analysisJobMu through a stalled NAS read. The
+	// bounded worker captures and checks source bytes after these locks release.
+	runs, err := s.openResultRuns()
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	queued := snapshot.result.State == "queued"
-	snapshot.close()
-	if queued {
+	result, err := s.readSavedResult(runs, id)
+	_ = runs.Close()
+	if err != nil {
+		return analysisJobStatus{}, err
+	}
+	if result.State == "queued" {
 		return analysisJobStatus{}, errResultBusy
 	}
 	var nonce [16]byte

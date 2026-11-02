@@ -150,14 +150,21 @@ func (s *Server) discoveryLoop(ctx context.Context) {
 }
 
 func (s *Server) connectDiscoveryRound(ctx context.Context) {
-	if s.config.NodeConfig.GossipSub.Params.DHigh == nil {
+	// Runtime schedules change the router's degree bounds without restarting
+	// the Peer. Capture the last applied profile once per round so discovery
+	// follows that target, while a prepare-only update has no effect.
+	config := s.config.NodeConfig
+	if applied := s.profileApplied.Load(); applied != nil {
+		config = applied.config
+	}
+	if config.GossipSub.Params.DHigh == nil {
 		return
 	}
-	target := *s.config.NodeConfig.GossipSub.Params.DHigh
+	target := *config.GossipSub.Params.DHigh
 	if target <= 0 {
 		return
 	}
-	topics := uniqueDiscoveryTopics(s.config.NodeConfig.GossipSub.Topics)
+	topics := uniqueDiscoveryTopics(config.GossipSub.Topics)
 	if len(topics) == 0 {
 		return
 	}
@@ -205,7 +212,7 @@ func (s *Server) connectDiscoveryRound(ctx context.Context) {
 	if required == 0 {
 		return
 	}
-	budget := discoveryConnectionBudget(s.config.NodeConfig.Libp2p.ConnectionLimit, len(s.host.Network().Conns()), required)
+	budget := discoveryConnectionBudget(config.Libp2p.ConnectionLimit, len(s.host.Network().Conns()), required)
 	if budget == 0 {
 		return
 	}

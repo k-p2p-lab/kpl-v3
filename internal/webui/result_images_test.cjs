@@ -424,6 +424,43 @@ test("corrupt artifacts and PNG errors stay retryable without discarding saved a
   assert.equal(element("downloadResultAnalysis").hidden, false);
 });
 
+test("completed jobs with unavailable artifacts can be explicitly reanalyzed on first open", async () => {
+  for (const isBatch of [false, true]) for (const corrupt of [false, true]) {
+    let recomputed = false, posts = 0;
+    const first = sample('run'), second = sample('other');
+    first.result.batchId = second.result.batchId = 'run';
+    const data = isBatch ? {
+      version: 1, aggregation: 'equal-run-mean-v1', batchId: 'run', expectedRuns: 2,
+      missingRuns: 0, excluded: [], summary: {}, runs: [first, second],
+    } : artifact('run');
+    const status = () => isBatch ? { batchId: 'run', id: recomputed ? 'new-job' : 'old-job', state: 'completed' }
+      : job('run', 'completed', { id: recomputed ? 'new-job' : 'old-job' });
+    const { ui, element } = fixture(async (url, options) => {
+      if (url.includes('/result?')) {
+        if (!recomputed && !corrupt) throw Object.assign(Error('Analysis artifact is unavailable'), { status: 404 });
+        return { ...data, analysisId: recomputed ? 'new-job' : 'wrong-job' };
+      }
+      if (options.method === 'POST') {
+        assert.ok(url.endsWith('?refresh=1'), 'recovery must request a new computation');
+        posts++;
+        recomputed = true;
+      }
+      return status();
+    });
+    await ui.open('run', { isBatch });
+    assert.equal(posts, 0, 'opening an unavailable cache must not force a computation');
+    assert.equal(element('retryResultImages').hidden, false);
+    assert.equal(element('refreshResultImages').hidden, false, 'first-open artifact failure must leave Reanalyze reachable');
+    assert.equal(element('refreshResultImages').disabled, false);
+    element('refreshResultImages').listeners.click();
+    await settle(() => /images ready/.test(element('resultImagesStatus').textContent));
+    assert.equal(posts, 1);
+    assert.equal(element('retryResultImages').hidden, true);
+    assert.match(element('downloadResultAnalysis').href, /jobId=new-job$/);
+    element('resultImagesDialog').close();
+  }
+});
+
 test('batch and individual analyses use separate jobs even when batch ID equals the first run ID', async () => {
   let releaseIndividual;
   const first = sample('run'), second = sample('other');

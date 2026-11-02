@@ -1214,6 +1214,9 @@
         }
         if (job.state !== "completed")
           throw new Error(job.error || `Analysis ${job.state}. Retry to start again.`);
+        // A completed job can outlive a missing or unreadable artifact. Keep
+        // explicit recomputation reachable even before the first preview loads.
+        refreshButton.hidden = false;
         await showAnalysis(job, job.id);
         if (revision !== requestRevision) return;
         if (!isBatch) researchTools?.setData(currentData);

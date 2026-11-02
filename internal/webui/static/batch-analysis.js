@@ -34,7 +34,19 @@
     if ((mode === "line" || mode === "step") && right?.breakBefore) return null;
     if (mode === "step") return left.y;
     if (!right || !finite(left.y) || !finite(right.y)) return null;
-    return left.y + (right.y - left.y) * (x - left.x) / (right.x - left.x);
+    // Finite endpoints can have an infinite difference. Keep interpolation
+    // finite so a valid Run does not disappear from the contributing count.
+    const width = right.x - left.x;
+    const change = right.y - left.y;
+    const numerator = change * (x - left.x);
+    // Preserve the ordinary expression when it is safe; forming the fraction
+    // first can underflow even when the final interpolated value is nonzero.
+    if (finite(numerator) && finite(width) && (numerator !== 0 || change === 0 || x === left.x))
+      return left.y + numerator / width;
+    const fraction = finite(width) ? (x - left.x) / width
+      : (x / 2 - left.x / 2) / (right.x / 2 - left.x / 2);
+    return finite(change) ? left.y + change * fraction
+      : left.y * (1 - fraction) + right.y * fraction;
   }
   function average(curves, mode) {
     curves = curves.map(points).filter(c => c.some(p => finite(p.y)));

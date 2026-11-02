@@ -378,6 +378,9 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 	if !remote {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.state.persistMu.Lock()
 	deleted, err := s.state.resultDeletedLocked(id)
 	if err == nil && !deleted {
@@ -404,6 +407,12 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 		return nil, ctx.Err()
 	}
 	release := func() { <-s.archiveReadSlots }
+	// A free slot and cancellation may both be ready in the select above.
+	// Do not start a potentially blocking NAS syscall for a canceled reader.
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, err
+	}
 	root, err := s.openNASRun(id)
 	if err != nil {
 		release()
@@ -411,6 +420,10 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 	}
 	defer root.Close()
 	for i := range files {
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
 		if err := files[i].resolveRemote(root); err != nil {
 			release()
 			return nil, err

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -413,6 +414,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	}
 	uploads := []upload{}
 	cleanup := []resultFile{}
+	reused := []storedRunFile{}
 	manifestChanged := false
 	for _, file := range files {
 		logical := ""
@@ -430,6 +432,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 						return err
 					}
 					known = true
+					reused = append(reused, stored)
 					break
 				}
 			}
@@ -454,6 +457,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				}
 				if !retainedRunFile(file.name) {
 					cleanup = append(cleanup, file)
+					reused = append(reused, previous)
 				}
 			} else {
 				uploads = append(uploads, upload{file: file, logical: file.name})
@@ -527,6 +531,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 						return err
 					}
 					already = true
+					reused = append(reused, stored)
 					break
 				}
 			}
@@ -558,6 +563,28 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			if !retainedRunFile(upload.logical) {
 				cleanup = append(cleanup, upload.file)
 			}
+		}
+	}
+	// A recovered manifest proves an earlier commit, not the availability of
+	// its objects after storage loss or a partial restore. Recheck reused
+	// objects before discarding the remaining local copy. Fresh uploads were
+	// already verified by copyArchiveFile above.
+	for _, stored := range reused {
+		file, err := openResultFile(remote, stored.Object)
+		if err != nil {
+			return fmt.Errorf("verify reused archive object %q: %w", stored.Object, err)
+		}
+		if file.size != stored.Size {
+			file.close()
+			return fmt.Errorf("reused archive object %q has changed size", stored.Object)
+		}
+		digest, err := s.hashArchiveFile(ctx, file)
+		file.close()
+		if err != nil {
+			return fmt.Errorf("verify reused archive object %q: %w", stored.Object, err)
+		}
+		if digest != stored.SHA256 {
+			return fmt.Errorf("reused archive object %q checksum mismatch", stored.Object)
 		}
 	}
 	s.setArchivePhase("publishing")

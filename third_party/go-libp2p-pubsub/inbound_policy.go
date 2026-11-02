@@ -120,14 +120,23 @@ func (v *validation) applyInboundPolicy(msg *Message, resume func()) bool {
 	return true
 }
 
-// WaitInboundMessagePolicy drains canceled delay work before final telemetry.
-// The PubSub context must already be canceled, preventing new queue admissions.
+// WaitInboundMessagePolicy drains canceled inbound decisions and delay work,
+// and waits for event-loop routing callbacks before final attack telemetry.
+// The PubSub context must already be canceled, preventing new policy admissions.
+// The caller context bounds waiting for any callback already in progress.
 func (p *PubSub) WaitInboundMessagePolicy(ctx context.Context) error {
 	if p.inboundPolicy == nil {
 		return nil
 	}
 	if p.ctx.Err() == nil {
 		return errors.New("cancel PubSub before draining inbound policy")
+	}
+	if p.processLoopDone != nil {
+		select {
+		case <-p.processLoopDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	p.inboundPolicy.mu.Lock()
 	p.inboundPolicy.mu.Unlock()

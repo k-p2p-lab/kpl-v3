@@ -18,6 +18,7 @@ import (
 func (r *attackRuntime) connectionLoop(ctx context.Context) {
 	c := r.policy.Load().config.ConnectionAttack
 	interval, _ := time.ParseDuration(c.RetryInterval)
+	nextCandidate := 0
 	r.periodic(ctx, interval, func() {
 		registry := r.registry.Load()
 		if registry == nil || time.Since(registry.observedAt) > attackRegistryMaxAge {
@@ -28,13 +29,20 @@ func (r *attackRuntime) connectionLoop(ctx context.Context) {
 		connected := map[string]bool{}
 		seen := map[string]bool{}
 		for _, target := range registry.targets {
-			if !target.Ready || target.PeerID == r.server.host.ID().String() || !c.Targets.Matches(target.Group, target.NodeID, target.PeerID) {
+			if !target.Ready || target.PeerID == r.server.host.ID().String() {
 				continue
 			}
 			if seen[target.PeerID] {
 				continue
 			}
 			seen[target.PeerID] = true
+			matched, known := matchAttackTransport(registry, c.Targets, target.PeerID)
+			if !known {
+				r.count("connectionAttack", "unknown", 1)
+			}
+			if !matched {
+				continue
+			}
 			id, err := corepeer.Decode(target.PeerID)
 			if err != nil {
 				continue
@@ -42,6 +50,26 @@ func (r *attackRuntime) connectionLoop(ctx context.Context) {
 			if r.server.host.Network().Connectedness(id) == corenetwork.Connected {
 				connected[target.PeerID] = true
 			} else {
+				// One transport may have several selected Node aliases. Offer
+				// every ready alias's address to the same dial, retaining fallback
+				// routes without broadening an ambiguous selector or mutating the
+				// immutable registry. Use the same snapshot as target selection.
+				if aliases := registry.byTransport[target.PeerID]; len(aliases) > 1 {
+					target.Addresses = nil
+					addresses := make(map[string]bool)
+					for _, index := range aliases {
+						alias := registry.targets[index]
+						if !alias.Ready {
+							continue
+						}
+						for _, address := range alias.Addresses {
+							if !addresses[address] {
+								addresses[address] = true
+								target.Addresses = append(target.Addresses, address)
+							}
+						}
+					}
+				}
 				candidates = append(candidates, target)
 			}
 		}
@@ -58,10 +86,16 @@ func (r *attackRuntime) connectionLoop(ctx context.Context) {
 		var pending sync.WaitGroup
 		defer pending.Wait()
 		attempted := map[string]bool{}
-		for _, target := range candidates {
+		for visited := 0; visited < len(candidates); visited++ {
 			if budget == 0 || roundCtx.Err() != nil {
 				return
 			}
+			// A failed ready candidate still consumes a dial attempt. Continue
+			// through the remaining candidates on later rounds, so unreachable
+			// entries at the front cannot permanently starve healthy targets.
+			nextCandidate %= len(candidates)
+			target := candidates[nextCandidate]
+			nextCandidate++
 			if attempted[target.PeerID] {
 				continue
 			}

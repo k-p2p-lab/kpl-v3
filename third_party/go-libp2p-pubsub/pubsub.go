@@ -137,6 +137,8 @@ type PubSub struct {
 
 	// sendMsg handles messages that have been validated
 	sendMsg chan *Message
+	// processLoopDone fences router callbacks before final attack telemetry.
+	processLoopDone chan struct{}
 
 	// addVal handles validator registration requests
 	addVal chan *addValReq
@@ -345,6 +347,7 @@ func NewPubSub(ctx context.Context, h host.Host, rt PubSubRouter, opts ...Option
 
 	ps.val.Start(ps)
 
+	ps.processLoopDone = make(chan struct{})
 	go ps.processLoop(ctx)
 
 	return ps, nil
@@ -571,6 +574,7 @@ func WithAppSpecificRpcInspector(inspector func(peer.ID, *RPC) error) Option {
 
 // processLoop handles all inputs arriving on the channels
 func (p *PubSub) processLoop(ctx context.Context) {
+	defer close(p.processLoopDone)
 	defer func() {
 		// Clean up go routines.
 		for _, queue := range p.peers {

@@ -37,7 +37,9 @@ phases:
 - action: publish
   group: attackers
   topic: blocks
-  count: 5000
+  # 2 publishers x 2500 rounds = 5000 publication attempts.
+  count: 2
+  repeat: 2500
   payloadSize: 1024
   interval:
     model: fixed

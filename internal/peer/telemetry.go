@@ -77,10 +77,13 @@ func (t *telemetry) emitWithClock(event model.TraceEvent, reading controllerCloc
 // Receipt timestamps are created inside the same critical section as a
 // checkpoint. A checkpoint therefore never certifies a delivery whose earlier
 // receipt timestamp has been assigned but whose event is still awaiting enqueue.
+// Runtime configuration and topology observations share ordinary admission so
+// repeated commands cannot consume the slots reserved for shutdown evidence.
 func (t *telemetry) emitObserved(build func(controllerClockReading) (model.TraceEvent, bool)) {
 	t.emitObservedPriority(build, false)
 }
 
+// priority is reserved for one final snapshot per shutdown event type.
 func (t *telemetry) emitObservedPriority(build func(controllerClockReading) (model.TraceEvent, bool), priority bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

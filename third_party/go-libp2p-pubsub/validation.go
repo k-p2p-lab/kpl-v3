@@ -419,7 +419,13 @@ func (v *validation) doValidateTopic(vals []*validatorImpl, src peer.ID, msg *Me
 
 	switch result {
 	case ValidationAccept:
-		v.p.sendMsg <- msg
+		// The event loop may already have stopped while an asynchronous
+		// validator was finishing. Do not retain its global throttle slot
+		// waiting for a delivery queue that nobody will drain.
+		select {
+		case v.p.sendMsg <- msg:
+		case <-v.p.ctx.Done():
+		}
 	case ValidationReject:
 		log.Debugf("message validation failed; dropping message from %s", src)
 		v.tracer.RejectMessage(msg, RejectValidationFailed)

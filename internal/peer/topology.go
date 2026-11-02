@@ -227,8 +227,8 @@ func (s *Server) recordTopologyApplied(request model.TopologyRequest, neighbors 
 		return
 	}
 	neighbors = slices.Clone(neighbors)
-	s.telemetry.emitObservedPriority(func(reading controllerClockReading) (model.TraceEvent, bool) {
+	s.telemetry.emitObserved(func(reading controllerClockReading) (model.TraceEvent, bool) {
 		return model.TraceEvent{Type: "topology_applied", PeerID: s.host.ID().String(), Topic: request.Topic, Timestamp: reading.timestamp,
 			Fields: map[string]any{"topologyId": request.TopologyID, "topic": request.Topic, "neighbors": neighbors, "frozen": true, "recoveredAfterCancellation": recovered}}, true
-	}, true)
+	})
 }

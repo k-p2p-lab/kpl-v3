@@ -43,7 +43,9 @@ phases:
 - action: publish
   group: honest
   topic: blocks
-  count: 120
+  # 8 publishers x 15 rounds = 120 publication attempts.
+  count: 8
+  repeat: 15
   payloadSize: 1024
   interval:
     model: fixed

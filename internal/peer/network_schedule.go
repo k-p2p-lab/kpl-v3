@@ -85,9 +85,9 @@ func (s *Server) recordNetworkApplied(config model.NetworkConfig, revision int, 
 	s.networkApplied.Store(&networkAppliedState{configJSON: string(raw), revision: revision, appliedAt: now.UTC()})
 	lag := max(time.Duration(0), now.Sub(deadline))
 	fields := map[string]any{"network": config, "reference": s.networkSchedule.reference, "after": after, "revision": revision, "initial": initial, "lateByMs": float64(lag) / float64(time.Millisecond)}
-	s.telemetry.emitObservedPriority(func(controllerClockReading) (model.TraceEvent, bool) {
+	s.telemetry.emitObserved(func(controllerClockReading) (model.TraceEvent, bool) {
 		return model.TraceEvent{Type: "network_config_applied", Fields: fields}, true
-	}, true)
+	})
 	s.logger.Info("peer network conditions applied", "node", s.config.Node.ID, "reference", s.networkSchedule.reference, "after", after, "revision", revision, "initial", initial, "lateBy", lag, "network", config)
 }
 
@@ -121,9 +121,9 @@ func (s *Server) runNetworkSchedule(ctx context.Context, apply func(context.Cont
 				return ctx.Err()
 			}
 			failure := fmt.Errorf("network schedule change %d after %s: %w", i+1, step.after, err)
-			s.telemetry.emitObservedPriority(func(controllerClockReading) (model.TraceEvent, bool) {
+			s.telemetry.emitObserved(func(controllerClockReading) (model.TraceEvent, bool) {
 				return model.TraceEvent{Type: "network_config_failed", Fields: map[string]any{"reference": p.reference, "after": step.after.String(), "revision": i + 1, "error": failure.Error()}}, true
-			}, true)
+			})
 			s.logger.Error("scheduled network change failed", "node", s.config.Node.ID, "error", failure)
 			return failure
 		}

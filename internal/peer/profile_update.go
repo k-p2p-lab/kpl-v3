@@ -168,9 +168,9 @@ func (s *Server) executeProfileUpdate(ctx context.Context, request model.Profile
 	if err != nil {
 		state.failed = true
 		if s.telemetry != nil {
-			s.telemetry.emitObservedPriority(func(controllerClockReading) (model.TraceEvent, bool) {
+			s.telemetry.emitObserved(func(controllerClockReading) (model.TraceEvent, bool) {
 				return model.TraceEvent{Type: "profile_config_failed", Fields: map[string]any{"revision": request.Revision, "error": err.Error(), "effectiveState": "incomplete"}}, true
-			}, true)
+			})
 		}
 		return response, fmt.Errorf("profile apply may be partial: %w", err)
 	}
@@ -182,9 +182,9 @@ func (s *Server) executeProfileUpdate(ctx context.Context, request model.Profile
 	s.profileApplied.Store(&profileAppliedState{config: updated, revision: request.Revision, appliedAt: time.Now().UTC(), json: string(raw)})
 	state.last, state.prepared = state.prepared, nil
 	if s.telemetry != nil {
-		s.telemetry.emitObservedPriority(func(controllerClockReading) (model.TraceEvent, bool) {
+		s.telemetry.emitObserved(func(controllerClockReading) (model.TraceEvent, bool) {
 			return model.TraceEvent{Type: "profile_config_applied", Fields: map[string]any{"revision": request.Revision, "set": request.Set, "effective": response.Effective}}, true
-		}, true)
+		})
 	}
 	return response, nil
 }

@@ -63,10 +63,10 @@ func (s *Server) handleMeshFreeze(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) recordMeshFrozen() {
 	if s.meshFrozen.CompareAndSwap(false, true) && s.telemetry != nil {
-		s.telemetry.emitObservedPriority(func(reading controllerClockReading) (model.TraceEvent, bool) {
+		s.telemetry.emitObserved(func(reading controllerClockReading) (model.TraceEvent, bool) {
 			return model.TraceEvent{Type: "mesh_freeze", PeerID: s.host.ID().String(), Timestamp: reading.timestamp,
 				Fields: map[string]any{"frozen": true, "scope": "peer", "membership": "pinned"}}, true
-		}, true)
+		})
 	}
 }
 

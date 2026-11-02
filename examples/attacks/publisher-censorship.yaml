@@ -51,7 +51,9 @@ phases:
 - action: publish
   group: honest
   topic: blocks
-  count: 120
+  # 6 publishers x 20 rounds = 120 publication attempts.
+  count: 6
+  repeat: 20
   payloadSize: 1024
   interval:
     model: fixed
@@ -61,7 +63,9 @@ phases:
 - action: publish
   group: victim-publishers
   topic: blocks
-  count: 120
+  # 2 publishers x 60 rounds = 120 publication attempts.
+  count: 2
+  repeat: 60
   payloadSize: 1024
   interval:
     model: fixed

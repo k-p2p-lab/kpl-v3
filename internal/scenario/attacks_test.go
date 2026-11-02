@@ -1,11 +1,42 @@
 package scenario
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAttackOptionsRejectNonJoinNodeBlocks(t *testing.T) {
+	for _, phase := range []string{
+		"action: wait, duration: 1ms", "action: sleep, duration: 1ms",
+		"action: publish, group: workers, count: 1", "action: leave, group: workers, count: 1",
+		"action: wait-ready, group: workers", "action: wait-jobs",
+		"action: log, message: checkpoint", "action: stop-all", "action: reset",
+		"action: mesh-freeze, group: workers",
+	} {
+		for _, option := range []string{"sink", "censorship", "messageDelay", "connectionAttack", "graftFlood", "ihaveSpam", "iwantWithholding", "forwarding", "invalidMessage"} {
+			for _, config := range []string{"{}", "{enabled: false}", "{enabled: true}"} {
+				t.Run(phase+"/"+option+"/"+config, func(t *testing.T) {
+					raw := fmt.Sprintf("version: 4\nname: misplaced attack\nphases:\n  - {action: join, group: workers, count: 1}\n  - {name: misplaced, %s, node: {%s: %s}}\n", phase, option, config)
+					if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "join") {
+						t.Fatalf("non-join attack declaration was not rejected for its location: %v", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestInactiveAttackTemplatesRemainValidWithoutJoins(t *testing.T) {
+	for _, option := range []string{"sink", "censorship", "messageDelay", "connectionAttack", "graftFlood", "ihaveSpam", "iwantWithholding", "forwarding", "invalidMessage"} {
+		raw := fmt.Sprintf("version: 4\nname: inactive template\nprofiles:\n  optional: {%s: {enabled: false}}\nphases:\n  - {action: wait, duration: 1ms}\n", option)
+		if _, err := Parse([]byte(raw)); err != nil {
+			t.Fatalf("inactive %s template became invalid: %v", option, err)
+		}
+	}
+}
 
 func TestV4AttackSchemaGateAndExplicitOverrides(t *testing.T) {
 	text := `version: 4
@@ -68,6 +99,42 @@ func TestV4ExamplesValidateAndV3ActionsRemainAvailable(t *testing.T) {
 		}
 	}
 }
+
+func TestAttackExamplesUsePublisherCountsAndExplicitRepetition(t *testing.T) {
+	paths, err := filepath.Glob("../../examples/attacks/*.yaml")
+	if err != nil || len(paths) < 17 {
+		t.Fatalf("missing attack examples: %v %d", err, len(paths))
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cohorts := map[string]int{}
+			for _, phase := range spec.Phases {
+				if phase.Action == "join" && phase.Node.PublishAllowed() {
+					cohorts[phase.Group] += phase.Count * phase.Repeat
+				}
+				if phase.Action != "publish" {
+					continue
+				}
+				want := 120
+				if filepath.Base(path) == "publish-load.yaml" {
+					want = 5000
+				}
+				if phase.Count > cohorts[phase.Group] || phase.Count*phase.Repeat != want {
+					t.Fatalf("%s: count selects publishers, not messages: cohort=%d count=%d repeat=%d, want %d attempts", phase.Name, cohorts[phase.Group], phase.Count, phase.Repeat, want)
+				}
+			}
+		})
+	}
+}
+
 func TestV4RejectsUnknownTargetGroupsAndAttackOnBoot(t *testing.T) {
 	text := `version: 4
 name: attack

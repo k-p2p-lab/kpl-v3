@@ -41,7 +41,9 @@ phases:
 - action: publish
   group: attackers
   topic: blocks
-  count: 120
+  # 2 publishers x 60 rounds = 120 publication attempts.
+  count: 2
+  repeat: 60
   payloadSize: 1
   interval:
     model: fixed

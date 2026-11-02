@@ -174,13 +174,15 @@ func matchesAttackTopic(topics []string, topic string) bool {
 	return len(topics) == 0 || slices.Contains(topics, topic)
 }
 func (r *attackRuntime) matchTransport(selector *model.AttackSelector, id string) (bool, bool) {
+	return matchAttackTransport(r.registry.Load(), selector, id)
+}
+func matchAttackTransport(registry *attackRegistry, selector *model.AttackSelector, id string) (bool, bool) {
 	if selector.Empty() {
 		return true, true
 	}
 	if len(selector.Groups)+len(selector.NodeIDs) == 0 {
 		return selector.Matches("", "", id), true
 	}
-	registry := r.registry.Load()
 	if registry == nil || time.Since(registry.observedAt) > attackRegistryMaxAge {
 		return false, false
 	}

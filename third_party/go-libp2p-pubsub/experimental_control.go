@@ -40,7 +40,14 @@ func (p *PubSub) SendExperimentalGossipSubControl(ctx context.Context, id peer.I
 	if control == nil || len(control.Iwant)+len(control.Prune)+len(control.Idontwant) > 0 {
 		return result, errors.New("experimental control supports only GRAFT and IHAVE")
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if err := p.ctx.Err(); err != nil {
+		return result, err
+	}
 	owned := proto.Clone(control).(*pb.ControlMessage)
+	canceled := func() bool { return ctx.Err() != nil || p.ctx.Err() != nil }
 	done := make(chan ExperimentalControlResult, 1)
 	_, err := p.evalMeshFreeze(ctx, func() MeshFreezeSnapshot {
 		result := ExperimentalControlResult{}
@@ -52,6 +59,9 @@ func (p *PubSub) SendExperimentalGossipSubControl(ctx context.Context, id peer.I
 		}
 		grafts := owned.Graft[:0]
 		for _, graft := range owned.Graft {
+			if canceled() {
+				return MeshFreezeSnapshot{}
+			}
 			if gs.meshFrozen || respectBackoff && time.Now().Before(gs.backoff[graft.GetTopicID()][id]) {
 				result.SuppressedGrafts++
 				continue
@@ -63,6 +73,9 @@ func (p *PubSub) SendExperimentalGossipSubControl(ctx context.Context, id peer.I
 			ids := ihave.MessageIDs[:0]
 			for _, mid := range ihave.MessageIDs {
 				for {
+					if canceled() {
+						return MeshFreezeSnapshot{}
+					}
 					if _, exists := gs.mcache.Get(mid); !exists {
 						break
 					}
@@ -76,7 +89,10 @@ func (p *PubSub) SendExperimentalGossipSubControl(ctx context.Context, id peer.I
 		if len(owned.Graft)+len(owned.Ihave) == 0 {
 			return MeshFreezeSnapshot{}
 		}
-		for _, rpc := range appendOrMergeRPC(nil, p.maxMessageSize, RPC{RPC: pb.RPC{Control: owned}}) {
+		for _, rpc := range experimentalControlFragments(owned, p.maxMessageSize, canceled) {
+			if canceled() {
+				return MeshFreezeSnapshot{}
+			}
 			if rpc.Size() > p.maxMessageSize {
 				gs.tracer.DropRPC(rpc, id)
 				result.Dropped++
@@ -93,6 +109,15 @@ func (p *PubSub) SendExperimentalGossipSubControl(ctx context.Context, id peer.I
 		return MeshFreezeSnapshot{}
 	})
 	if err != nil {
+		return ExperimentalControlResult{}, err
+	}
+	// An in-progress batch may have stopped at a cancellation checkpoint while
+	// the evaluation result and cancellation became ready together. Preserve
+	// uncertain admission instead of reporting a successful zero-count send.
+	if err := ctx.Err(); err != nil {
+		return ExperimentalControlResult{}, err
+	}
+	if err := p.ctx.Err(); err != nil {
 		return ExperimentalControlResult{}, err
 	}
 	return <-done, nil

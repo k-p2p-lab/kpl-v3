@@ -12,6 +12,63 @@ func TestFinalAttackStatsPreserveStopDropAndBandwidthWhenSaturated(t *testing.T)
 	}
 }
 
+func TestProfileUpdatesPreserveFinalAttackTelemetryWhenSaturated(t *testing.T) {
+	s := newRunTestServer(t, model.PeerProcessConfig{Node: model.Node{ID: "node", RunID: "run", Role: "worker"}})
+	s.bandwidth = newBandwidthReporter()
+	s.telemetry.events = make(chan model.TraceEvent, 12)
+	s.attacks = newAttackRuntime(s)
+	s.telemetry.startMeasurement([]string{"blocks"})
+	for i := 0; i < 20; i++ {
+		s.telemetry.emit(model.TraceEvent{Type: "deliver"})
+	}
+	// Apply through the real prepare/apply path while the telemetry transport is
+	// backpressured. Configuration events must not steal shutdown reservations.
+	for revision := uint64(1); revision <= 4; revision++ {
+		request := model.ProfileUpdateRequest{RunID: "run", Revision: revision, Stage: "prepare", Set: model.RuntimeProfilePatch{Sink: &model.ProbabilityAttack{Enabled: attackBool(revision%2 == 0)}}}
+		prepared, err := s.executeProfileUpdate(t.Context(), request, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := model.ValidateProfileAcknowledgement(request, prepared); err != nil {
+			t.Fatal(err)
+		}
+		request.Stage = "apply"
+		applied, err := s.executeProfileUpdate(t.Context(), request, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := model.ValidateProfileAcknowledgement(request, applied); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.telemetry.stopMeasurement()
+	s.attacks.flush(true)
+	s.bandwidth.LogSentMessage(321)
+	s.emitBandwidth(true)
+	found := map[string]model.TraceEvent{}
+	for len(s.telemetry.events) > 0 {
+		event := <-s.telemetry.events
+		found[event.Type] = event
+	}
+	for _, kind := range []string{"telemetry_drop", "measurement_stop", "attack_stats", "bandwidth"} {
+		if found[kind].Sequence == 0 {
+			t.Errorf("final %s lost after successful profile updates", kind)
+		}
+	}
+	if found["attack_stats"].Fields["revision"] != uint64(4) {
+		t.Errorf("final attack snapshot lost the applied revision: %+v", found["attack_stats"])
+	}
+	if found["telemetry_drop"].Fields["count"] != uint64(17) || found["telemetry_drop"].Sequence != 26 {
+		t.Errorf("dropped normal/configuration observations lost quality evidence: %+v", found["telemetry_drop"])
+	}
+	if found["measurement_stop"].Sequence >= found["attack_stats"].Sequence || found["attack_stats"].Sequence >= found["bandwidth"].Sequence {
+		t.Error("shutdown evidence source order changed")
+	}
+	if found["bandwidth"].Bandwidth == nil || found["bandwidth"].Bandwidth.SentBytes != 321 || !found["bandwidth"].Bandwidth.Final {
+		t.Error("final bandwidth value or flag lost")
+	}
+}
+
 func testFinalAttackTelemetrySaturation(t *testing.T, mode string) {
 	t.Helper()
 	s := newRunTestServer(t, model.PeerProcessConfig{Node: model.Node{ID: "node", RunID: "run"}})

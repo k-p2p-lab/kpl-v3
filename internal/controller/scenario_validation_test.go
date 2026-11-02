@@ -63,6 +63,7 @@ func TestScenarioValidationReturnsParserDiagnostics(t *testing.T) {
 		{"unknown field", "name: broken\nunexpected: true\nphases: [{action: stop-all}]", "field unexpected"},
 		{"phase setting", "name: broken\nphases: [{name: warm-up, action: wait, duration: invalid}]", "warm-up"},
 		{"protocol setting", "name: broken\nphases: [{action: join, group: workers, count: 1, node: {gossipsub: {params: {d: 6, dLow: 9}}}}]", "dLow"},
+		{"misplaced attack", "version: 4\nname: broken\nphases: [{action: wait, duration: 1ms, node: {sink: {enabled: true}}}]", "only supported for join"},
 		{"extra document", validSavedScenarioYAML("first") + "---\nname: ignored\nphases: [{action: stop-all}]", "exactly one YAML document"},
 		{"invalid UTF-8", string([]byte{0xff}), "UTF-8"},
 	} {

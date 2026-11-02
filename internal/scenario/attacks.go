@@ -15,6 +15,9 @@ func (s *Scenario) validateAttackVersion() error {
 		if (p.Node.HasAttackOptions() || p.Schedule != nil && scheduleHasAttacks(p)) && s.Version < 4 {
 			return fmt.Errorf("attack options require version 4")
 		}
+		if p.Node.HasAttackOptions() && p.Action != "join" {
+			return fmt.Errorf("phase %q: node attack options are only supported for join; use schedule.changes[].set for runtime changes", p.Name)
+		}
 		if err := p.Node.ValidateAttackSyntax(); err != nil {
 			return fmt.Errorf("phase %q: %w", p.Name, err)
 		}

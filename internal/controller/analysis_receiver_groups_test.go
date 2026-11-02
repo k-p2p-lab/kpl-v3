@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -19,6 +21,52 @@ func receiverGroupByName(t *testing.T, groups []researchReceiverGroup, name stri
 	}
 	t.Fatalf("missing receiver group %q", name)
 	return researchReceiverGroup{}
+}
+
+func TestReceiverGroupHopPDFPreservesLongPathProbabilityMass(t *testing.T) {
+	const receivers = 721 // More unique hops than the bounded CDF preview.
+	accumulator := newRunMetricAccumulator()
+	accumulator.research = newResearchAccumulator()
+	epoch := time.Unix(100, 0).UTC()
+	observe := func(kind, node, remote, group string, at time.Time) {
+		accumulator.observe(model.TraceEvent{Type: kind, NodeID: node, PeerID: "peer-" + node, RemotePeerID: remote, Group: group, Topic: "blocks", MessageID: "message", Timestamp: at, Fields: map[string]any{"clockBasis": "controller-offset-v1"}})
+	}
+	observe("join", "publisher", "", "publishers", epoch)
+	for i := 1; i <= receivers; i++ {
+		observe("join", fmt.Sprint(i), "", "receivers", epoch)
+	}
+	observe("publish", "publisher", "", "publishers", epoch.Add(time.Second))
+	previous := "publisher"
+	for i := 1; i <= receivers; i++ {
+		node := fmt.Sprint(i)
+		observe("deliver", node, "peer-"+previous, "receivers", epoch.Add(time.Second+time.Duration(i)*time.Millisecond))
+		previous = node
+	}
+	research, err := accumulator.research.finish(t.Context(), accumulator, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := accumulator.research.receiverGroups(t.Context(), accumulator, research.Messages, nil, nil, epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := receiverGroupByName(t, groups, "receivers")
+	if len(research.HopPDF) != receivers {
+		t.Fatalf("fixture did not reconstruct the full relay path: hops=%d", len(research.HopPDF))
+	}
+	if len(group.HopPDF) != receivers || !reflect.DeepEqual(group.HopPDF, research.HopPDF) {
+		t.Errorf("group PDF lost support: group=%d overall=%d", len(group.HopPDF), len(research.HopPDF))
+	}
+	total := 0.0
+	for _, point := range group.HopPDF {
+		total += point.Y
+	}
+	if math.Abs(total-1) > 1e-12 {
+		t.Errorf("group PDF probability sum=%g, want 1", total)
+	}
+	if len(group.HopCDF) >= receivers || group.HopCDF[len(group.HopCDF)-1].Y != 1 {
+		t.Fatal("bounded CDF preview must still end at the complete probability mass")
+	}
 }
 
 func TestReceiverGroupsLegacySnapshotDeliveryCohortsAndCrossGroupPaths(t *testing.T) {

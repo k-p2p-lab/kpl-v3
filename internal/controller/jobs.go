@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -19,10 +18,11 @@ type phaseJobs struct {
 	profiles *runProfileState
 	mu       sync.RWMutex
 	jobs     map[string]*phaseJob
+	changed  chan struct{}
 }
 
 func newPhaseJobs() *phaseJobs {
-	return &phaseJobs{jobs: make(map[string]*phaseJob), profiles: newRunProfileState()}
+	return &phaseJobs{jobs: make(map[string]*phaseJob), profiles: newRunProfileState(), changed: make(chan struct{})}
 }
 
 func (j *phaseJobs) start(id string, run func() error, completed func(error)) error {
@@ -58,6 +58,8 @@ func (j *phaseJobs) startJob(id string, cancel context.CancelFunc, run func() er
 		j.mu.Lock()
 		job.err = err
 		close(job.done)
+		close(j.changed)
+		j.changed = make(chan struct{})
 		j.mu.Unlock()
 	}()
 	return nil
@@ -96,67 +98,64 @@ func (j *phaseJobs) reset() error {
 }
 
 func (j *phaseJobs) wait(ctx context.Context, ids []string, timeout time.Duration) error {
-	selectedIDs, selectedJobs, err := j.selectJobs(ids)
-	if err != nil {
-		return err
-	}
-	if len(selectedJobs) == 0 {
-		return nil
-	}
-
-	waitCtx, cancel := jobWaitContext(ctx, timeout)
-	defer cancel()
-
-	// Observe every selected job at once. Waiting on jobs one-by-one can hide a
-	// fast failure behind an unrelated slow job, and map iteration made that
-	// behavior non-deterministic when waiting for all jobs.
-	cases := jobSelectCases(waitCtx, selectedJobs)
-	remaining := len(selectedJobs)
-	for remaining > 0 {
-		chosen, _, _ := reflect.Select(cases)
-		if chosen == 0 {
-			return fmt.Errorf("wait for jobs: %w", waitCtx.Err())
-		}
-		jobIndex := chosen - 1
-		job := selectedJobs[jobIndex]
-		j.mu.RLock()
-		err := job.err
-		j.mu.RUnlock()
-		if err != nil {
-			return fmt.Errorf("job %q: %w", selectedIDs[jobIndex], err)
-		}
-		cases[chosen].Chan = reflect.Value{}
-		remaining--
-	}
-	return nil
+	return j.waitSelected(ctx, ids, timeout, true)
 }
 
 // waitDone waits until every selected job has stopped, regardless of each
-// job's result. It is intended for cancellation and cleanup paths where all
-// workers must be drained before resources are removed. Only lookup errors and
-// cancellation/deadline errors from the wait itself are returned.
+// job's result. Cleanup must drain all selected workers before removing peers.
 func (j *phaseJobs) waitDone(ctx context.Context, ids []string, timeout time.Duration) error {
-	_, selectedJobs, err := j.selectJobs(ids)
-	if err != nil {
+	return j.waitSelected(ctx, ids, timeout, false)
+}
+
+func (j *phaseJobs) waitSelected(ctx context.Context, ids []string, timeout time.Duration, failFast bool) error {
+	selectedIDs, selectedJobs, err := j.selectJobs(ids)
+	if err != nil || len(selectedJobs) == 0 {
 		return err
 	}
-	if len(selectedJobs) == 0 {
-		return nil
-	}
-
 	waitCtx, cancel := jobWaitContext(ctx, timeout)
 	defer cancel()
-	cases := jobSelectCases(waitCtx, selectedJobs)
-	remaining := len(selectedJobs)
-	for remaining > 0 {
-		chosen, _, _ := reflect.Select(cases)
-		if chosen == 0 {
-			return fmt.Errorf("wait for jobs to stop: %w", waitCtx.Err())
-		}
-		cases[chosen].Chan = reflect.Value{}
-		remaining--
+	label := "wait for jobs"
+	if !failFast {
+		label = "wait for jobs to stop"
 	}
-	return nil
+	pending := make([]int, len(selectedJobs))
+	for i := range pending {
+		pending[i] = i
+	}
+	for {
+		if err := waitCtx.Err(); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		j.mu.RLock()
+		// Capture the broadcast before inspecting completion. A job finishing
+		// after this scan closes this exact channel, so no wakeup can be lost.
+		changed := j.changed
+		remaining := pending[:0]
+		for _, index := range pending {
+			job := selectedJobs[index]
+			select {
+			case <-job.done:
+				if failFast && job.err != nil {
+					j.mu.RUnlock()
+					return fmt.Errorf("job %q: %w", selectedIDs[index], job.err)
+				}
+			default:
+				remaining = append(remaining, index)
+			}
+		}
+		j.mu.RUnlock()
+		pending = remaining
+		if len(pending) == 0 {
+			return nil
+		}
+		// A broadcast avoids reflect.Select's 65,536-case limit and retires
+		// every completed job in one scan, including already-drained batches.
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("%s: %w", label, waitCtx.Err())
+		case <-changed:
+		}
+	}
 }
 
 func (j *phaseJobs) selectJobs(ids []string) ([]string, []*phaseJob, error) {
@@ -192,13 +191,4 @@ func jobWaitContext(ctx context.Context, timeout time.Duration) (context.Context
 		return context.WithTimeout(ctx, timeout)
 	}
 	return ctx, func() {}
-}
-
-func jobSelectCases(ctx context.Context, jobs []*phaseJob) []reflect.SelectCase {
-	cases := make([]reflect.SelectCase, len(jobs)+1)
-	cases[0] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())}
-	for i, job := range jobs {
-		cases[i+1] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(job.done)}
-	}
-	return cases
 }

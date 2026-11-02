@@ -48,7 +48,7 @@ func (s *Server) createOnAgent(ctx context.Context, agent model.Agent, request m
 		}
 		var node model.Node
 		err := s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/nodes", request, &node)
-		if err == nil && attempts > 1 && (node.ID != request.ID || node.RunID != request.RunID || node.Generation != request.Generation || node.AgentID != agent.ID || node.Group != request.Group) {
+		if err == nil && !createAcknowledgementMatches(node, request, agent.ID, attempts > 1) {
 			err = &uncertainNodeCreateError{errors.New("Peer creation acknowledgement identity mismatch")}
 		}
 		if err == nil {
@@ -75,6 +75,16 @@ func (s *Server) createOnAgent(ctx context.Context, agent model.Agent, request m
 		}
 	}
 	return model.Node{}, fmt.Errorf("Peer creation attempts exhausted: %w", last)
+}
+
+func createAcknowledgementMatches(node model.Node, request model.CreateNodeRequest, agentID string, strict bool) bool {
+	// Older Agents may omit identity fields that recordCreatedNode fills from
+	// the request. An explicit conflicting identity is never a confirmation,
+	// even when the Agent does not support creation replay.
+	matches := func(got, want string) bool { return got == want || !strict && got == "" }
+	return matches(node.ID, request.ID) && matches(node.RunID, request.RunID) &&
+		matches(node.AgentID, agentID) && matches(node.Group, request.Group) &&
+		(node.Generation == request.Generation || !strict && node.Generation == 0)
 }
 
 type uncertainCreate struct {

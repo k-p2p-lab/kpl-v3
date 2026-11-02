@@ -314,7 +314,19 @@ func (r *attackRuntime) detail(kind, decision string, msg *pubsub.Message, revis
 	r.mu.Unlock()
 	r.server.telemetry.emit(model.TraceEvent{Type: "attack_decision", Topic: msg.GetTopic(), RemotePeerID: remoteID, Fields: map[string]any{"attack": kind, "decision": decision, "pubsubMessageId": hex.EncodeToString([]byte(msg.ID)), "authorPeerId": msg.GetFrom().String(), "revision": revision, "sampled": true}})
 }
+func (s *Server) finishAttackRuntime(ctx context.Context) error {
+	err := s.pubsub.WaitInboundMessagePolicy(ctx)
+	// Keep the last snapshot even when callbacks cannot be drained in time,
+	// but do not describe counters that may still change as settled evidence.
+	s.attacks.flushWithDrainStatus(true, err)
+	return err
+}
+
 func (r *attackRuntime) flush(final bool) {
+	r.flushWithDrainStatus(final, nil)
+}
+
+func (r *attackRuntime) flushWithDrainStatus(final bool, drainErr error) {
 	r.mu.Lock()
 	dirty := r.dirty
 	r.dirty = false
@@ -325,7 +337,14 @@ func (r *attackRuntime) flush(final bool) {
 	}
 	if r.server.telemetry != nil {
 		r.server.telemetry.emitObservedPriority(func(controllerClockReading) (model.TraceEvent, bool) {
-			return model.TraceEvent{Type: "attack_stats", Fields: map[string]any{"counters": r.snapshot(), "options": attackOptions(state.config), "revision": state.revision, "seed": r.server.config.Seed, "final": final, "cumulative": true}}, true
+			fields := map[string]any{"counters": r.snapshot(), "options": attackOptions(state.config), "revision": state.revision, "seed": r.server.config.Seed, "final": final, "cumulative": true}
+			if final {
+				fields["policyDrainComplete"] = drainErr == nil
+				if drainErr != nil {
+					fields["drainError"] = drainErr.Error()
+				}
+			}
+			return model.TraceEvent{Type: "attack_stats", Fields: fields}, true
 		}, final)
 	}
 }

@@ -69,6 +69,32 @@ func TestAgentRefreshUpdatesOfflineAgentsAndPreservesPartialFailures(t *testing.
 	}
 }
 
+func TestScenarioAgentRefreshRejectsDifferentRegisteredIdentity(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	addRefreshTestAgent(t, s, "b", func(w http.ResponseWriter, r *http.Request, agent model.Agent) {
+		t.Error("offline Agent should not be polled by the scenario refresh")
+		writeJSON(w, http.StatusOK, model.AgentHeartbeat{Agent: agent})
+	})
+	other := s.state.agents["b"]
+	other.State, other.LastSeen = model.AgentOffline, time.Now().Add(-time.Minute)
+	s.state.agents["b"] = other
+	addRefreshTestAgent(t, s, "a", func(w http.ResponseWriter, r *http.Request, _ model.Agent) {
+		// A previously registered task address may now serve another Agent.
+		reported := other
+		reported.LastSeen = time.Now().UTC()
+		reported.ActiveNodes = 1
+		writeJSON(w, http.StatusOK, model.AgentHeartbeat{Agent: reported, Nodes: []model.Node{{ID: "wrong-source-peer", AgentID: "b", State: model.NodeReady}}})
+	})
+	if err := s.refreshAgentState(t.Context()); err == nil {
+		t.Error("scenario cleanup accepted another Agent's status as a successful refresh")
+	}
+	s.state.mu.RLock()
+	defer s.state.mu.RUnlock()
+	if len(s.state.nodes) != 0 || s.state.agents["b"].State != model.AgentOffline || s.state.agents["b"].ActiveNodes != 0 {
+		t.Errorf("wrong endpoint response changed another Agent's state: nodes=%+v agent=%+v", s.state.nodes, s.state.agents["b"])
+	}
+}
+
 func TestAgentRefreshBoundsConcurrencyAndCancelsPendingChecks(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	started := make(chan struct{}, 8)

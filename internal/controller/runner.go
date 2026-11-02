@@ -795,13 +795,10 @@ func (s *Server) refreshAgentState(ctx context.Context) error {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			var heartbeat model.AgentHeartbeat
-			if err := s.callAgent(ctx, agent.URL, http.MethodGet, "/api/v1/status", nil, &heartbeat); err != nil {
+			// Apply the same identity check as an explicit Dashboard refresh.
+			// A stale task address may now belong to another registered Agent.
+			if _, err := s.refreshAgentTarget(ctx, agentRefreshTarget{ID: agent.ID, Name: agent.Name, URL: agent.URL}); err != nil {
 				errorsByAgent <- fmt.Errorf("refresh agent %s: %w", agent.ID, err)
-				return
-			}
-			if err := s.state.heartbeat(heartbeat); err != nil {
-				errorsByAgent <- fmt.Errorf("apply agent %s status: %w", agent.ID, err)
 			}
 		}()
 	}
@@ -959,6 +956,7 @@ func (s *Server) releaseReservation(nodeID string) {
 
 func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID string, node model.Node, expectedInstance ...time.Time) bool {
 	now := time.Now().UTC()
+	hasObservationTime := !node.LastSeen.IsZero()
 	config := request.Config.WithDefaults()
 	if node.ID == "" {
 		node.ID = request.ID
@@ -1017,9 +1015,11 @@ func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID stri
 		}
 	}
 	if current, exists := s.state.nodes[node.ID]; !exists ||
-		current.State != model.NodeStopping && current.State != model.NodeStopped && current.State != model.NodeFailed && current.LastSeen.Before(node.LastSeen) {
+		hasObservationTime && current.State != model.NodeStopping && current.State != model.NodeStopped && current.State != model.NodeFailed && current.LastSeen.Before(node.LastSeen) {
 		// A delayed create response can carry a later Agent clock than a
 		// Controller stop request. Timestamps must not undo that lifecycle.
+		// Arrival time fills a new legacy record, but does not make an ACK
+		// without a source timestamp newer than an observed heartbeat.
 		s.state.setNodeLocked(node)
 	}
 	s.state.mu.Unlock()

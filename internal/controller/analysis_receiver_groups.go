@@ -249,8 +249,13 @@ func (a *researchAccumulator) receiverGroups(ctx context.Context, metrics *runMe
 		hopTotal := receiverCount(g.hops)
 		r.HopCDF = cumulativePoints(g.hops, hopTotal)
 		r.HopPDF = []analysisPoint{}
-		for _, point := range r.HopCDF {
-			r.HopPDF = append(r.HopPDF, analysisPoint{X: point.X, Y: g.hops[point.X] / hopTotal})
+		if hopTotal > 0 {
+			// The CDF is a bounded preview. A discrete PDF must retain every
+			// observed hop; deriving it from that preview discards probability.
+			for hop, count := range g.hops {
+				r.HopPDF = append(r.HopPDF, analysisPoint{X: hop, Y: count / hopTotal})
+			}
+			sort.Slice(r.HopPDF, func(i, j int) bool { return r.HopPDF[i].X < r.HopPDF[j].X })
 		}
 		r.LatencyCDF, _ = analysisDistribution(g.latencies)
 		r.LatencyHistogram = receiverHistogram(g.latencies, low, high, len(latencySamples))

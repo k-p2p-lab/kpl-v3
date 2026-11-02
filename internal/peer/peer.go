@@ -217,9 +217,8 @@ func (s *Server) Run(parentCtx context.Context) (runErr error) {
 		}
 		if s.attacks != nil && s.pubsub != nil {
 			drainCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-			runErr = errors.Join(runErr, s.pubsub.WaitInboundMessagePolicy(drainCtx))
+			runErr = errors.Join(runErr, s.finishAttackRuntime(drainCtx))
 			stop()
-			s.attacks.flush(true)
 		}
 		s.Close()
 		stopBandwidth()

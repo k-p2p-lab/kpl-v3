@@ -165,6 +165,9 @@ func newServer(ctx context.Context, config model.PeerProcessConfig, logger *slog
 		return nil, fmt.Errorf("create libp2p host: %w", err)
 	}
 	telemetry := newTelemetry(config.Node, config.AgentURL, config.Token, logger)
+	if *config.NodeConfig.GossipSub.Enabled && config.NodeConfig.GossipSub.Router == "gossipsub" {
+		telemetry.reserveFinalAttackStats()
+	}
 	server := &Server{
 		config:     config,
 		host:       h,
@@ -335,12 +338,12 @@ func (s *Server) startPubSub(ctx context.Context) error {
 	options = append(options, pubsub.WithRawTracer(&messageTracer{server: s}))
 	if config.Router == "gossipsub" {
 		s.attacks = newAttackRuntime(s)
-		limits := pubsub.InboundMessagePolicyLimits{Active: s.attacks.receiveActive, MaxPendingMessages: 1024, MaxPendingBytes: 16 << 20, Observe: s.attacks.observeDelay}
+		limits := pubsub.InboundMessagePolicyLimits{Active: s.attacks.receiveActive, MaxPendingMessages: 1024, MaxPendingBytes: 16 << 20, ObserveDecision: s.attacks.observeDelay}
 		if delay := s.config.NodeConfig.MessageDelay; delay != nil {
 			limits.MaxPendingMessages = *delay.MaxPendingMessages
 			limits.MaxPendingBytes = *delay.MaxPendingBytes
 		}
-		options = append(options, pubsub.WithInboundMessagePolicy(s.attacks.decide, limits), pubsub.WithIWantResponseFilter(s.attacks.allowIWant))
+		options = append(options, pubsub.WithInboundMessagePolicy(s.attacks.decide, limits), pubsub.WithIWantResponseFilter(s.attacks.allowIWant), pubsub.WithGossipSubForwardFilter(s.attacks.allowForward, s.attacks.forwardActive))
 	}
 
 	s.mesh.configure(config.Enabled != nil && *config.Enabled && config.Router == "gossipsub")

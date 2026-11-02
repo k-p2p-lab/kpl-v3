@@ -33,6 +33,7 @@ type telemetry struct {
 	measurementStarted bool
 	measurementStopped bool
 	measurementDone    chan struct{}
+	finalAttackStats   bool // mu; reserve before normal traffic can fill the queue.
 	sealed             bool
 	shutdownTimeout    time.Duration
 	retryInterval      time.Duration
@@ -192,14 +193,24 @@ func (t *telemetry) clockSyncLoopWithIntervals(ctx context.Context, controllerUR
 	}
 }
 
-// Leave three slots for the final drop notice, stop checkpoint and bandwidth
-// counters when the ordinary queue is saturated.
+// Leave room for the final drop notice, stop checkpoint and bandwidth counters.
+// GossipSub runtimes also reserve their possible final attack snapshot before
+// traffic starts, including when attacks will be activated later by a schedule.
 func (t *telemetry) queueLimit(priority bool) int {
 	limit := cap(t.events)
 	if !priority && limit >= 4 {
 		limit -= 3
+		if t.finalAttackStats {
+			limit = max(0, limit-1)
+		}
 	}
 	return limit
+}
+
+func (t *telemetry) reserveFinalAttackStats() {
+	t.mu.Lock()
+	t.finalAttackStats = true
+	t.mu.Unlock()
 }
 
 func (t *telemetry) enqueueLocked(event model.TraceEvent, priority bool) {

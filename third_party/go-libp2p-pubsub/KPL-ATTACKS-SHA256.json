@@ -4,13 +4,17 @@
   "baseKPLRevision": "a4f611a66ec3f36dd5add1cf2a7ea89b9ced40ca",
   "pathBasis": "relative to third_party/go-libp2p-pubsub",
   "files": {
-    "pubsub.go": "8fa19c7ceddfedd907b6f3fc99f4b4160289b3ee24be0df798dcd030bb7874cc",
-    "validation.go": "e53293eb920f720faa240844e4b2802d429abdc9df0685edc428c97864fb005d",
-    "gossipsub.go": "70ea5c5368b71e3e6e24efe2a8ca155a45fd8db28d24753d9cd35ac2a178f64e",
-    "inbound_policy.go": "37039b78eabd14a4eec18e44a908798701db7ef1ccf02b513fff30f001b89a97",
+    "pubsub.go": "0ae95c5ee063a92a58b2d3581bdd3880073ade34ca7e9c8ddee5d55b2a24214c",
+    "validation.go": "ce5a3d4df6d410a9b9aaf4a635401117bca6c47b3d2efadab7847b302a77516b",
+    "gossipsub.go": "1b1d7d39acb487d9d23543bc11af184adb7aa25677478f17abc601c428d4b913",
+    "inbound_policy.go": "0cf7a950af2c85b88632221b71005e090a579bf507a6b983f84f62a2a2dccc0a",
     "experimental_control.go": "8439570145524746940ea0a8b5a73e4b85fc40d196d4c50ade2e0530c8c74d09",
     "kpl_attacks_test.go": "79d90f9fe8aeb6062834b10859f811ccfd668d0e6971873ec5b6e6b3f87f802a",
-    "KPL-CHANGES.md": "ca3384160b8daa133e0e5ea51aed1e523c242cf4eb7a3cdb92578847770b5d2b"
+    "KPL-CHANGES.md": "3f48d12657bb352d5df661d7206e3a7bf8e2840ac49cac9c1b8bd44889c04687",
+    "comm.go": "3fe88bd7476965efaf46d5e2560c268fc2cd9534028a5013a49ddce1c99baa23",
+    "experimental_forwarding.go": "f6c8f0f738c552e13c64fd47db55bb986424f3c0b250b027be66b7fe828afb91",
+    "experimental_invalid.go": "e2bf91e176e6908fb0a4c1025712b79565944509d971414894148dfd668ea355",
+    "kpl_forward_invalid_test.go": "f3545a249c18d1b6d140dbcd6007705369ebf09eedc2566a33a2490c6d72efcf"
   },
   "pristineManifestSHA256": "9bdd937c488e71fb08b1f95fcc2b8f9b9415c12ee890d000d82659631e252c3d",
   "referenceManifestSHA256": "0d956fc0eb057720bb6554be07663cc0b2bff1d8f1da2efbb729eb610b1371ad",

@@ -884,6 +884,7 @@ func (s *Server) updateNode(update model.Node) error {
 	}
 	updateProcessNetwork(proc, update.Metadata)
 	updateProcessProfile(proc, update.Metadata)
+	updateProcessAttackStatus(proc, update.Metadata)
 	// Freeze is one-way. An older in-flight status must never undo a successful
 	// command acknowledgement, and a Peer cannot enable a disabled capability.
 	if proc.node.Metadata["meshFreezeEnabled"] == "true" && update.Metadata["meshFrozen"] == "true" {

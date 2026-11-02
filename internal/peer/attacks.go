@@ -32,9 +32,24 @@ type attackPolicyState struct {
 	revision uint64
 }
 type attackRegistry struct {
-	targets    []model.AttackTarget
-	observedAt time.Time
+	targets     []model.AttackTarget
+	observedAt  time.Time
+	byTransport map[string][]int
+	byAuthor    map[string][]int
 }
+
+// Build immutable indexes on the registry fetch worker, before publication to
+// routing/validation callbacks. Keep all aliases so partial shared-ID selections
+// remain unknown instead of silently broadening to another node.
+func newAttackRegistry(targets []model.AttackTarget, observedAt time.Time) *attackRegistry {
+	r := &attackRegistry{targets: targets, observedAt: observedAt, byTransport: make(map[string][]int, len(targets)), byAuthor: make(map[string][]int, len(targets))}
+	for i, target := range targets {
+		r.byTransport[target.PeerID] = append(r.byTransport[target.PeerID], i)
+		r.byAuthor[target.AuthorPeerID] = append(r.byAuthor[target.AuthorPeerID], i)
+	}
+	return r
+}
+
 type attackRuntime struct {
 	server       *Server
 	policy       atomic.Pointer[attackPolicyState]
@@ -47,6 +62,9 @@ type attackRuntime struct {
 }
 
 func newAttackRuntime(s *Server) *attackRuntime {
+	if s.telemetry != nil {
+		s.telemetry.reserveFinalAttackStats()
+	}
 	r := &attackRuntime{server: s, counters: make(map[string]map[string]uint64)}
 	r.update(s.config.NodeConfig, s.config.ProfileRevision)
 	return r
@@ -55,6 +73,8 @@ func (r *attackRuntime) update(config model.NodeConfig, revision uint64) {
 	r.policy.Store(&attackPolicyState{config: config.WithDefaults(), revision: revision})
 	if config.HasAttackOptions() {
 		fields := map[string][]string{
+			"forwarding":       {"publishConsidered", "publishWithheld", "ihaveConsidered", "ihaveWithheld", "unknown"},
+			"invalidMessage":   {"generatedMessages", "queuedRPCs", "droppedRPCs", "skippedRequests", "sendUncertain", "unknown", "generationErrors"},
 			"sink":             {"considered", "dropped"},
 			"censorship":       {"considered", "dropped", "unknown"},
 			"messageDelay":     {"considered", "selected", "queued", "released", "overflow", "canceled", "dropped"},
@@ -98,6 +118,12 @@ func (r *attackRuntime) snapshot() map[string]map[string]uint64 {
 }
 func attackOptions(c model.NodeConfig) map[string]any {
 	out := map[string]any{}
+	if c.Forwarding != nil {
+		out["forwarding"] = c.Forwarding
+	}
+	if c.InvalidMessage != nil {
+		out["invalidMessage"] = c.InvalidMessage
+	}
 	if c.Sink != nil {
 		out["sink"] = c.Sink
 	}
@@ -159,10 +185,8 @@ func (r *attackRuntime) matchTransport(selector *model.AttackSelector, id string
 		return false, false
 	}
 	known, matched, unmatched := false, false, false
-	for _, target := range registry.targets {
-		if target.PeerID != id {
-			continue
-		}
+	for _, index := range registry.byTransport[id] {
+		target := registry.targets[index]
 		known = true
 		if selector.Matches(target.Group, target.NodeID, id) {
 			matched = true
@@ -187,10 +211,8 @@ func (r *attackRuntime) matchPublisher(selector *model.AttackSelector, id string
 		return false, false
 	}
 	known, matched, unmatched := false, false, false
-	for _, target := range registry.targets {
-		if target.AuthorPeerID != id {
-			continue
-		}
+	for _, index := range registry.byAuthor[id] {
+		target := registry.targets[index]
 		known = true
 		if selector.Matches(target.Group, target.NodeID, id) {
 			matched = true
@@ -233,20 +255,22 @@ func (r *attackRuntime) decide(msg *pubsub.Message) pubsub.InboundMessageDecisio
 		if r.selected("messageDelay", msg, *c.MessageDelay.Probability, "") {
 			r.count("messageDelay", "selected", 1)
 			delay, _ := time.ParseDuration(c.MessageDelay.Delay)
-			return pubsub.InboundMessageDecision{Delay: delay}
+			r.detail("messageDelay", "delay", msg, state.revision)
+			return pubsub.InboundMessageDecision{Delay: delay, Tag: state.revision}
 		}
 	}
 	return pubsub.InboundMessageDecision{}
 }
-func (r *attackRuntime) observeDelay(msg *pubsub.Message, event string) {
+func (r *attackRuntime) observeDelay(msg *pubsub.Message, event string, decision pubsub.InboundMessageDecision) {
 	r.count("messageDelay", event, 1)
 	if event == "overflow" || event == "canceled" {
 		r.count("messageDelay", "dropped", 1)
-		r.detail("messageDelay", event, msg, r.policy.Load().revision)
+		r.detail("messageDelay", event, msg, decision.Tag)
 	}
 }
 func (r *attackRuntime) allowIWant(requester corepeer.ID, msg *pubsub.Message) bool {
-	c := r.policy.Load().config.IWantWithholding
+	state := r.policy.Load()
+	c := state.config.IWantWithholding
 	if c == nil || !c.Active() || !matchesAttackTopic(c.Topics, msg.GetTopic()) {
 		return true
 	}
@@ -260,7 +284,7 @@ func (r *attackRuntime) allowIWant(requester corepeer.ID, msg *pubsub.Message) b
 	r.count("iwantWithholding", "considered", 1)
 	if r.selected("iwantWithholding", msg, *c.Probability, requester.String()) {
 		r.count("iwantWithholding", "withheld", 1)
-		r.detail("iwantWithholding", "withhold", msg, r.policy.Load().revision, requester.String())
+		r.detail("iwantWithholding", "withhold", msg, state.revision, requester.String())
 		return false
 	}
 	return true
@@ -358,6 +382,7 @@ func (r *attackRuntime) fetchTargets(ctx context.Context) error {
 	query := req.URL.Query()
 	query.Set("runId", r.server.config.Node.RunID)
 	query.Set("requesterNodeId", r.server.config.Node.ID)
+	query.Set("generation", strconv.FormatUint(r.server.config.Node.Generation, 10))
 	req.URL.RawQuery = query.Encode()
 	if r.server.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.server.config.Token)
@@ -384,7 +409,7 @@ func (r *attackRuntime) fetchTargets(ctx context.Context) error {
 	if err := validateAttackPublisherTargets(r.policy.Load().config, targets); err != nil {
 		return err
 	}
-	r.registry.Store(&attackRegistry{targets: targets, observedAt: time.Now()})
+	r.registry.Store(newAttackRegistry(targets, time.Now()))
 	return nil
 }
 func (r *attackRuntime) run(ctx context.Context) error {
@@ -412,6 +437,9 @@ func (r *attackRuntime) run(ctx context.Context) error {
 		})
 	}
 	c := r.policy.Load().config
+	if c.InvalidMessage != nil && c.InvalidMessage.Enabled != nil && *c.InvalidMessage.Enabled {
+		spawn(r.invalidMessageLoop)
+	}
 	if c.ConnectionAttack != nil && c.ConnectionAttack.Enabled != nil && *c.ConnectionAttack.Enabled {
 		spawn(r.connectionLoop)
 	}

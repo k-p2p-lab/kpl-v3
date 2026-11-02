@@ -485,6 +485,8 @@ func WithGossipSubParams(cfg GossipSubParams) Option {
 // messages to their topic for GossipSubFanoutTTL.
 type GossipSubRouter struct {
 	iwantResponseFilter func(peer.ID, *Message) bool
+	forwardFilter       func(peer.ID, *Message, string) bool
+	forwardFilterActive func() bool
 
 	p            *PubSub
 	peers        map[peer.ID]protocol.ID          // peer protocols
@@ -1535,6 +1537,10 @@ func (gs *GossipSubRouter) doDropRPC(rpc *RPC, p peer.ID, reason string) {
 }
 
 func (gs *GossipSubRouter) doSendRPC(rpc *RPC, p peer.ID, q *rpcQueue, urgent bool) {
+	rpc = gs.filterForwardRPC(p, rpc)
+	if rpc == nil {
+		return
+	}
 	var err error
 	if urgent {
 		err = q.UrgentPush(rpc, false)

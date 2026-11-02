@@ -158,6 +158,12 @@ func (p *PubSub) handlePeerDead(s network.Stream) {
 
 func (p *PubSub) handleSendingMessages(ctx context.Context, s network.Stream, outgoing *rpcQueue) {
 	writeRpc := func(rpc *RPC) error {
+		if rpc.experimentalMalformed {
+			// A valid one-byte length prefix followed by illegal protobuf wire
+			// type 7. This tests decoding, not oversized allocation/framing.
+			_, err := s.Write([]byte{1, 0x0f})
+			return err
+		}
 		size := uint64(rpc.Size())
 
 		buf := pool.Get(varint.UvarintSize(size) + int(size))
@@ -180,7 +186,7 @@ func (p *PubSub) handleSendingMessages(ctx context.Context, s network.Stream, ou
 			log.Debugf("popping message from the queue to send to %s: %s", s.Conn().RemotePeer(), err)
 			return
 		}
-		if p.meshFrozen.Load() {
+		if p.meshFrozen.Load() && !rpc.experimentalMalformed {
 			rpc = withoutMeshControl(rpc)
 			if rpc.Size() == 0 {
 				continue

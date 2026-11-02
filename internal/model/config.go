@@ -12,6 +12,8 @@ import (
 // are retained for v3 preview scenario compatibility; new scenarios should use
 // the nested libp2p, kademlia, and gossipsub sections.
 type NodeConfig struct {
+	Forwarding       *ForwardingConfig       `json:"forwarding,omitempty" yaml:"forwarding,omitempty"`
+	InvalidMessage   *InvalidMessageConfig   `json:"invalidMessage,omitempty" yaml:"invalidMessage,omitempty"`
 	Sink             *ProbabilityAttack      `json:"sink,omitempty" yaml:"sink,omitempty"`
 	Censorship       *CensorshipConfig       `json:"censorship,omitempty" yaml:"censorship,omitempty"`
 	MessageDelay     *MessageDelayConfig     `json:"messageDelay,omitempty" yaml:"messageDelay,omitempty"`

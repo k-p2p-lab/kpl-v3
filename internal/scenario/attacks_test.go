@@ -43,7 +43,7 @@ phases:
 }
 func TestV4ExamplesValidateAndV3ActionsRemainAvailable(t *testing.T) {
 	paths, err := filepath.Glob("../../examples/attacks/*.yaml")
-	if err != nil || len(paths) != 14 {
+	if err != nil || len(paths) < 17 {
 		t.Fatalf("missing attack examples: %v %d", err, len(paths))
 	}
 	for _, path := range paths {

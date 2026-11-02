@@ -46,6 +46,8 @@ K-P2PLab also adds [inspection](third_party/go-libp2p-pubsub/kpl_score_snapshot_
 
 The [worker attack extension](third_party/go-libp2p-pubsub/inbound_policy.go) adds an opt-in remote data policy with bounded asynchronous delay and shutdown draining, an [IWANT response filter and experimental GRAFT/IHAVE queue interface](third_party/go-libp2p-pubsub/experimental_control.go), and [regression tests](third_party/go-libp2p-pubsub/kpl_attacks_test.go). Policy selection and orchestration remain in KPL; protobufs, protocol IDs, dependency versions and scoring defaults are unchanged. The [attack patch snapshot manifest](third_party/go-libp2p-pubsub/KPL-ATTACKS-SHA256.json) is separate from the unchanged pristine/reference manifests and original license files.
 
+The additional [forwarding filter](third_party/go-libp2p-pubsub/experimental_forwarding.go) covers recipient-selective eager/direct/fanout, IHAVE and IWANT data suppression while preserving local receipt/cache. The [invalid-message injection interface](third_party/go-libp2p-pubsub/experimental_invalid.go) uses bounded queues for corrupted signatures and a fixed illegal protobuf byte, with a small `comm.go` serialization branch. Its [regressions](third_party/go-libp2p-pubsub/kpl_forward_invalid_test.go) and hashes are included in the separate attack snapshot; normal wire schemas and original licensing remain unchanged.
+
 ## bbolt
 
 K-P2PLab uses the unmodified bbolt Go module for the Agent's local retired-Peer history store.

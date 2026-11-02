@@ -108,6 +108,21 @@ type IWantWithholdingConfig struct {
 	Targets           *AttackSelector `json:"targets,omitempty" yaml:"targets,omitempty"`
 }
 
+// ForwardingConfig suppresses forwarding of accepted remote messages while
+// preserving local subscription delivery and the message cache.
+type ForwardingConfig struct {
+	ProbabilityAttack `yaml:",inline"`
+	Topics            []string        `json:"topics,omitempty" yaml:"topics,omitempty"`
+	Targets           *AttackSelector `json:"targets,omitempty" yaml:"targets,omitempty"`
+}
+
+type InvalidMessageConfig struct {
+	ControlAttackConfig `yaml:",inline"`
+	Mode                string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	MessagesPerPeer     *int   `json:"messagesPerPeer,omitempty" yaml:"messagesPerPeer,omitempty"`
+	PayloadSize         *int   `json:"payloadSize,omitempty" yaml:"payloadSize,omitempty"`
+}
+
 // AttackTarget is an internal, run/generation-scoped registry record. AuthorPeerID
 // is the configured signing identity, which may differ from the transport ID.
 type AttackTarget struct {
@@ -121,13 +136,19 @@ type AttackTarget struct {
 
 func attackEnabled(value *bool) bool { return value != nil && *value }
 func (c NodeConfig) HasAttackOptions() bool {
-	return c.Sink != nil || c.Censorship != nil || c.MessageDelay != nil || c.ConnectionAttack != nil || c.GraftFlood != nil || c.IHaveSpam != nil || c.IWantWithholding != nil
+	return c.Forwarding != nil || c.InvalidMessage != nil || c.Sink != nil || c.Censorship != nil || c.MessageDelay != nil || c.ConnectionAttack != nil || c.GraftFlood != nil || c.IHaveSpam != nil || c.IWantWithholding != nil
 }
 func (c NodeConfig) HasActiveAttacks() bool {
-	return c.Sink.Active() || c.Censorship != nil && c.Censorship.Active() || c.MessageDelay != nil && c.MessageDelay.Active() || c.ConnectionAttack != nil && attackEnabled(c.ConnectionAttack.Enabled) || c.GraftFlood != nil && attackEnabled(c.GraftFlood.Enabled) || c.IHaveSpam != nil && attackEnabled(c.IHaveSpam.Enabled) || c.IWantWithholding != nil && c.IWantWithholding.Active()
+	return c.Forwarding != nil && c.Forwarding.Active() || c.InvalidMessage != nil && attackEnabled(c.InvalidMessage.Enabled) || c.Sink.Active() || c.Censorship != nil && c.Censorship.Active() || c.MessageDelay != nil && c.MessageDelay.Active() || c.ConnectionAttack != nil && attackEnabled(c.ConnectionAttack.Enabled) || c.GraftFlood != nil && attackEnabled(c.GraftFlood.Enabled) || c.IHaveSpam != nil && attackEnabled(c.IHaveSpam.Enabled) || c.IWantWithholding != nil && c.IWantWithholding.Active()
 }
 func (c NodeConfig) AttackSelectors() []*AttackSelector {
 	var values []*AttackSelector
+	if c.Forwarding != nil {
+		values = append(values, c.Forwarding.Targets)
+	}
+	if c.InvalidMessage != nil {
+		values = append(values, c.InvalidMessage.Targets)
+	}
 	if c.Censorship != nil {
 		values = append(values, c.Censorship.Publishers)
 	}
@@ -165,6 +186,8 @@ func mergeAttack[T any](base, overlay *T) *T {
 	return &result
 }
 func (c *NodeConfig) mergeAttacks(base, overlay NodeConfig) {
+	c.Forwarding = mergeAttack(base.Forwarding, overlay.Forwarding)
+	c.InvalidMessage = mergeAttack(base.InvalidMessage, overlay.InvalidMessage)
 	c.Sink = mergeAttack(base.Sink, overlay.Sink)
 	c.Censorship = mergeAttack(base.Censorship, overlay.Censorship)
 	c.MessageDelay = mergeAttack(base.MessageDelay, overlay.MessageDelay)
@@ -175,6 +198,13 @@ func (c *NodeConfig) mergeAttacks(base, overlay NodeConfig) {
 }
 func (c *NodeConfig) defaultAttacks() {
 	c.mergeAttacks(*c, NodeConfig{})
+	if c.Forwarding != nil {
+		c.Forwarding.Targets = normalizeAttackSelector(c.Forwarding.Targets)
+		c.Forwarding.ProbabilityAttack = c.Forwarding.ProbabilityAttack.WithDefaults()
+	}
+	if c.InvalidMessage != nil {
+		c.InvalidMessage.Targets = normalizeAttackSelector(c.InvalidMessage.Targets)
+	}
 	if c.Censorship != nil {
 		c.Censorship.Publishers = normalizeAttackSelector(c.Censorship.Publishers)
 	}
@@ -225,6 +255,19 @@ func (c *NodeConfig) defaultAttacks() {
 		}
 		if p.Interval == "" {
 			p.Interval = "1s"
+		}
+	}
+	if c.InvalidMessage != nil {
+		p := c.InvalidMessage
+		defaults(&p.ControlAttackConfig)
+		if p.Mode == "" {
+			p.Mode = "invalid-signature"
+		}
+		if p.MessagesPerPeer == nil {
+			p.MessagesPerPeer = intPointer(1)
+		}
+		if p.PayloadSize == nil {
+			p.PayloadSize = intPointer(256)
 		}
 	}
 	if c.GraftFlood != nil {
@@ -359,6 +402,16 @@ func (c NodeConfig) ValidateAttacks() error {
 			return err
 		}
 	}
+	if c.Forwarding != nil {
+		if err := topics(c.Forwarding.Topics, false); err != nil {
+			return err
+		}
+	}
+	if c.InvalidMessage != nil {
+		if err := controls(c.InvalidMessage.ControlAttackConfig); err != nil {
+			return err
+		}
+	}
 	if c.HasActiveAttacks() {
 		if c.GossipSub.Enabled == nil || !*c.GossipSub.Enabled || c.GossipSub.Router != "gossipsub" {
 			return fmt.Errorf("active attacks require enabled GossipSub")
@@ -374,6 +427,30 @@ func (c NodeConfig) ValidateAttacks() error {
 // them. Cross-field/router/topic requirements use the final effective config.
 func (c NodeConfig) ValidateAttackSyntax() error {
 	var topicLists [][]string
+	if c.Forwarding != nil {
+		topicLists = append(topicLists, c.Forwarding.Topics)
+		if err := c.Forwarding.ProbabilityAttack.Validate(); err != nil {
+			return fmt.Errorf("forwarding: %w", err)
+		}
+	}
+	if c.InvalidMessage != nil {
+		p := c.InvalidMessage
+		topicLists = append(topicLists, p.Topics)
+		if p.Mode != "" && p.Mode != "invalid-signature" && p.Mode != "malformed-protobuf" {
+			return fmt.Errorf("invalidMessage.mode must be invalid-signature or malformed-protobuf")
+		}
+		if p.MessagesPerPeer != nil && (*p.MessagesPerPeer < 1 || *p.MessagesPerPeer > 1024) {
+			return fmt.Errorf("invalidMessage.messagesPerPeer must be in [1, 1024]")
+		}
+		if p.PayloadSize != nil && (*p.PayloadSize < 1 || *p.PayloadSize > 1<<20) {
+			return fmt.Errorf("invalidMessage.payloadSize must be in [1, 1048576]")
+		}
+		if p.Interval != "" {
+			if err := pubsubDuration("invalidMessage.interval", p.Interval, true); err != nil {
+				return err
+			}
+		}
+	}
 	if c.Censorship != nil {
 		topicLists = append(topicLists, c.Censorship.Topics)
 	}

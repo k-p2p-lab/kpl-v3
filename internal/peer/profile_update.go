@@ -211,7 +211,7 @@ func (s *Server) profileStatusSnapshot(config model.NodeConfig) model.RuntimePro
 	snapshot := model.RuntimeProfileSnapshot(config)
 	if config.GossipSub.Enabled == nil || !*config.GossipSub.Enabled || config.GossipSub.Router != "gossipsub" {
 		snapshot.GossipSub = nil
-		snapshot.Sink, snapshot.Censorship, snapshot.MessageDelay = nil, nil, nil
+		snapshot.Forwarding, snapshot.Sink, snapshot.Censorship, snapshot.MessageDelay = nil, nil, nil, nil
 	}
 	if !s.config.NetworkMutable || config.Network.Scheduled() {
 		snapshot.Network = nil

@@ -14,6 +14,9 @@ import (
 type InboundMessageDecision struct {
 	Drop  bool
 	Delay time.Duration
+	// Tag is an opaque local observation token, such as a policy revision.
+	// It is not serialized or stored in the application's ValidatorData.
+	Tag uint64
 }
 type InboundMessagePolicyLimits struct {
 	// Active permits a dormant runtime policy without changing unsigned fast paths.
@@ -23,7 +26,20 @@ type InboundMessagePolicyLimits struct {
 	MaxPendingBytes    int
 	// Observe receives queued, released, overflow or canceled. It must not block.
 	Observe func(*Message, string)
+	// ObserveDecision preserves the selecting decision across delayed events.
+	// The original Observe callback remains supported independently.
+	ObserveDecision func(*Message, string, InboundMessageDecision)
 }
+
+func (p *inboundMessagePolicy) observe(msg *Message, event string, decision InboundMessageDecision) {
+	if p.limits.Observe != nil {
+		p.limits.Observe(msg, event)
+	}
+	if p.limits.ObserveDecision != nil {
+		p.limits.ObserveDecision(msg, event, decision)
+	}
+}
+
 type inboundMessagePolicy struct {
 	wg      sync.WaitGroup
 	decide  func(*Message) InboundMessageDecision
@@ -71,9 +87,7 @@ func (v *validation) applyInboundPolicy(msg *Message, resume func()) bool {
 	}
 	if policy.pending >= policy.limits.MaxPendingMessages || size > policy.limits.MaxPendingBytes-policy.bytes {
 		policy.mu.Unlock()
-		if policy.limits.Observe != nil {
-			policy.limits.Observe(msg, "overflow")
-		}
+		policy.observe(msg, "overflow", decision)
 		v.tracer.RejectMessage(msg, RejectValidationThrottled)
 		return true
 	}
@@ -81,9 +95,7 @@ func (v *validation) applyInboundPolicy(msg *Message, resume func()) bool {
 	policy.pending++
 	policy.bytes += size
 	policy.mu.Unlock()
-	if policy.limits.Observe != nil {
-		policy.limits.Observe(msg, "queued")
-	}
+	policy.observe(msg, "queued", decision)
 	go func() {
 		defer policy.wg.Done()
 		timer := time.NewTimer(decision.Delay)
@@ -100,9 +112,7 @@ func (v *validation) applyInboundPolicy(msg *Message, resume func()) bool {
 		policy.pending--
 		policy.bytes -= size
 		policy.mu.Unlock()
-		if policy.limits.Observe != nil {
-			policy.limits.Observe(msg, event)
-		}
+		policy.observe(msg, event, decision)
 		if event == "released" {
 			resume()
 		}

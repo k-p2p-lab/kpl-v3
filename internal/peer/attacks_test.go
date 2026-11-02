@@ -331,7 +331,7 @@ func TestAttackConnectionAcquiresOnlySelectedNewTransport(t *testing.T) {
 	}
 	defer target.Close()
 	runtime := servers[1].attacks
-	runtime.registry.Store(&attackRegistry{observedAt: time.Now(), targets: []model.AttackTarget{{NodeID: "target", Group: "victims", PeerID: target.ID().String(), Addresses: []string{target.Addrs()[0].String()}, Ready: true}}})
+	runtime.registry.Store(newAttackRegistry([]model.AttackTarget{{NodeID: "target", Group: "victims", PeerID: target.ID().String(), Addresses: []string{target.Addrs()[0].String()}, Ready: true}}, time.Now()))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { defer close(done); runtime.connectionLoop(ctx) }()
@@ -351,14 +351,14 @@ func TestAttackIdentityAmbiguityAndStaleEvidence(t *testing.T) {
 		t.Fatal("anonymous selected author accepted")
 	}
 	runtime := &attackRuntime{}
-	runtime.registry.Store(&attackRegistry{targets: rows, observedAt: time.Now()})
+	runtime.registry.Store(newAttackRegistry(rows, time.Now()))
 	if _, known := runtime.matchTransport(config.Censorship.Publishers, "transport"); known {
 		t.Fatal("ambiguous transport treated as known")
 	}
 	if _, known := runtime.matchPublisher(config.Censorship.Publishers, "shared"); known {
 		t.Fatal("ambiguous author treated as known")
 	}
-	runtime.registry.Store(&attackRegistry{targets: rows[:1], observedAt: time.Now().Add(-10 * time.Second)})
+	runtime.registry.Store(newAttackRegistry(rows[:1], time.Now().Add(-10*time.Second)))
 	if _, known := runtime.matchPublisher(config.Censorship.Publishers, "shared"); known {
 		t.Fatal("stale identity evidence used")
 	}

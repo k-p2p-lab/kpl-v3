@@ -253,6 +253,8 @@ type RPC struct {
 
 	// unexported on purpose, not sending this over the wire
 	from peer.ID
+	// A bounded experimental malformed frame, never supplied by received RPCs.
+	experimentalMalformed bool
 }
 
 type Option func(*PubSub) error

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +33,18 @@ func (s *Server) handleAttackTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
 	requesterID := strings.TrimSpace(r.URL.Query().Get("requesterNodeId"))
-	if runID == "" || requesterID == "" {
-		writeError(w, http.StatusBadRequest, "runId and requesterNodeId are required")
+	generation, generationErr := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+	if runID == "" || requesterID == "" || generationErr != nil {
+		writeError(w, http.StatusBadRequest, "runId, requesterNodeId and unsigned generation are required")
 		return
 	}
 	result := make([]model.AttackTarget, 0)
 	now := time.Now().UTC()
 	s.state.mu.RLock()
 	requester, exists := s.state.nodes[requesterID]
-	if !exists || requester.RunID != runID || requester.Role != "worker" || !nodeHasLiveState(requester) {
+	if !exists || requester.RunID != runID || requester.Generation != generation || requester.Role != "worker" || !nodeHasLiveState(requester) {
 		s.state.mu.RUnlock()
-		writeError(w, http.StatusConflict, "requester is not a live worker in this run")
+		writeError(w, http.StatusConflict, "requester is not a live worker in this run and generation")
 		return
 	}
 	s.state.mu.RUnlock()

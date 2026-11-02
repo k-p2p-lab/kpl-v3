@@ -87,9 +87,10 @@ type validation struct {
 
 // validation requests
 type validateReq struct {
-	vals []*validatorImpl
-	src  peer.ID
-	msg  *Message
+	vals               []*validatorImpl
+	src                peer.ID
+	msg                *Message
+	afterInboundPolicy bool
 }
 
 // representation of topic validators
@@ -248,7 +249,7 @@ func (v *validation) Push(src peer.ID, msg *Message) bool {
 
 	if len(vals) > 0 || msg.Signature != nil || v.p.inboundPolicyEnabled() {
 		select {
-		case v.validateQ <- &validateReq{vals, src, msg}:
+		case v.validateQ <- &validateReq{vals: vals, src: src, msg: msg}:
 		default:
 			log.Debugf("message validation throttled: queue full; dropping message from %s", src)
 			v.tracer.RejectMessage(msg, RejectValidationQueueFull)
@@ -282,7 +283,11 @@ func (v *validation) validateWorker() {
 	for {
 		select {
 		case req := <-v.validateQ:
-			v.validate(req.vals, req.src, req.msg, false)
+			if req.afterInboundPolicy {
+				v.validateAfterInboundPolicy(req.vals, req.src, req.msg, false)
+			} else {
+				v.validate(req.vals, req.src, req.msg, false)
+			}
 		case <-v.p.ctx.Done():
 			return
 		}
@@ -311,10 +316,26 @@ func (v *validation) validate(vals []*validatorImpl, src peer.ID, msg *Message, 
 		v.tracer.ValidateMessage(msg)
 	}
 
-	if v.applyInboundPolicy(msg, func() { _ = v.validateAfterInboundPolicy(vals, src, msg, synchronous) }) {
+	if v.applyInboundPolicy(msg, func() { v.resumeAfterInboundPolicy(vals, src, msg) }) {
 		return nil
 	}
 	return v.validateAfterInboundPolicy(vals, src, msg, synchronous)
+}
+
+// Delayed remote messages re-enter the same bounded worker queue without
+// repeating signature/seen-ID admission or the attack decision. Running inline
+// validators on timer goroutines would bypass WithValidateWorkers and permit
+// accumulating work after delay slots were released.
+func (v *validation) resumeAfterInboundPolicy(vals []*validatorImpl, src peer.ID, msg *Message) {
+	if v.p.ctx.Err() != nil {
+		return
+	}
+	select {
+	case v.validateQ <- &validateReq{vals: vals, src: src, msg: msg, afterInboundPolicy: true}:
+	case <-v.p.ctx.Done():
+	default:
+		v.tracer.RejectMessage(msg, RejectValidationQueueFull)
+	}
 }
 
 func (v *validation) validateAfterInboundPolicy(vals []*validatorImpl, src peer.ID, msg *Message, synchronous bool) error {

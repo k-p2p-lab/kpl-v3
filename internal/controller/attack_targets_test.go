@@ -31,7 +31,7 @@ func TestAttackTargetRegistryScopesIdentityAndReadiness(t *testing.T) {
 		s.handleAttackTargets(w, httptest.NewRequest(http.MethodGet, path, nil))
 		return w
 	}
-	prefix := "/api/v1/attack-targets?runId=run&requesterNodeId="
+	prefix := "/api/v1/attack-targets?runId=run&generation=2&requesterNodeId="
 	for _, id := range []string{"absent", "bootstrap", "retired"} {
 		if got := request(prefix + id); got.Code != http.StatusConflict {
 			t.Fatalf("requester %s accepted: %d", id, got.Code)
@@ -79,6 +79,23 @@ func TestAttackRegistryRequiresInternalAuthentication(t *testing.T) {
 	}
 }
 
+func TestAttackRegistryRejectsStaleCallerGeneration(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	s.state.mu.Lock()
+	s.state.setNodeLocked(model.Node{ID: "requester", RunID: "run", Generation: 3, Role: "worker", State: model.NodeReady, PeerID: "current-transport", Type: "full", Metadata: map[string]string{"pubsubEnabled": "true"}})
+	s.state.mu.Unlock()
+	for _, item := range []struct {
+		value  string
+		status int
+	}{{"3", http.StatusOK}, {"2", http.StatusConflict}, {"", http.StatusBadRequest}, {"-1", http.StatusBadRequest}, {"18446744073709551616", http.StatusBadRequest}, {"bad", http.StatusBadRequest}} {
+		w := httptest.NewRecorder()
+		s.handleAttackTargets(w, httptest.NewRequest(http.MethodGet, "/api/v1/attack-targets?runId=run&requesterNodeId=requester&generation="+item.value, nil))
+		if w.Code != item.status {
+			t.Fatalf("generation=%q status=%d want=%d body=%s", item.value, w.Code, item.status, w.Body.String())
+		}
+	}
+}
+
 type attackBlockedWriter struct {
 	header           http.Header
 	entered, release chan struct{}
@@ -96,7 +113,7 @@ func TestAttackRegistrySlowClientDoesNotHoldCacheLock(t *testing.T) {
 	s.state.mu.Lock()
 	s.state.setNodeLocked(model.Node{ID: "requester", RunID: "run", Role: "worker", State: model.NodeReady})
 	s.state.mu.Unlock()
-	path := "/api/v1/attack-targets?runId=run&requesterNodeId=requester"
+	path := "/api/v1/attack-targets?runId=run&requesterNodeId=requester&generation=0"
 	slow := &attackBlockedWriter{header: http.Header{}, entered: make(chan struct{}), release: make(chan struct{})}
 	firstDone := make(chan struct{})
 	go func() {

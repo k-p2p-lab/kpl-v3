@@ -1,4 +1,4 @@
-# Scenario schema v4. See https://github.com/k-p2p-lab/kpl-v3/wiki/Worker-Attacks
+# Scenario schema v4. See https://github.com/k-p2p-lab/kpl-v3/wiki/worker_attacks
 version: 4
 name: Static sink
 seed: 42

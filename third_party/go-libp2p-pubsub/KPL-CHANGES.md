@@ -10,7 +10,7 @@ These fields support exact P1, P3 and P3b observations: active mesh delivery pen
 
 ## HopWave
 
-The scholarly reference is [Sungwook Lee and Hongtaek Ju, HopWave, APNOMS 2026](https://github.com/k-p2p-lab/kpl-v3/wiki/Publications#hopwave-reference), **not yet published**.
+The scholarly reference is [Sungwook Lee and Hongtaek Ju, HopWave, APNOMS 2026](https://github.com/k-p2p-lab/kpl-v3/wiki/publications#hopwave-reference), **not yet published**.
 
 The implementation source used for this port is [kmu-comnet/go-libp2p-pubsub, hop-wave](https://github.com/kmu-comnet/go-libp2p-pubsub/tree/7f75a9dbee3d5e1e3a15a9d30fa8a428590af76c), revision `7f75a9dbee3d5e1e3a15a9d30fa8a428590af76c`. Its metadata changes also appear on master at `6d217e5a0eaed10816d8213626428e17575ec5f0`. `KPL-HOPWAVE-SHA256.json` records hashes of the eight changed source files at the hop-wave revision, relative to that fork's upstream v0.14.2 base. These are source provenance hashes, not checksums of this adapted copy. The four protobuf files at that base match v0.13.1; unrelated v0.14.2 changes and dependency upgrades are not included.
 
@@ -67,11 +67,11 @@ Normal heartbeat maintenance uses the new degrees without restarting PubSub. Fro
 
 Application checks all inputs before mutation, installs exactly one topic's requested neighbors, then freezes all current topic meshes in the same router event-loop callback. Other topics keep their existing members. It uses the requested membership regardless of automatic degree/score/backoff selection. Score and connection-manager accounting change only for added/removed neighbors; publication fanout is cleared for that topic, and the existing freeze control purge is reused. No wire GRAFT/PRUNE exchange or corresponding trace event is fabricated.
 
-Already frozen identical membership succeeds even after a link disappears; any different topic/membership returns `ErrMeshFreezeConflict`. Cancellation before application changes nothing; cancellation racing application may require snapshot inspection or retry. The calls are local and cannot establish an atomic distributed graph. KPL's scenario Controller prepares every target before dispatching installation. `kpl_mesh_plan_test.go` covers validation, cancellation, ownership, accounting, queues, other-topic preservation, retries and actual TCP forwarding. Generation models and control contracts are in the [scenario reference](https://github.com/k-p2p-lab/kpl-v3/wiki/Scenario-Reference#topology-formation).
+Already frozen identical membership succeeds even after a link disappears; any different topic/membership returns `ErrMeshFreezeConflict`. Cancellation before application changes nothing; cancellation racing application may require snapshot inspection or retry. The calls are local and cannot establish an atomic distributed graph. KPL's scenario Controller prepares every target before dispatching installation. `kpl_mesh_plan_test.go` covers validation, cancellation, ownership, accounting, queues, other-topic preservation, retries and actual TCP forwarding. Generation models and control contracts are in the [scenario reference](https://github.com/k-p2p-lab/kpl-v3/wiki/scenario_reference#topology-formation).
 
 ### Application and maintenance
 
-The root `go.mod` selects this local replacement; Docker copies it before dependency download. KPL exposes routing through `gossipsub.hopwave` and `gossipsub.params.hopwaveFactor` / `hopwaveInterval`. Operator and log contracts live in the wiki's [Protocol Options](https://github.com/k-p2p-lab/kpl-v3/wiki/Protocol-Options#hopwave).
+The root `go.mod` selects this local replacement; Docker copies it before dependency download. KPL exposes routing through `gossipsub.hopwave` and `gossipsub.params.hopwaveFactor` / `hopwaveInterval`. Operator and log contracts live in the wiki's [Protocol Options](https://github.com/k-p2p-lab/kpl-v3/wiki/protocol_options#hopwave).
 
 When upgrading PubSub, update the complete upstream copy and pristine manifest, then reapply the score inspection, HopWave, mesh-freeze/plan, runtime-parameter and resource-lifetime patches. Preserve licenses and reference provenance, regenerate protobuf bindings if schemas change, and run upstream score/signature tests, KPL component/retention/cap tests, mesh plan/freeze lifecycle/control tests, and HopWave forwarding/pull/signature tests under the race detector. KPL's HopWave and mesh network tests explicitly use TCP, Noise and Yamux, matching the application transport.
 

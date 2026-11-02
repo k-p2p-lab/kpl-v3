@@ -10,7 +10,7 @@ K-P2PLab includes a modified copy of go-libp2p-pubsub for GossipSub score observ
 - Upstream version: [v0.13.1](https://github.com/libp2p/go-libp2p-pubsub/tree/v0.13.1)
 - Upstream commit: [`68726389f2c07d451f93a210146472e2e11ac32f`](https://github.com/libp2p/go-libp2p-pubsub/commit/68726389f2c07d451f93a210146472e2e11ac32f)
 - Included source: [third_party/go-libp2p-pubsub](third_party/go-libp2p-pubsub)
-- HopWave paper: [Sungwook Lee and Hongtaek Ju, HopWave, APNOMS 2026](https://github.com/k-p2p-lab/kpl-v3/wiki/Publications#hopwave-reference); not yet published
+- HopWave paper: [Sungwook Lee and Hongtaek Ju, HopWave, APNOMS 2026](https://github.com/k-p2p-lab/kpl-v3/wiki/publications#hopwave-reference); not yet published
 - HopWave implementation source: [kmu-comnet/go-libp2p-pubsub, hop-wave revision `7f75a9d`](https://github.com/kmu-comnet/go-libp2p-pubsub/tree/7f75a9dbee3d5e1e3a15a9d30fa8a428590af76c), selectively adapted from its v0.14.2 base while retaining KPL's v0.13.1 baseline
 
 ### Licenses

@@ -161,8 +161,10 @@ func (r *telemetryReadProbe) Read(p []byte) (int, error) {
 
 func TestControllerTelemetryRejectsBeforeDecodingAndRetryCommits(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
-	if !s.acquireTelemetryDecoder(context.Background()) || !s.acquireTelemetryDecoder(context.Background()) {
-		t.Fatal("admission failed")
+	for range 2 {
+		if !s.acquireTelemetryDecoder(context.Background()) {
+			t.Fatal("admission failed")
+		}
 	}
 	s.telemetryWaiters.Store(telemetryAdmissionWaiters)
 	batch := model.EventBatch{Events: []model.TraceEvent{cohortPublish("one", "topic", []string{"b"})}}

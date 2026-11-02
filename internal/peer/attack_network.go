@@ -196,7 +196,7 @@ func (r *attackRuntime) ihaveLoop(ctx context.Context) {
 					sequence++
 					ids := make([]string, *c.IDsPerRPC)
 					for i := range ids {
-						hash := sha256.Sum256([]byte(fmt.Sprintf("kpl-bogus-ihave:%d:%s:%s:%s:%d:%d", r.server.config.Seed, r.server.config.Node.ID, id, topic, sequence, i)))
+						hash := sha256.Sum256(fmt.Appendf(nil, "kpl-bogus-ihave:%d:%s:%s:%s:%d:%d", r.server.config.Seed, r.server.config.Node.ID, id, topic, sequence, i))
 						ids[i] = hex.EncodeToString(hash[:])
 					}
 					r.count("ihaveSpam", "generatedRPCs", 1)

@@ -149,8 +149,8 @@ func BenchmarkJoinPreparationBeforeRejectedAdmission(b *testing.B) {
 	phase := scenario.Phase{Action: "join", Group: "workers", Role: "worker", NodeType: "full", Count: 5000, Node: config,
 		Lifetime: scenario.Distribution{Model: "pareto", XM: "1s", Alpha: 2.5, Max: "3s"}}
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		if err := s.runJoin(context.Background(), "run", 1, phase, rand.New(rand.NewSource(42))); err == nil {
 			b.Fatal("fixture must reject the first dispatch")
 		}

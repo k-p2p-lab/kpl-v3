@@ -31,7 +31,7 @@ func sourceSampleOffsets(name string, size int64) []int64 {
 	}
 	positions := map[int64]bool{0: true, size - sourceSampleSize: true}
 	for i := 0; len(positions) < int(sourceSampleCount); i++ {
-		seed := sha256.Sum256([]byte(fmt.Sprintf("kpl-source-samples-v1:%s:%d:%d", name, size, i)))
+		seed := sha256.Sum256(fmt.Appendf(nil, "kpl-source-samples-v1:%s:%d:%d", name, size, i))
 		positions[int64(binary.LittleEndian.Uint64(seed[:8])%uint64(size-sourceSampleSize+1))] = true
 	}
 	offsets := make([]int64, 0, len(positions))

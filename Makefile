@@ -1,5 +1,6 @@
 .PHONY: build test test-linux check-swarm swarm-init swarm-deploy swarm-status swarm-add-node swarm-remove-node swarm-remove validate
 .PHONY: swarm-nodes swarm-configure swarm-config swarm-credentials swarm-login swarm-publish swarm-check swarm-access swarm-logs swarm-scenario
+.PHONY: swarm-restart swarm-reset-network
 
 build:
 	go build -o bin/kpl ./cmd/kpl
@@ -66,10 +67,7 @@ swarm-reset-network:
 	sh scripts/swarm.sh reset-peer-network
 
 swarm-restart:
-	sh scripts/swarm.sh remove
-	sleep 5
-	sh scripts/swarm.sh publish
-	sh scripts/swarm.sh deploy $(if $(strip $(NODES)),$(NODES),--workers)
+	sh scripts/swarm.sh restart $(if $(strip $(PLATFORMS)),--platforms $(PLATFORMS)) $(NODES)
 
 validate:
 	go run ./cmd/kpl validate --scenario examples/smoke.yaml

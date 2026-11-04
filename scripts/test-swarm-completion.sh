@@ -55,7 +55,7 @@ lacks() {
 empty() { [[ ${#COMPREPLY[@]} == 0 ]]; }
 
 complete_words swarm ''
-for command in init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove reset-peer-network help --help --env-file; do has "$command"; done
+for command in init configure config credentials nodes login publish check access logs scenario deploy restart status add-node remove-node remove reset-peer-network help --help --env-file; do has "$command"; done
 complete_words swarm lo
 has logs; has login; lacks deploy
 complete_words swarm --env-file
@@ -94,6 +94,14 @@ complete_words swarm publish --platforms linux/amd64,linux/ar
 has linux/amd64,linux/arm64
 complete_words swarm publish --platforms linux/amd64 ''
 empty
+complete_words swarm restart --p
+has --platforms
+calls_before_platforms=$(wc -l < "$KPL_COMPLETION_CALLS")
+complete_words swarm restart --platforms linux/a
+has linux/amd64; has linux/arm64; lacks worker-a; lacks --workers
+complete_words swarm restart --platforms linux/amd64,linux/ar
+has linux/amd64,linux/arm64
+[[ $(wc -l < "$KPL_COMPLETION_CALLS") == "$calls_before_platforms" ]]
 
 # Node/selector completion respects mutually exclusive selector syntax and
 # suppresses nodes already present by ID or hostname.
@@ -110,6 +118,22 @@ has worker-b; lacks worker-a; lacks idworker1; lacks --workers
 complete_words swarm --env-file custom.env deploy idworker1 ''
 has worker-b; lacks worker-a; lacks idworker1
 complete_words swarm deploy --workers ''
+empty
+complete_words swarm restart --
+has --platforms; has --workers; has --all; has --all-excluding-self
+complete_words swarm restart worker
+has worker-a; has worker-b
+complete_words swarm restart worker-a ''
+has worker-b; lacks worker-a; lacks idworker1; lacks --platforms; lacks --workers
+complete_words swarm restart --workers ''
+empty
+complete_words swarm restart --platforms linux/amd64 --
+has --workers; has --all; has --all-excluding-self; lacks --platforms
+complete_words swarm restart --platforms linux/amd64 worker
+has worker-a; has worker-b
+complete_words swarm --env-file custom.env restart --platforms linux/amd64,linux/arm64 idworker1 ''
+has worker-b; lacks worker-a; lacks idworker1; lacks --platforms; lacks --workers
+complete_words swarm restart --platforms linux/amd64 --all ''
 empty
 complete_words swarm reset-peer-network ''
 empty

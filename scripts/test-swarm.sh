@@ -40,7 +40,9 @@ case "$1 ${2:-}" in
         [ "$#" = 4 ] && [ "$4" = "$KPL_TEST_REPO_ROOT" ] || die "$@"
         [ "${DOCKER_DEFAULT_PLATFORM+x}" != x ] || die 'DOCKER_DEFAULT_PLATFORM reached build'
         event image-build
-        if [ "${KPL_TEST_BUILD_FAIL:-0}" = 1 ]; then printf 'mock image build failed\n' >&2; exit 1; fi ;;
+        if [ "${KPL_TEST_BUILD_FAIL:-0}" = 1 ]; then printf 'mock image build failed\n' >&2; exit 1; fi
+        if [ -n "${KPL_TEST_AFTER_BUILD_DOWN_NODE:-}" ]; then : > "$s/post-build-down-$KPL_TEST_AFTER_BUILD_DOWN_NODE"; fi
+        if [ "${KPL_TEST_AFTER_BUILD_FAILED_TASK:-0}" = 1 ]; then : > "$s/post-build-failed-task"; fi ;;
     'push '*)
         [ "$#" = 2 ] || die "$@"
         [ "${DOCKER_DEFAULT_PLATFORM+x}" != x ] || die 'DOCKER_DEFAULT_PLATFORM reached push'
@@ -97,10 +99,10 @@ case "$1 ${2:-}" in
         case "$last" in
             svccontroller|"${stack}_controller") name=${stack}_controller ;;
             svcagent|"${stack}_agent") name=${stack}_agent ;;
-            svcprometheus) name=${stack}_prometheus ;;
-            svcgrafana) name=${stack}_grafana ;;
-            svcmonitor) name=${stack}_resource-monitor ;;
-            svcnetwork) name=${stack}_network-manager ;;
+            svcprometheus|"${stack}_prometheus") name=${stack}_prometheus ;;
+            svcgrafana|"${stack}_grafana") name=${stack}_grafana ;;
+            svcmonitor|"${stack}_resource-monitor") name=${stack}_resource-monitor ;;
+            svcnetwork|"${stack}_network-manager") name=${stack}_network-manager ;;
             *) die "$@" ;;
         esac
         case "$4" in
@@ -115,8 +117,11 @@ case "$1 ${2:-}" in
     'service ps')
         [ "${KPL_TEST_EMPTY_HISTORY:-0}" = 0 ] || exit 0
         case "$last" in
-            "${stack}_network-manager") printf 'taskN\n' ;;
-            "${stack}_controller")
+            svcnetwork|"${stack}_network-manager") printf 'taskN\n' ;;
+            svcprometheus|"${stack}_prometheus") printf 'taskP\n' ;;
+            svcgrafana|"${stack}_grafana") printf 'taskG\n' ;;
+            svcmonitor|"${stack}_resource-monitor") printf 'taskM\n' ;;
+            svccontroller|"${stack}_controller")
                 case "$*" in
                     *desired-state=running*) printf '%s\n' "${KPL_TEST_LOG_TASKS-taskC}"; exit 0 ;;
                 esac
@@ -124,14 +129,16 @@ case "$1 ${2:-}" in
                 # introduces an unassigned replacement ahead of it in history.
                 if [ -f "$s/controller-stopped" ]; then printf 'pendingC\n'; fi
                 printf 'taskC\n' ;;
-            "${stack}_agent")
+            svcagent|"${stack}_agent")
                 case "$*" in
                     *node=worker1*) printf 'taskA1\noldA1\n' ;;
                     *node=worker2*) printf 'taskA2\n' ;;
                     *node=control1*) printf 'taskA-control1\n' ;;
                     *node=manager2*) printf 'taskA-manager2\n' ;;
                     *node=unlabeled1*) printf 'taskA-unlabeled1\n' ;;
-                    *) printf 'taskA1\noldA1\ntaskA2\n' ;;
+                    *)
+                        if [ "${KPL_TEST_LATE_TASK:-0}" = 1 ] && [ -f "$s/stopped-worker1" ]; then printf 'lateA1\n'; fi
+                        printf 'taskA1\noldA1\ntaskA2\n' ;;
                 esac ;;
             *) die "$@" ;;
         esac ;;
@@ -169,7 +176,19 @@ case "$1 ${2:-}" in
         case "$last" in
             taskN)
                 node=control1; container=containerN
-                if [ -f "$s/manager-stopped" ]; then state=shutdown; pid=0; fi ;;
+                if [ -f "$s/manager-stopped" ]; then
+                    state=shutdown; pid=0
+                    if [ "${KPL_TEST_MANAGER_STOP:-clean}" = failed ]; then state=failed; code=1; issue=error; fi
+                fi ;;
+            taskP|taskG|taskM)
+                node=control1; container=container$last
+                case "$last" in taskP) component=prometheus ;; taskG) component=grafana ;; taskM) component=resource-monitor ;; esac
+                if [ -f "$s/stopped-$component" ]; then
+                    state=shutdown; pid=0
+                    if [ "${KPL_TEST_OTHER_STOP:-clean}" = "$component" ]; then state=failed; code=1; issue=error; fi
+                fi ;;
+            lateA1)
+                node=worker1; container=lateContainer; state=failed; code=1; issue=error ;;
             pendingC)
                 [ -f "$s/controller-stopped" ] || die "$@"
                 node=''; state=${KPL_TEST_PENDING_STATE:-pending}
@@ -199,7 +218,7 @@ case "$1 ${2:-}" in
                 if [ -f "$s/rejected-$node" ]; then state=rejected; pid=42; issue=error; fi ;;
             oldA1)
                 node=worker1; container=oldContainer; state=shutdown; pid=0
-                if [ "${KPL_TEST_OLD_FAILED:-0}" = 1 ]; then state=failed; code=1; issue=error; fi ;;
+                if [ "${KPL_TEST_OLD_FAILED:-0}" = 1 ] || [ -f "$s/post-build-failed-task" ]; then state=failed; code=1; issue=error; fi ;;
             *) die "$@" ;;
         esac
         if [ "$last" != oldA1 ] && [ "$state" = shutdown ] && [ "$code" = 0 ] && [ ! -f "$s/clean-$last" ]; then
@@ -226,6 +245,7 @@ case "$1 ${2:-}" in
                 drained1) availability=drain ;;
             esac
             if [ "${KPL_TEST_DOWN_NODE:-}" = "$node" ]; then state=down; fi
+            if [ -f "$s/post-build-down-$node" ]; then state=down; fi
             case "$format" in
                 '{{.ID}}') printf '%s\n' "$node" ;;
                 '{{.Status.State}}') printf '%s\n' "$state" ;;
@@ -287,19 +307,30 @@ case "$1 ${2:-}" in
         fi ;;
     'service update')
         [ "$3 $4" = '--detach=true --no-resolve-image' ] || die "$@"
-        if [ "$last" = "${stack}_network-manager" ]; then
+        if [ "$last" = "${stack}_network-manager" ] || [ "$last" = svcnetwork ]; then
             [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
             event pause-manager; : > "$s/manager-stopped"
             exit 0
         fi
-        if [ "$last" = "${stack}_agent" ] && [ "$6" = node.role==manager ]; then
+        if { [ "$last" = "${stack}_agent" ] || [ "$last" = svcagent ]; } && [ "$6" = node.role==manager ]; then
             [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
             event pause-agents; : > "$s/stopped-worker1"; : > "$s/stopped-worker2"
             exit 0
         fi
-        if [ "$last" = "${stack}_controller" ]; then
+        if [ "$last" = "${stack}_controller" ] || [ "$last" = svccontroller ]; then
             [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
             event pause-controller; : > "$s/controller-stopped"
+            exit 0
+        fi
+        case "$last" in
+            svcprometheus|"${stack}_prometheus") component=prometheus ;;
+            svcgrafana|"${stack}_grafana") component=grafana ;;
+            svcmonitor|"${stack}_resource-monitor") component=resource-monitor ;;
+            *) component='' ;;
+        esac
+        if [ -n "$component" ]; then
+            [ "$#" = 9 ] && [ "$5 $6 $7 $8" = '--constraint-add node.role==manager --constraint-add node.role==worker' ] || die "$@"
+            event "pause-$component"; : > "$s/stopped-$component"
             exit 0
         fi
         [ "$last" = "${stack}_agent" ] || die "$@"
@@ -361,6 +392,8 @@ reset_case() {
     export KPL_TEST_REPO_ROOT=$root
     unset KPL_TEST_NETWORK_MANAGER KPL_TEST_FOREIGN KPL_TEST_FOREIGN_STACK KPL_TEST_DOWN_NODE KPL_TEST_CONTROLLER_STOP KPL_TEST_AGENT_STOP KPL_TEST_EMPTY_STACK KPL_TEST_NO_NETWORK KPL_MIN_AGENTS KPL_TEST_FINAL_LIST_FAIL KPL_TEST_INSPECT_FAIL KPL_TEST_EMPTY_HISTORY KPL_TEST_OLD_FAILED KPL_TEST_PENDING_STATE KPL_TEST_PENDING_CONTAINER KPL_TEST_PULL_DIGEST KPL_TEST_PULL_FAULT KPL_IMAGE_PULL_TIMEOUT DOCKER_DEFAULT_PLATFORM
     unset KPL_TEST_CONTROLLER_NODE KPL_TEST_LOG_CONTEXT_NODE KPL_TEST_LOG_TASKS KPL_TEST_LOG_EXEC_FAIL
+    unset KPL_TEST_MANAGER_STOP KPL_TEST_OTHER_STOP KPL_TEST_LATE_TASK
+    unset KPL_TEST_AFTER_BUILD_DOWN_NODE KPL_TEST_AFTER_BUILD_FAILED_TASK
     unset KPL_TEST_SLOW_STOP_INSPECT KPL_TEST_SERVICE_RM_FAIL KPL_TEST_STACK_RM_FAIL KPL_TEST_REMOVAL_PENDING KPL_TEST_NODE_UPDATE_FAIL
     unset KPL_TEST_SELF_ID KPL_TEST_NODE_IDS KPL_TEST_LABEL_NODES KPL_TEST_NODE_LS_FAIL KPL_TEST_NODE_INSPECT_FAIL
     unset KPL_PEER_SUBNET KPL_IMAGE_BUILD_TIMEOUT KPL_IMAGE_PUSH_TIMEOUT KPL_TEST_BUILD_FAIL KPL_TEST_PUSH_FAIL KPL_TEST_EXPECT_CONTEXT DOCKER_CONTEXT KPL_TEST_NETWORK_SUBNET KPL_TEST_CONTROL_ADDR KPL_TEST_WORKER1_ADDR KPL_TEST_WORKER2_ADDR KPL_HTTP_PORT KPL_AGENT_METRICS_PORT PROMETHEUS_PORT GRAFANA_PORT
@@ -1052,6 +1085,155 @@ for platforms in '' linux 'linux/amd64,' ',linux/arm64' 'linux/amd64,,linux/arm6
     [ ! -s "$KPL_TEST_STATE/calls" ]
 done
 
+# Restart builds and resolves the new image before interrupting any service.
+# It then stops the Controller while Agents still accept cleanup requests,
+# verifies Agent exits, and restarts the remaining owned services without
+# deleting the stack, its networks, configs, gateway or placement labels.
+no_restart_interruption() {
+    ! grep -q '^pause-\|^stack-deploy$\|^service-rm-\|^stack-rm$\|^gateway-remove$\|^label-\|^unlabel-' "$KPL_TEST_STATE/events"
+}
+no_restart_deletion() {
+    ! grep -q '^service rm \|^stack rm \|^network rm \|^config rm \|^volume rm \|^rm --force ' "$KPL_TEST_STATE/calls"
+}
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_NETWORK_MANAGER=1
+run restart
+awk '
+    /^image-build$/ { build=NR }
+    /^image-push$/ { push=NR }
+    /^pause-controller$/ { controller=NR }
+    /^clean-taskC$/ { controller_clean=NR }
+    /^pause-agents$/ { agents=NR }
+    /^clean-taskA1$/ { agent1_clean=NR }
+    /^clean-taskA2$/ { agent2_clean=NR }
+    /^pause-(manager|prometheus|grafana|resource-monitor)$/ {
+        if (!agent1_clean || !agent2_clean || NR<agent1_clean || NR<agent2_clean) invalid=1
+        others++
+    }
+    /^clean-task(N|P|G|M)$/ { others_clean++ }
+    /^stack-deploy$/ {
+        if (others!=4 || others_clean!=4) invalid=1
+        deployed=NR
+    }
+    END { exit !(!invalid && build<push && push<controller && controller<controller_clean && controller_clean<agents && agents<agent1_clean && agents<agent2_clean && deployed) }
+' "$KPL_TEST_STATE/events"
+awk '/^pull / { pulled=NR } /^service update / { if (!pulled || NR<pulled) exit 1 } END { if (!pulled) exit 1 }' "$KPL_TEST_STATE/calls"
+[ "$(grep -c '^stack-deploy$' "$KPL_TEST_STATE/events")" = 1 ]
+! grep -q '^node update ' "$KPL_TEST_STATE/calls"
+grep -Fxq 'registry.example/kpl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$KPL_TEST_STATE/deploy-images"
+no_restart_deletion
+
+# Both publication failure stages and failed registry resolution leave the old
+# deployment running, including malformed or ambiguous digest responses.
+for fault in KPL_TEST_BUILD_FAIL=1 KPL_TEST_PUSH_FAIL=1 KPL_TEST_PULL_FAULT=fail KPL_TEST_PULL_FAULT=missing KPL_TEST_PULL_FAULT=multiple; do
+    reset_case
+    export KPL_IMAGE=registry.example/kpl:v3 "$fault"
+    reject restart
+    no_restart_interruption
+    no_restart_deletion
+done
+
+# Invalid existing state or insufficient final placement is detected before
+# the first pause, even when explicit target nodes would otherwise be added.
+for fault in KPL_TEST_FOREIGN=1 KPL_TEST_EMPTY_STACK=1 KPL_TEST_EMPTY_HISTORY=1 KPL_TEST_NO_NETWORK=1 KPL_TEST_DOWN_NODE=worker2 KPL_TEST_OLD_FAILED=1 KPL_MIN_AGENTS=3 KPL_TEST_NODE_LS_FAIL=1; do
+    reset_case
+    export KPL_IMAGE=registry.example/kpl:v3 "$fault"
+    reject restart
+    no_restart_interruption
+done
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_PEER_SUBNET=10.61.0.0/24
+reject restart worker-a
+no_restart_interruption
+reset_case
+reject restart
+no_restart_interruption
+
+# A build may take minutes. Refresh node/task preflight after publishing so
+# failures that occurred during the build never start a partial shutdown.
+for fault in KPL_TEST_AFTER_BUILD_DOWN_NODE=worker2 KPL_TEST_AFTER_BUILD_FAILED_TASK=1; do
+    reset_case
+    export KPL_IMAGE=registry.example/kpl:v3 "$fault"
+    reject restart
+    grep -qx 'image-push' "$KPL_TEST_STATE/events"
+    no_restart_interruption
+done
+
+# An unclean Controller may still be recording final telemetry. Do not stop
+# Agents or resume any service when this first drain fails.
+for stop_state in failed nonzero; do
+    reset_case
+    export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_CONTROLLER_STOP=$stop_state
+    reject restart
+    grep -qx 'pause-controller' "$KPL_TEST_STATE/events"
+    ! grep -q '^pause-agents$\|^stack-deploy$' "$KPL_TEST_STATE/events"
+    no_restart_deletion
+done
+
+# Cleanup failures and late scheduler replacements keep the paused stack
+# inspectable instead of accidentally creating new Agents or Peers.
+for fault in KPL_TEST_AGENT_STOP=failed KPL_TEST_LATE_TASK=1 KPL_TEST_MANAGER_STOP=failed KPL_TEST_OTHER_STOP=prometheus; do
+    reset_case
+    export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_NETWORK_MANAGER=1 "$fault"
+    reject restart
+    grep -qx 'clean-taskC' "$KPL_TEST_STATE/events"
+    ! grep -q '^stack-deploy$' "$KPL_TEST_STATE/events"
+    no_restart_deletion
+done
+
+# Controller drain uses its own timeout, bounded further per Docker call.
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_DOCKER_TIMEOUT=30 KPL_CONTROLLER_STOP_TIMEOUT=1 KPL_TEST_SLOW_STOP_INSPECT=1
+reject restart
+grep -q -- '-s TERM -k 5 1 docker inspect --type task .* taskC$' "$KPL_TEST_STATE/timeouts"
+! grep -q '^pause-agents$\|^stack-deploy$' "$KPL_TEST_STATE/events"
+no_restart_deletion
+
+# Bare restart reuses existing Manager/worker labels. Explicit targets remain
+# additive, matching deploy, and multi-platform publication is passed through.
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_LABEL_NODES='control1 worker1'
+run restart
+! grep -q '^node update ' "$KPL_TEST_STATE/calls"
+no_restart_deletion
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_LABEL_NODES=worker1 KPL_MIN_AGENTS=2
+run restart --platforms linux/amd64,linux/arm64 worker-b
+grep -Fxq "buildx build --platform linux/amd64,linux/arm64 --tag registry.example/kpl:v3 --push $root" "$KPL_TEST_STATE/calls"
+[ "$(grep -c '^label-worker2$' "$KPL_TEST_STATE/events")" = 1 ]
+! grep -q '^unlabel-\|^label-worker1$' "$KPL_TEST_STATE/events"
+grep -qx 'stack-deploy' "$KPL_TEST_STATE/events"
+no_restart_deletion
+reset_case
+export KPL_IMAGE=registry.example/kpl:v3 KPL_TEST_NODE_IDS='control1 worker1 worker2'
+run restart --workers
+grep -qx 'label-worker1' "$KPL_TEST_STATE/events"
+grep -qx 'label-worker2' "$KPL_TEST_STATE/events"
+! grep -q '^label-control1$' "$KPL_TEST_STATE/events"
+
+# Make must delegate once, preserve multi-platform/placement arguments, and
+# execute even when a file happens to have the target name. No Docker is used.
+make_project=$scratch/make-restart
+mkdir -p "$make_project/scripts"
+cp "$root/Makefile" "$make_project/Makefile"
+cat > "$make_project/scripts/swarm.sh" <<'MAKE_RESTART'
+#!/bin/sh
+printf '%s\n' "$@" >> "$KPL_TEST_STATE/make-args"
+exit "${KPL_TEST_MAKE_EXIT:-0}"
+MAKE_RESTART
+: > "$make_project/swarm-restart"
+reset_case
+make --no-print-directory -C "$make_project" swarm-restart PLATFORMS=linux/amd64,linux/arm64 NODES='worker-a worker-b' > "$KPL_TEST_STATE/output" 2>&1
+printf 'restart\n--platforms\nlinux/amd64,linux/arm64\nworker-a\nworker-b\n' > "$scratch/expected"
+cmp "$scratch/expected" "$KPL_TEST_STATE/make-args"
+reset_case
+make --no-print-directory -C "$make_project" swarm-restart > "$KPL_TEST_STATE/output" 2>&1
+printf 'restart\n' > "$scratch/expected"
+cmp "$scratch/expected" "$KPL_TEST_STATE/make-args"
+reset_case
+if KPL_TEST_MAKE_EXIT=7 make --no-print-directory -C "$make_project" swarm-restart > "$KPL_TEST_STATE/output" 2>&1; then exit 1; fi
+cmp "$scratch/expected" "$KPL_TEST_STATE/make-args"
+
 # An arbitrary config within the Docker build context must never be sent to
 # the daemon. Use a scratch repository so readonly source mounts stay intact.
 reset_case
@@ -1150,7 +1332,7 @@ no_mutation
 [ ! -e "$KPL_TEST_STATE/config-public-urls" ]
 
 # New helper flags and arity are also validated before contacting Docker.
-for arguments in 'nodes --all' 'login unexpected' 'publish --platforms' 'publish --unknown' 'publish --platforms linux/amd64 extra' 'check extra' 'access extra' 'logs unknown' 'logs --follow' 'logs access --tail' 'logs auth --tail -1' 'logs auth --tail 0' 'logs auth --tail 01' 'logs auth --tail 1x' 'logs access --tail 999999999999999999999999999' 'logs access --context' 'logs access --context --tail' 'logs controller --context controller-node' 'logs auth extra' 'scenario --unknown'; do
+for arguments in 'nodes --all' 'login unexpected' 'publish --platforms' 'publish --unknown' 'publish --platforms linux/amd64 extra' 'restart --platforms' 'restart --platforms windows/amd64' 'restart --platforms linux/amd64 --platforms linux/arm64' 'restart --workers worker-a' 'restart --workers --all' 'restart --unknown' 'check extra' 'access extra' 'logs unknown' 'logs --follow' 'logs access --tail' 'logs auth --tail -1' 'logs auth --tail 0' 'logs auth --tail 01' 'logs auth --tail 1x' 'logs access --tail 999999999999999999999999999' 'logs access --context' 'logs access --context --tail' 'logs controller --context controller-node' 'logs auth extra' 'scenario --unknown'; do
     reset_case
     # Intentional splitting of fixed argument fixtures.
     reject $arguments
@@ -1172,4 +1354,4 @@ no_mutation
 
 sh "$root/scripts/test-swarm-peer-network.sh"
 sh "$root/scripts/test-swarm-network-gateway.sh"
-printf '%s\n' 'PASS: Manager commands enforce direct stack removal, verified node cleanup, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'
+printf '%s\n' 'PASS: Manager commands enforce verified staged restart, direct stack removal, verified node cleanup, stack ownership, safe node selectors, deduplicated placement, literal config, and fresh tag-to-digest resolution before deployment mutations.'

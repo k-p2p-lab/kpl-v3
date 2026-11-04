@@ -18,6 +18,7 @@ Usage: sh scripts/swarm.sh [--env-file PATH] COMMAND [NODE... | SELECTOR]
   logs [COMPONENT] [--tail N|all] [--context NAME]  Show service or web logs
   scenario [FILE]      Print a scenario (default: examples/swarm-smoke.yaml)
   deploy [NODE... | SELECTOR]  Deploy; bare deploy reuses existing Agent labels
+  restart [--platforms CSV] [NODE... | SELECTOR]  Publish, stop cleanly, redeploy
   status               Show services, Agent tasks and selected nodes
   add-node NODE... | SELECTOR     Enable one Agent per selected Linux node
   remove-node NODE... | SELECTOR  Stop Agents and wait for their Peer cleanup
@@ -29,7 +30,7 @@ Use one selector without NODE arguments:
   --all                 All nodes, including managers
   --all-excluding-self  All except the current Docker daemon's Swarm node
   --workers             Worker nodes only
-Deploy/add selectors skip nodes that are not Linux, Ready and Active.
+Deploy/restart/add selectors skip nodes that are not Linux, Ready and Active.
 Remove selectors target only this stack's labeled Agents; unavailable targets fail.
 Selection uses the current cluster snapshot, not nodes that join later.
 KPL_IMAGE accepts an explicit tag or digest; deploy resolves tags without editing the file.
@@ -37,6 +38,13 @@ KPL_IMAGE_PULL_TIMEOUT sets the tag pull timeout in seconds (default: 300).
 KPL_IMAGE_BUILD_TIMEOUT and KPL_IMAGE_PUSH_TIMEOUT default to 1800 and 600 seconds.
 KPL_PEER_SUBNET optionally fixes the Peer network's IPv4 CIDR at creation.
 Publish uses the repository root; --platforms requires a configured Buildx builder.
+Restart requires an existing Controller and Agent service and a mutable image tag.
+It preserves placement labels by default; nodes/selectors add to that selection.
+It prepares the image before stopping services and verifies Controller cleanup first.
+KPL_CONTROLLER_STOP_TIMEOUT bounds each Controller stop check (default: 660s).
+Other restart stop checks use KPL_AGENT_STOP_TIMEOUT (default: 240s).
+Failed stop checks retain already-paused services for inspection; no redeployment is submitted.
+Restart retains volumes, networks, configs and the standalone network gateway.
 Bash completion: source scripts/activate-swarm.sh, then use swarm COMMAND.
 Log components: controller (default), agent, network-manager, resource-monitor, prometheus, grafana, access, auth.
 Logs default to the last 100 lines; --tail all prints all available lines.
@@ -66,7 +74,7 @@ command_name=${1:-help}
 case "$command_name" in
     help|-h|--help) usage; exit 0 ;;
     init|configure|config|credentials) swarm_config_command "$command_name" "$@"; exit ;;
-    deploy|status|add-node|remove-node|remove|reset-peer-network|nodes|login|publish|check|access|logs|scenario) ;;
+    deploy|restart|status|add-node|remove-node|remove|reset-peer-network|nodes|login|publish|check|access|logs|scenario) ;;
     *) usage >&2; fail "Unknown command: $command_name" ;;
 esac
 case "$command_name" in
@@ -115,10 +123,10 @@ case "$command_name" in
             *) fail '--context is only supported for access/auth file reads.' ;;
         esac
         ;;
-    publish)
+    publish|restart)
         publish_platforms=''
-        if [ "$#" -gt 0 ]; then
-            [ "$#" -eq 2 ] && [ "$1" = --platforms ] || fail 'Usage: publish [--platforms linux/amd64,linux/arm64]'
+        if [ "${1:-}" = --platforms ]; then
+            [ "$#" -ge 2 ] || fail '--platforms needs a Linux platform list.'
             publish_platforms=$2
             case "$publish_platforms" in ''|,*|*,|*,,*|*[!a-z0-9_/,.-]*) fail 'Invalid platform list.' ;; esac
             # Accept explicit Linux OS/architecture[/variant] tuples only.
@@ -128,8 +136,11 @@ case "$command_name" in
                     if (n < 2 || n > 3 || part[1] != "linux" || part[2] !~ /^[a-z0-9][a-z0-9_]*$/ || (n == 3 && part[3] !~ /^[a-z0-9][a-z0-9_.-]*$/)) exit 1
                 } }
             ' || fail 'Platforms must be Linux OS/architecture[/variant] tuples.'
+            shift 2
         fi
-        set --
+        if [ "$command_name" = publish ]; then
+            [ "$#" -eq 0 ] || fail 'Usage: publish [--platforms linux/amd64,linux/arm64]'
+        fi
         ;;
 esac
 # Reject ambiguous selectors and options before contacting Docker or loading config.
@@ -165,10 +176,14 @@ image_pull_timeout=${KPL_IMAGE_PULL_TIMEOUT:-300}
 image_build_timeout=${KPL_IMAGE_BUILD_TIMEOUT:-1800}
 image_push_timeout=${KPL_IMAGE_PUSH_TIMEOUT:-600}
 agent_timeout=${KPL_AGENT_STOP_TIMEOUT:-240}
+controller_timeout=${KPL_CONTROLLER_STOP_TIMEOUT:-660}
 for number in "$docker_timeout" "$image_pull_timeout" "$image_build_timeout" "$image_push_timeout" "$agent_timeout" "$KPL_MIN_AGENTS"; do
     case "$number" in ''|0*|*[!0-9]*) fail 'Timeouts and KPL_MIN_AGENTS must be positive integers without leading zeros.' ;; esac
     [ "$number" -gt 0 ] 2>/dev/null || fail 'Integer is out of range.'
 done
+if [ "$command_name" = restart ]; then
+    swarm_validate_setting KPL_CONTROLLER_STOP_TIMEOUT "$controller_timeout"
+fi
 swarm_validate_port_conflicts
 export KPL_STACK_NAME KPL_PEER_NETWORK KPL_PEER_SUBNET KPL_MIN_AGENTS
 agent_label=kpl.$KPL_STACK_NAME.agent
@@ -213,6 +228,28 @@ check_publish_context() {
     check_publish_config_path "$config_path"
     check_publish_config_path "$config_real_path"
 }
+publish_image() {
+    : "${KPL_IMAGE:?Set KPL_IMAGE in .env.swarm or environment}"
+    swarm_validate_setting KPL_IMAGE "$KPL_IMAGE"
+    case "$KPL_IMAGE" in *@*) fail 'Publish requires a mutable image tag, not a digest.' ;; esac
+    check_publish_context
+    if [ -n "$publish_platforms" ]; then
+        (
+            unset DOCKER_DEFAULT_PLATFORM
+            timeout -s TERM -k 5 "$image_build_timeout" docker buildx build --platform "$publish_platforms" --tag "$KPL_IMAGE" --push "$root"
+        ) || fail 'Multi-platform build/push failed.'
+    else
+        (
+            unset DOCKER_DEFAULT_PLATFORM
+            timeout -s TERM -k 5 "$image_build_timeout" docker build --tag "$KPL_IMAGE" "$root"
+        ) || fail 'Image build failed; push was not started.'
+        (
+            unset DOCKER_DEFAULT_PLATFORM
+            timeout -s TERM -k 5 "$image_push_timeout" docker push "$KPL_IMAGE"
+        ) || fail 'Image push failed.'
+    fi
+    printf 'Published %s. Deploy resolves this tag to its current registry digest.\n' "$KPL_IMAGE"
+}
 case "$command_name" in
     login|publish)
         : "${KPL_IMAGE:?Set KPL_IMAGE in .env.swarm or environment}"
@@ -232,24 +269,7 @@ case "$command_name" in
             # do not apply the short daemon-command timeout to user input.
             if [ -n "$registry" ]; then exec docker login "$registry"; else exec docker login; fi
         fi
-        case "$KPL_IMAGE" in *@*) fail 'Publish requires a mutable image tag, not a digest.' ;; esac
-        check_publish_context
-        if [ -n "$publish_platforms" ]; then
-            (
-                unset DOCKER_DEFAULT_PLATFORM
-                timeout -s TERM -k 5 "$image_build_timeout" docker buildx build --platform "$publish_platforms" --tag "$KPL_IMAGE" --push "$root"
-            ) || fail 'Multi-platform build/push failed.'
-        else
-            (
-                unset DOCKER_DEFAULT_PLATFORM
-                timeout -s TERM -k 5 "$image_build_timeout" docker build --tag "$KPL_IMAGE" "$root"
-            ) || fail 'Image build failed; push was not started.'
-            (
-                unset DOCKER_DEFAULT_PLATFORM
-                timeout -s TERM -k 5 "$image_push_timeout" docker push "$KPL_IMAGE"
-            ) || fail 'Image push failed.'
-        fi
-        printf 'Published %s. Deploy resolves this tag to its current registry digest.\n' "$KPL_IMAGE"
+        publish_image
         exit 0
         ;;
 esac
@@ -305,12 +325,14 @@ services=$(dock service ls --quiet --filter "label=com.docker.stack.namespace=$K
 controller_present=no
 agent_present=no
 network_manager_present=no
+restart_services=''
 for service in $services; do
     identity=$(dock service inspect --format '{{.Spec.Name}}|{{index .Spec.Labels "io.kpl.application"}}' "$service")
     case "$identity" in
         "$KPL_STACK_NAME"_controller\|"$application"|"$KPL_STACK_NAME"_agent\|"$application"|"$KPL_STACK_NAME"_prometheus\|"$application"|"$KPL_STACK_NAME"_grafana\|"$application"|"$KPL_STACK_NAME"_resource-monitor\|"$application"|"$KPL_STACK_NAME"_network-manager\|"$application") ;;
         *) fail 'Existing stack contains an unrecognized service. See https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment for migration; no changes made.' ;;
     esac
+    restart_services="$restart_services ${identity%%|*}"
     case "$identity" in
         "${KPL_STACK_NAME}_controller|$application") controller_present=yes ;;
         "${KPL_STACK_NAME}_agent|$application") agent_present=yes ;;
@@ -510,6 +532,73 @@ wait_tasks() {
     done
 }
 
+prepare_restart() {
+    [ "$controller_present" = yes ] && [ "$agent_present" = yes ] || fail 'Restart requires existing Controller and Agent services; use deploy for initial deployment.'
+    # Check the effective additive selection without changing labels. A build
+    # or configuration failure must leave the running stack untouched.
+    restart_selected=$(selected_nodes) || fail 'Cannot list Agent placement before restart.'
+    restart_seen=' '
+    restart_eligible=0
+    for restart_node in $restart_selected $nodes; do
+        case "$restart_node" in ''|*[!a-zA-Z0-9]*) fail 'Docker returned an invalid Agent node ID.' ;; esac
+        case "$restart_seen" in *" $restart_node "*) continue ;; esac
+        restart_seen="$restart_seen$restart_node "
+        restart_state=$(dock node inspect --format '{{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}' "$restart_node") || fail 'Cannot inspect Agent placement before restart.'
+        if [ "$restart_state" = 'linux ready active' ]; then restart_eligible=$((restart_eligible + 1)); fi
+    done
+    [ "$restart_eligible" -ge "$KPL_MIN_AGENTS" ] || fail "Restart requires at least $KPL_MIN_AGENTS eligible Agent nodes; specify nodes or a selector."
+    # Keep the original tasks too: a replacement may race with the later stop.
+    restart_initial_tasks=$(
+        for restart_service in $restart_services; do
+            capture_tasks "$restart_service" || exit 1
+        done
+    ) || fail 'Cannot establish task ownership and readiness before restart.'
+    for restart_task in $restart_initial_tasks; do
+        restart_record=$(dock inspect --type task --format "$task_format" "$restart_task") || fail 'Cannot inspect task history before restart.'
+        restart_rest=${restart_record#*|}
+        restart_state=${restart_rest%%|*}
+        restart_rest=${restart_rest#*|}
+        restart_container=${restart_rest%%|*}
+        case "$restart_state" in
+            failed|rejected|orphaned|remove) fail "Task $restart_task has unverified cleanup ($restart_state); inspect it before restarting. Services were not stopped." ;;
+            complete|shutdown)
+                [ -n "$restart_container" ] && [ "$restart_container" != - ] || fail "Task $restart_task has no verified container exit; services were not stopped."
+                case "$restart_record" in
+                    *'|0|0|ok') ;;
+                    *) fail "Task $restart_task has an unclean exit; inspect it before restarting. Services were not stopped." ;;
+                esac
+                ;;
+        esac
+    done
+}
+
+restart_stop_service() {
+    restart_service=$1
+    restart_timeout=$2
+    restart_tasks=$(capture_tasks "$restart_service") || fail "Cannot capture $restart_service tasks before restart."
+    printf 'Stopping %s and verifying clean exits...\n' "$restart_service"
+    # Keep task history and network/config attachments. Stack deployment will
+    # restore the declared placement once every old service has stopped.
+    dock service update --detach=true --no-resolve-image \
+        --constraint-add node.role==manager --constraint-add node.role==worker \
+        "$restart_service" || fail "Cannot pause $restart_service; restart stopped before deployment."
+    wait_tasks "$restart_tasks" "$restart_timeout"
+    restart_tasks=$(capture_tasks "$restart_service") || fail "Cannot recapture $restart_service tasks after stopping it."
+    wait_tasks "$restart_tasks" "$restart_timeout"
+}
+
+restart_stop_services() {
+    # Controller shutdown needs live Agents and their event queues. Stop it
+    # first, then Agents, then the network manager and monitoring services.
+    restart_stop_service "${KPL_STACK_NAME}_controller" "$controller_timeout"
+    restart_stop_service "${KPL_STACK_NAME}_agent" "$agent_timeout"
+    for restart_remaining in $restart_services; do
+        case "$restart_remaining" in "${KPL_STACK_NAME}_controller"|"${KPL_STACK_NAME}_agent") continue ;; esac
+        restart_stop_service "$restart_remaining" "$agent_timeout"
+    done
+    wait_tasks "$restart_initial_tasks" "$agent_timeout"
+}
+
 case "$command_name" in
     logs)
         case "$log_component" in
@@ -557,7 +646,7 @@ case "$command_name" in
         printf '\nAgent placement label: %s=true\n' "$agent_label"
         dock node ls --filter "node.label=$agent_label=true"
         ;;
-    deploy)
+    deploy|restart)
         : "${KPL_IMAGE:?Set KPL_IMAGE in .env.swarm or environment}"
         : "${KPL_CONTROL_NODE_ID:?Set KPL_CONTROL_NODE_ID}"
         : "${KPL_USER:?Set KPL_USER}" "${KPL_PASSWORD:?Set KPL_PASSWORD}"
@@ -574,9 +663,14 @@ case "$command_name" in
         nodes=$(command_nodes "$@")
         for node in $nodes; do ready_node "$node"; done
         report_nodes "$nodes"
+        if [ "$command_name" = restart ]; then
+            prepare_restart
+            publish_image
+        fi
         resolve_deployment_image
         networks=$(dock network ls --quiet --filter "name=^$KPL_PEER_NETWORK$")
         if [ -z "$networks" ]; then
+            [ "$command_name" != restart ] || fail 'Peer network is missing; repair it before restarting. Services were not stopped.'
             set -- network create --driver overlay --attachable --label "io.kpl.application=$application" --label "io.kpl.stack=$KPL_STACK_NAME"
             if [ -n "$KPL_PEER_SUBNET" ]; then set -- "$@" --subnet "$KPL_PEER_SUBNET"; fi
             dock "$@" "$KPL_PEER_NETWORK"
@@ -586,6 +680,12 @@ case "$command_name" in
                 network_subnets=$(dock network inspect --format '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$KPL_PEER_NETWORK") || fail 'Cannot inspect Peer network subnets.'
                 [ "$network_subnets" = "$KPL_PEER_SUBNET" ] || fail 'Existing Peer network subnet differs from KPL_PEER_SUBNET; no network or placement changes made.'
             fi
+        fi
+        if [ "$command_name" = restart ]; then
+            # Building may take minutes. Recheck readiness and task history
+            # immediately before stopping, retaining this fresh snapshot.
+            prepare_restart
+            restart_stop_services
         fi
         for node in $nodes; do dock node update --label-add "$agent_label=true" "$node"; done
         timeout -s TERM -k 5 "$docker_timeout" sh "$root/scripts/check-swarm.sh"

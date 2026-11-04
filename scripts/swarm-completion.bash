@@ -67,7 +67,7 @@ _kpl_swarm_complete() {
         index=$((index + 2))
     fi
     if (( COMP_CWORD == index )); then
-        _kpl_swarm_offer init configure config credentials nodes login publish check access logs scenario deploy status add-node remove-node remove reset-peer-network help --help
+        _kpl_swarm_offer init configure config credentials nodes login publish check access logs scenario deploy restart status add-node remove-node remove reset-peer-network help --help
         if (( index == 1 )); then _kpl_swarm_offer --env-file; fi
         return 0
     fi
@@ -75,7 +75,19 @@ _kpl_swarm_complete() {
     index=$((index + 1))
     node_start=$index
     case $command_name in
-        deploy|add-node|remove-node)
+        deploy|restart|add-node|remove-node)
+            if [[ $command_name == restart ]]; then
+                if (( COMP_CWORD == index )); then
+                    _kpl_swarm_offer --platforms
+                elif [[ ${COMP_WORDS[index]-} == --platforms ]]; then
+                    if (( COMP_CWORD == index + 1 )); then
+                        _kpl_swarm_offer linux/amd64 linux/arm64 linux/arm/v7 linux/amd64,linux/arm64
+                        return 0
+                    fi
+                    index=$((index + 2))
+                    node_start=$index
+                fi
+            fi
             for (( ; index < COMP_CWORD; index++ )); do
                 word=${COMP_WORDS[index]}
                 case $word in --all|--all-excluding-self|--workers) selected=yes ;; *) has_nodes=yes ;; esac

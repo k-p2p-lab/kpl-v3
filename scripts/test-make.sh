@@ -54,7 +54,8 @@ reject_without_tools() {
 
 case_name='default build and non-operational help'
 run_make
-expect go build -o bin/kpl ./cmd/kpl
+{ record go build -o bin/kpl ./cmd/kpl-master; record go build -o bin/kpl-runtime ./cmd/kpl; } > "$scratch/expected"
+cmp "$scratch/expected" "$scratch/calls"
 : > "$project/help"
 run_make help
 [ ! -s "$scratch/calls" ]

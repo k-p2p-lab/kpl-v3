@@ -8,8 +8,9 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/kpl ./cmd/kpl
 
 FROM builder AS test
-RUN apk add --no-cache bash make coreutils
-RUN CGO_ENABLED=0 make test-swarm test-go
+RUN apk add --no-cache bash coreutils
+RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 120s \
+    && CGO_ENABLED=0 go test -buildvcs=false github.com/libp2p/go-libp2p-pubsub -run '^Test(KPL|Score)' -timeout 120s
 
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates tzdata docker-cli iproute2 iproute2-tc \

@@ -39,7 +39,8 @@ help:
 	  '  Compatibility aliases: check-swarm -> swarm-check; swarm-reset-network -> swarm-reset-peer-network'
 
 build:
-	go build -o bin/kpl ./cmd/kpl
+	go build -o bin/kpl ./cmd/kpl-master
+	go build -o bin/kpl-runtime ./cmd/kpl
 
 check: build vet test-go test-swarm test-ui
 

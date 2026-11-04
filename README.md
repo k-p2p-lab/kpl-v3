@@ -10,4 +10,6 @@ This repository contains the implementation and runnable examples. Project, rese
 
 [Examples](examples) · [Swarm helper](scripts/swarm.sh)
 
+Run `make help` for build and validation commands, or `make swarm-help` for Swarm operations. `make swarm ARGS='status'` uses the same helper as the named `make swarm-status` shortcut. See the [deployment guide](https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment) for configuration and node selection.
+
 Scenario schema v4: [Worker attacks](https://github.com/k-p2p-lab/kpl-v3/wiki/worker_attacks) · [`examples/attacks`](examples/attacks).

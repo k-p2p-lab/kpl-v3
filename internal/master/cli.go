@@ -15,6 +15,9 @@ func usageError(message string) error { return &UsageError{Message: message} }
 
 // canonicalCLICommand keeps Make-style aliases on the same native dispatch path.
 func canonicalCLICommand(command string, args []string) (string, []string) {
+	if IsRuntimeCommand(command) {
+		return command, args
+	}
 	if command == "check-swarm" {
 		return "swarm", append([]string{"check"}, args...)
 	}
@@ -46,6 +49,9 @@ func cliHelpRequested(words []string) bool {
 }
 
 func (a *App) Execute(ctx context.Context, args []string, version string) error {
+	if len(args) > 0 && IsRuntimeCommand(args[0]) {
+		return a.executeRuntime(ctx, args)
+	}
 	if len(args) > 0 && args[0] == "__complete" {
 		return a.Complete(ctx, args[1:])
 	}
@@ -122,7 +128,7 @@ func (a *App) Execute(ctx context.Context, args []string, version string) error 
 		if len(arguments) != 0 {
 			return usageError("version takes no arguments")
 		}
-		fmt.Fprintln(a.Stdout, "kpl-master", version)
+		fmt.Fprintln(a.Stdout, "kpl", version)
 		return nil
 	}
 	if command == "completion" {
@@ -143,8 +149,11 @@ func (a *App) Execute(ctx context.Context, args []string, version string) error 
 	if command == "swarm" && (len(arguments) == 0 || arguments[0] == "help") {
 		return a.Help([]string{"swarm"})
 	}
-	if err := a.resolveRepository(repo); err != nil {
-		return err
+	// Explicit scenarios also work in images without a source checkout.
+	if command != "validate" || len(arguments) == 0 || repo != "" || a.Env("KPL_REPO") != "" {
+		if err := a.resolveRepository(repo); err != nil {
+			return err
+		}
 	}
 	if a.EnvFile == "" {
 		a.EnvFile = filepath.Join(a.Repo, ".env.swarm")
@@ -191,6 +200,9 @@ func (a *App) Execute(ctx context.Context, args []string, version string) error 
 }
 
 func (a *App) Help(path []string) error {
+	if len(path) > 0 && IsRuntimeCommand(path[0]) {
+		return a.executeRuntime(context.Background(), []string{path[0], "--help"})
+	}
 	if len(path) > 0 && path[0] == "swarm" {
 		_, err := fmt.Fprint(a.Stdout, `Usage: kpl [--repo DIR] [--env-file PATH] swarm COMMAND [OPTIONS]
 
@@ -215,21 +227,23 @@ Explicit --env-file and scenario paths are relative to the invocation directory.
 	}
 	_, err := fmt.Fprint(a.Stdout, `Usage: kpl [--repo DIR] [--env-file PATH] COMMAND
 
-  build                    Build operator bin/kpl and runtime bin/kpl-runtime
+  build                    Rebuild the single bin/kpl executable
   check                    Build, vet, Go/PubSub, native operator and UI checks
-  test [go|swarm|ui|race|linux|compat]
-                           Default: Go/PubSub; compat explicitly checks old entrypoints
+  test [go|swarm|ui|race|linux]
+                           Default: Go/PubSub
   vet                      Run v3 Go static checks
   validate [--scenario FILE] Validate input without executing an experiment
   swarm COMMAND            Configure and operate Linux Docker Swarm (see swarm help)
   completion bash          Print standalone Bash completion
   version                  Print the operator CLI version
 
+Container roles (use ROLE --help for role-specific flags):
+  controller | agent | swarm-agent | peer | resource-monitor | network-manager | network-gateway
+
 --repo selects the kpl-v3 checkout (also KPL_REPO); discovery searches the current
 directory, its ancestors and sibling v3/kpl-v3 directories, then the binary location.
-Make, swarm.sh and check-swarm.sh are not used by the new operational commands.
+Make only bootstraps bin/kpl. Development and operation commands use kpl.
 Deployment still uses the runtime Dockerfile, stack manifest and monitoring assets.
-The operator bin/kpl and application bin/kpl-runtime are different programs.
 `)
 	return err
 }

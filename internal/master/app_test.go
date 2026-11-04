@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+const validScenarioFixture = "version: 4\nname: literal-path-fixture\nseed: 42\nphases: [{action: stop-all}]\n"
+
 type appRecorder struct {
 	commands []Command
 	failAt   int
@@ -86,7 +88,7 @@ func TestRepositoryDiscoveryWorksWithoutLegacyEntrypoints(t *testing.T) {
 }
 
 func TestDevelopmentCommandsAreNativeAndPreserveArguments(t *testing.T) {
-	a, r, _ := appFixture(t)
+	a, r, out := appFixture(t)
 	for _, path := range []string{"internal/webui/a_test.cjs", "internal/webui/path with spaces_test.cjs"} {
 		p := filepath.Join(a.Repo, path)
 		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
@@ -99,7 +101,7 @@ func TestDevelopmentCommandsAreNativeAndPreserveArguments(t *testing.T) {
 	if err := a.RunDevelopment(t.Context(), "check", nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.commands) != 6 {
+	if len(r.commands) != 5 {
 		t.Fatalf("check commands=%d: %+v", len(r.commands), r.commands)
 	}
 	for _, c := range r.commands {
@@ -107,21 +109,24 @@ func TestDevelopmentCommandsAreNativeAndPreserveArguments(t *testing.T) {
 			t.Fatalf("legacy dependency: %+v", c)
 		}
 	}
-	if r.commands[0].Args[3] != "./cmd/kpl-master" || r.commands[1].Args[3] != "./cmd/kpl" {
-		t.Fatal("operator and runtime build targets were mixed")
+	if r.commands[0].Args[3] != "./cmd/kpl-master" {
+		t.Fatal("unexpected single executable build target")
 	}
-	if len(r.commands[5].Args) != 3 || !strings.Contains(r.commands[5].Args[2], "path with spaces") {
-		t.Fatalf("UI filenames were shell-split: %+v", r.commands[5].Args)
+	if len(r.commands[4].Args) != 3 || !strings.Contains(r.commands[4].Args[2], "path with spaces") {
+		t.Fatalf("UI filenames were shell-split: %+v", r.commands[4].Args)
 	}
 	r.commands = nil
 	input := filepath.Join(t.TempDir(), "scenario $(touch marker) ' spaced.yaml")
+	if err := os.WriteFile(input, []byte(validScenarioFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.RunDevelopment(t.Context(), "validate", []string{"--scenario", input}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"run", "./cmd/kpl", "validate", "--scenario", input}
-	if !reflect.DeepEqual(r.commands[0].Args, want) {
-		t.Fatalf("literal path changed: %#v", r.commands[0].Args)
+	if len(r.commands) != 0 || !strings.Contains(out.String(), "valid scenario: literal-path-fixture") {
+		t.Fatalf("validation did not run inside the executable: %s", out.String())
 	}
+
 }
 
 func TestDevelopmentFailureStopsLaterCommands(t *testing.T) {
@@ -166,9 +171,12 @@ func TestTestScopesAndEnvironmentAreExplicit(t *testing.T) {
 }
 
 func TestCLIExplicitPathsUseInvocationDirectory(t *testing.T) {
-	a, r, _ := appFixture(t)
+	a, r, out := appFixture(t)
 	cwd := t.TempDir()
 	t.Chdir(cwd)
+	if err := os.WriteFile("scenario.yaml", []byte(validScenarioFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
 	args := []string{"--repo", a.Repo, "--env-file", "nested/config with spaces", "--", "validate", "--scenario", "scenario.yaml"}
 	if err := a.Execute(t.Context(), args, "test"); err != nil {
 		t.Fatal(err)
@@ -176,12 +184,10 @@ func TestCLIExplicitPathsUseInvocationDirectory(t *testing.T) {
 	if a.EnvFile != filepath.Join(cwd, "nested/config with spaces") {
 		t.Fatal(a.EnvFile)
 	}
-	if got := r.commands[0].Args[4]; got != filepath.Join(cwd, "scenario.yaml") {
-		t.Fatal(got)
+	if len(r.commands) != 0 || !strings.Contains(out.String(), "valid scenario: literal-path-fixture") {
+		t.Fatal("validation was delegated to another executable")
 	}
-	if r.commands[0].Dir != a.Repo {
-		t.Fatal("runtime validation used operator checkout")
-	}
+
 }
 
 func TestUnknownArgumentsNeverInvokeDocker(t *testing.T) {
@@ -207,25 +213,5 @@ func TestWithEnvDoesNotChangeOriginalOrDropDockerSettings(t *testing.T) {
 	}
 	if a.Env("DOCKER_DEFAULT_PLATFORM") == "" || a.Env("VALUE") != "" {
 		t.Fatal("parent environment changed")
-	}
-}
-
-func TestRuntimeBuildCannotOverwriteOperator(t *testing.T) {
-	a, r, _ := appFixture(t)
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(a.Repo, "bin"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Link(self, filepath.Join(a.Repo, "bin", "kpl-runtime")); err != nil {
-		t.Skipf("hardlink unavailable: %v", err)
-	}
-	if err := a.build(t.Context()); err == nil {
-		t.Fatal("would overwrite operator")
-	}
-	if len(r.commands) != 0 {
-		t.Fatal("started unsafe build")
 	}
 }

@@ -1,7 +1,7 @@
 version: "3.8"
 
-# Deploy with scripts/swarm.sh. See https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment.
-# scripts/swarm.sh resolves a configured tag to one digest for this deployment.
+# Deploy with bin/kpl swarm deploy. See https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment.
+# bin/kpl swarm deploy resolves a configured tag to one digest for this deployment.
 services:
   controller:
     labels:
@@ -12,7 +12,7 @@ services:
       KPL_USER: "${KPL_USER:?Set KPL_USER}"
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_RUN_MIN_FREE_BYTES: "${KPL_RUN_MIN_FREE_BYTES:-1073741824}"
-      KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with scripts/swarm.sh}"
+      KPL_CONTROLLER_METRICS_URL: "${KPL_CONTROLLER_METRICS_URL:?Deploy with bin/kpl swarm deploy}"
       KPL_PROMETHEUS_URL: http://prometheus:9090
       KPL_AGENT_DISCOVERY_DNS: tasks.${KPL_STACK_NAME:-kpl}_agent
       KPL_NETWORK_MANAGER_URL: http://network-manager:18082
@@ -39,7 +39,8 @@ services:
   agent:
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     user: '0:0'
-    entrypoint: [sh, /usr/local/bin/kpl-swarm-agent.sh]
+    entrypoint: [kpl]
+    command: [swarm-agent]
     environment:
       KPL_USER: "${KPL_USER:?Set KPL_USER}"
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
@@ -137,7 +138,7 @@ services:
     image: prom/prometheus:v3.13.2
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --web.external-url=${KPL_PROMETHEUS_EXTERNAL_URL:?Deploy with scripts/swarm.sh}
+      - --web.external-url=${KPL_PROMETHEUS_EXTERNAL_URL:?Deploy with bin/kpl swarm deploy}
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
       - --storage.tsdb.retention.size=5GB

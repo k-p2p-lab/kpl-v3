@@ -90,6 +90,9 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 	if len(words) > 0 {
 		command, arguments := canonicalCLICommand(words[0], words[1:])
 		words = append([]string{command}, arguments...)
+		if IsRuntimeCommand(command) {
+			return printCandidates(a.Stdout, []string{"--help"}, prefix)
+		}
 	}
 	if !separated && !valueExpected {
 		for _, option := range []string{"--repo", "--env-file"} {
@@ -108,6 +111,7 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 	}
 	if len(words) == 0 {
 		candidates = append(candidates, "build", "check", "test", "vet", "validate", "swarm", "completion", "version", "help")
+		candidates = append(candidates, roleCommands...)
 		return printCandidates(a.Stdout, candidates, prefix)
 	}
 	switch words[0] {
@@ -117,7 +121,7 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		candidates = append(candidates, "bash")
 	case "test":
 		if len(words) == 1 {
-			candidates = append(candidates, "go", "swarm", "ui", "race", "linux", "compat")
+			candidates = append(candidates, "go", "swarm", "ui", "race", "linux")
 		}
 	case "validate":
 		if !separated && len(words) == 1 && strings.HasPrefix(prefix, "-") {

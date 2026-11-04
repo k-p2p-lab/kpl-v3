@@ -1,66 +1,63 @@
-package main
+package master
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/agent"
 	"github.com/k-p2p-lab/kpl-v3/internal/auth"
 	"github.com/k-p2p-lab/kpl-v3/internal/controller"
 	"github.com/k-p2p-lab/kpl-v3/internal/experimentnet"
 	"github.com/k-p2p-lab/kpl-v3/internal/peer"
-	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
-const version = "v3-dev"
+var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer"}
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+func IsRuntimeCommand(name string) bool {
+	for _, role := range roleCommands {
+		if role == name {
+			return true
+		}
 	}
+	return false
+}
+
+// Container roles share this executable and retain their own flag parsing.
+// They run before operator option handling and do not need a source checkout.
+func (a *App) executeRuntime(ctx context.Context, args []string) error {
+	logger := slog.New(slog.NewJSONHandler(a.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
 	var err error
-	switch os.Args[1] {
+	switch args[0] {
 	case "controller":
-		err = runController(ctx, logger, os.Args[2:])
+		err = runController(ctx, logger, args[1:])
 	case "agent":
-		err = runAgent(ctx, logger, os.Args[2:])
+		err = runAgent(ctx, logger, args[1:])
+	case "swarm-agent":
+		err = a.runSwarmAgent(ctx, logger, args[1:])
 	case "resource-monitor":
-		err = runServiceMonitor(ctx, logger, os.Args[2:])
+		err = runServiceMonitor(ctx, logger, args[1:])
 	case "network-manager":
-		err = runNetworkManager(ctx, os.Args[2:])
+		err = runNetworkManager(ctx, args[1:])
 	case "network-gateway":
-		err = runNetworkGateway(ctx, os.Args[2:])
+		err = runNetworkGateway(ctx, args[1:])
 	case "peer":
-		err = runPeer(ctx, logger, os.Args[2:])
-	case "validate":
-		err = validateScenario(os.Args[2:])
-	case "version", "--version", "-version":
-		fmt.Println(version)
-		return
-	case "help", "--help", "-h":
-		usage()
-		return
-	default:
-		usage()
-		os.Exit(2)
+		err = runPeer(ctx, logger, args[1:])
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
 	}
 	if err != nil {
-		logger.Error("kpl stopped", "role", os.Args[1], "error", err)
-		os.Exit(1)
+		logger.Error("kpl stopped", "role", args[0], "error", err)
 	}
+	return err
 }
 
 func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) error {
@@ -226,27 +223,6 @@ func runPeer(ctx context.Context, logger *slog.Logger, args []string) error {
 	return peer.Run(ctx, *configPath, logger)
 }
 
-func validateScenario(args []string) error {
-	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
-	path := flags.String("scenario", "", "scenario YAML file")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if *path == "" {
-		return fmt.Errorf("--scenario is required")
-	}
-	data, err := os.ReadFile(*path)
-	if err != nil {
-		return err
-	}
-	parsed, err := scenario.Parse(data)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("valid scenario: %s (%d phases, seed %d)\n", parsed.Name, len(parsed.Phases), parsed.Seed)
-	return nil
-}
-
 func parseLabels(raw string) map[string]string {
 	result := make(map[string]string)
 	for _, part := range strings.Split(raw, ",") {
@@ -256,21 +232,4 @@ func parseLabels(raw string) map[string]string {
 		}
 	}
 	return result
-}
-
-func usage() {
-	fmt.Fprintln(os.Stderr, `K-P2PLab v3
-
-Usage:
-  kpl controller [--listen :8080] [--data-dir data]
-  kpl agent --id ID --advertise-url URL --controller-url URL --docker-image IMAGE --docker-network OVERLAY
-  kpl resource-monitor --stack STACK --node-id NODE --controller URL
-  kpl network-manager [--data-dir /var/lib/kpl/network]
-  kpl network-gateway --config FILE
-  kpl peer --config FILE
-  kpl validate --scenario FILE
-  kpl version
-
-Deploy and manage the Swarm stack with sh scripts/swarm.sh.
-Controller, Agent, resource-monitor, network-manager, network-gateway and Peer commands are container entrypoints.`)
 }

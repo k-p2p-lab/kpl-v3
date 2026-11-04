@@ -34,7 +34,7 @@ func TestCLISeparatorPreservesOptionLikeScenarioNames(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	for _, name := range []string{"--help", "-h", "--repo", "--env-file"} {
-		if err := os.WriteFile(name, []byte("name: literal-path-fixture\n"), 0600); err != nil {
+		if err := os.WriteFile(name, []byte(validScenarioFixture), 0600); err != nil {
 			t.Fatal(err)
 		}
 		for _, command := range [][]string{{"validate"}, {"swarm", "scenario"}, {"swarm-scenario"}} {
@@ -49,10 +49,11 @@ func TestCLISeparatorPreservesOptionLikeScenarioNames(t *testing.T) {
 				t.Fatalf("literal filename changed the selected repository: %v", args)
 			}
 			if command[0] == "validate" {
-				if len(recorder.commands) != 1 || recorder.commands[0].Name != "go" || recorder.commands[0].Args[4] != filepath.Join(cwd, name) {
-					t.Fatalf("validation did not preserve one absolute path: %+v", recorder.commands)
+				if len(recorder.commands) != 0 || !strings.Contains(output.String(), "valid scenario: literal-path-fixture") {
+					t.Fatalf("validation was not performed inside kpl: %s", output.String())
 				}
-			} else if output.String() != "name: literal-path-fixture\n" || len(recorder.commands) != 0 {
+
+			} else if output.String() != validScenarioFixture || len(recorder.commands) != 0 {
 				t.Fatalf("literal scenario was treated as an option: %q %+v", output.String(), recorder.commands)
 			}
 		}
@@ -63,12 +64,16 @@ func TestCLIHelpLikeOptionValuesAndSettingsStayLiteral(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	a, recorder, output := appFixture(t)
+	if err := os.WriteFile("--help", []byte(validScenarioFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.Execute(t.Context(), []string{"--repo", a.Repo, "validate", "--scenario", "--help"}, "fixture"); err != nil {
 		t.Fatal(err)
 	}
-	if len(recorder.commands) != 1 || recorder.commands[0].Args[4] != filepath.Join(cwd, "--help") {
-		t.Fatalf("scenario option value was parsed as help: %+v", recorder.commands)
+	if len(recorder.commands) != 0 || !strings.Contains(output.String(), "valid scenario: literal-path-fixture") {
+		t.Fatal("scenario option value was parsed as help")
 	}
+
 	for _, value := range []string{"--help", "-h", "--repo"} {
 		a, recorder, output = appFixture(t)
 		envPath := filepath.Join(a.Repo, "fixture.env")
@@ -114,14 +119,17 @@ func TestCLIGlobalExtractionPreservesSubcommandOptionValues(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	for _, value := range []string{"--repo", "--env-file", "--help", "-h"} {
-		a, recorder, _ := appFixture(t)
+		a, recorder, output := appFixture(t)
+		if err := os.WriteFile(value, []byte(validScenarioFixture), 0600); err != nil {
+			t.Fatal(err)
+		}
 		repo := a.Repo
 		envPath := filepath.Join(repo, "selected.env")
 		args := []string{"--repo", repo, "validate", "--scenario", value, "--env-file", envPath}
 		if err := a.Execute(t.Context(), args, "fixture"); err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
-		if a.Repo != repo || a.EnvFile != envPath || len(recorder.commands) != 1 || recorder.commands[0].Args[4] != filepath.Join(cwd, value) {
+		if a.Repo != repo || a.EnvFile != envPath || len(recorder.commands) != 0 || !strings.Contains(output.String(), "valid scenario: literal-path-fixture") {
 			t.Fatalf("subcommand value changed global parsing: %v => %+v", args, recorder.commands)
 		}
 	}
@@ -129,11 +137,11 @@ func TestCLIGlobalExtractionPreservesSubcommandOptionValues(t *testing.T) {
 		{"validate", "--scenario", "--", "--repo"},
 		{"validate", "--scenario", "--", "--help"},
 	} {
-		a, recorder, _ := appFixture(t)
+		a, recorder, output := appFixture(t)
 		if err := a.Execute(t.Context(), append([]string{"--repo", a.Repo}, args...), "fixture"); err != nil {
 			t.Fatalf("separator after value option: %v: %v", args, err)
 		}
-		if len(recorder.commands) != 1 || recorder.commands[0].Args[4] != filepath.Join(cwd, args[len(args)-1]) {
+		if len(recorder.commands) != 0 || !strings.Contains(output.String(), "valid scenario: literal-path-fixture") {
 			t.Fatalf("separator did not preserve option value: %+v", recorder.commands)
 		}
 	}

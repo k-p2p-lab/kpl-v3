@@ -10,6 +10,4 @@ This repository contains the implementation and runnable examples. Project, rese
 
 [Examples](examples) · [Swarm operations](https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment)
 
-Build the Go operator as `bin/kpl` with `go build -o bin/kpl ./cmd/kpl-master`. `kpl help` lists build and validation commands, and `kpl swarm help` lists operations. See [development and installation](https://github.com/k-p2p-lab/kpl-v3/wiki/development) and the [deployment guide](https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment). The native CLI works without the legacy Make and manager shell entrypoints, which remain available for compatibility. The Controller/Agent/Peer runtime entrypoint remains `cmd/kpl`; local runtime builds use `bin/kpl-runtime`.
-
-Scenario schema v4: [Worker attacks](https://github.com/k-p2p-lab/kpl-v3/wiki/worker_attacks) · [`examples/attacks`](examples/attacks).
+Run `make` to build the single `bin/kpl` executable from `cmd/kpl-master`. Use `bin/kpl help`, `bin/kpl check` and `bin/kpl swarm help` for development and operations. The same executable runs Controller, Agent and Peer container roles. See [development and installation](https://github.com/k-p2p-lab/kpl-v3/wiki/development) and [Swarm deployment](https://github.com/k-p2p-lab/kpl-v3/wiki/swarm_deployment).

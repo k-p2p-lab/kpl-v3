@@ -188,6 +188,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/experiments", s.handleExperiments(ctx))
 	mux.HandleFunc("/api/v1/results", s.handleResults)
 	mux.HandleFunc("/api/v1/result-storage", s.handleResultStorage)
+	mux.HandleFunc("POST /api/v1/result-storage/reconnect", s.handleArchiveReconnect)
 	mux.HandleFunc("/api/v1/results/", s.handleResultAction)
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/append", s.handleBatchAppend(ctx))
 	mux.HandleFunc("POST /api/v1/result-batches/{batchID}/resume", s.handleBatchResume(ctx, false))

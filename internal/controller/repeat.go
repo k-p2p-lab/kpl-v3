@@ -126,7 +126,6 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	for _, experiment := range experiments {
 		s.state.runTimings[experiment.ID] = &runTiming{plan: plan, phases: make([]phaseTiming, len(spec.Phases))}
 	}
-	s.state.estimateRunFinishesLocked(experiments, time.Now().UTC())
 	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
 	batch := &repeatBatch{cancel: cancel, repetitions: repetitions, executionID: executionID}
@@ -138,12 +137,7 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 		s.cancels[experiment.ID] = cancel
 	}
 	s.enqueueExperimentsLocked(ctx, batch, experiments, spec)
-	s.state.mu.RLock()
-	first := s.state.experiments[experiments[0].ID]
-	s.state.mu.RUnlock()
-	if first.State == "running" {
-		first.Timing = experiments[0].Timing
-	}
+	first, _ := s.state.experimentWithTiming(experiments[0].ID)
 	return first, nil
 }
 

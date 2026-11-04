@@ -99,3 +99,20 @@ test('continuation after restart includes saved successes once in the live batch
   api.renderRuns(live);
   assert.match(element('#runBatchEstimates').innerHTML,/1 \/ 3 completed/,'live state must override a stale saved result');
 });
+
+test('retry forecasts remain visible beside failed attempts and later queued submissions',()=>{
+  const {api,element}=fixture();
+  api.renderRuns([
+    {id:'old',batchId:'group',executionId:'old-execution',name:'Retried series',iteration:1,repetitions:2,state:'failed'},
+    {id:'retry',batchId:'group',executionId:'retry-execution',name:'Retried series',iteration:1,repetitions:2,state:'running',previousRunIds:['old'],timing:timing()},
+    {id:'retry-second',batchId:'group',executionId:'retry-execution',name:'Retried series',iteration:2,repetitions:2,state:'queued',timing:timing()},
+    {id:'next',name:'Next experiment',state:'queued',queuePosition:1,timing:{estimatedFinishAt:'2026-09-21T05:30:00Z',remainingSeconds:18000,basis:'scenario'}},
+  ]);
+  const cards=element('#runList').innerHTML, summary=element('#runBatchEstimates').innerHTML;
+  assert.equal((cards.match(/<span>Est\. finish<\/span>/g)||[]).length,3);
+  assert.match(cards,/datetime="2026-09-21T05:30:00Z"/);
+  assert.match(cards,/About 5h remaining/);
+  assert.match(cards,/1 submission ahead/);
+  assert.match(summary,/About 4h remaining/);
+  assert.doesNotMatch(summary,/Estimating…/);
+});

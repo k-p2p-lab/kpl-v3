@@ -14,55 +14,157 @@ import (
 )
 
 func (s *Server) openArchiveStore() (*os.Root, error) {
-	if s.archiveIOCheck != nil {
-		s.archiveIOCheck()
-	}
 	// Remember the destination identity locally. If a NAS mount disappears, do
 	// not silently archive onto the empty directory underneath that mount.
 	expectedPath := filepath.Join(s.config.DataDir, ".archive-store-id")
 	expected, err := os.ReadFile(expectedPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, &archiveAccessError{kind: "local", err: fmt.Errorf("read local archive identity: %w", err)}
+	}
+	if len(expected) == 0 {
+		// Readers can arrive before the background worker has initialized the
+		// store. Serialize only initialization, never routine NAS reads.
+		s.archiveIdentityInitMu.Lock()
+		defer s.archiveIdentityInitMu.Unlock()
+		expected, err = os.ReadFile(expectedPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, &archiveAccessError{kind: "local", err: fmt.Errorf("read local archive identity: %w", err)}
+		}
 	}
 	data, err := os.OpenRoot(s.config.DataDir)
 	if err != nil {
-		return nil, err
+		return nil, &archiveAccessError{kind: "local", err: err}
 	}
 	defer data.Close()
 	if len(expected) == 0 {
+		s.archiveStatusMu.RLock()
+		reconnectState := s.archiveReconnectState
+		s.archiveStatusMu.RUnlock()
+		if reconnectState == "queued" || reconnectState == "running" || reconnectState == "failed" {
+			return nil, &archiveAccessError{kind: "unavailable", err: errors.New("local archive identity is missing; complete archive reconnection before automatic initialization")}
+		}
+		referenced, err := localArchiveReferencesPresent(data)
+		if err != nil {
+			return nil, &archiveAccessError{kind: "local", err: fmt.Errorf("inspect local archive references: %w", err)}
+		}
+		if referenced {
+			return nil, &archiveAccessError{kind: "unavailable", err: errors.New("local archive identity is missing but archived results remain; verify the runs mount before reconnecting")}
+		}
+	}
+	if s.archiveIOCheck != nil {
+		s.archiveIOCheck()
+	}
+	if len(expected) == 0 {
 		if err := data.Mkdir(archivedRunsDirectory, 0755); err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, err
+			return nil, &archiveAccessError{kind: "unavailable", err: fmt.Errorf("prepare archive directory: %w", err)}
 		}
 	}
 	root, err := openResultDirectory(data, archivedRunsDirectory)
 	if err != nil {
-		return nil, err
+		return nil, &archiveAccessError{kind: "unavailable", err: fmt.Errorf("open archive directory: %w", err)}
 	}
 	actual, readErr := readArchiveIdentity(root)
 	if len(expected) > 0 {
-		if readErr != nil || !bytesEqual(expected, actual) {
+		if readErr != nil {
 			root.Close()
-			return nil, errors.New("archive storage identity is missing or changed; check the runs mount")
+			if errors.Is(readErr, os.ErrNotExist) {
+				return nil, &archiveAccessError{kind: "unavailable", err: errors.New("archive storage identity is missing; check the runs mount before reconnecting")}
+			}
+			return nil, &archiveAccessError{kind: "unavailable", err: fmt.Errorf("read archive storage identity: %w", readErr)}
+		}
+		if !bytesEqual(expected, actual) {
+			root.Close()
+			return nil, &archiveAccessError{kind: "unavailable", err: errors.New("archive storage identity changed; verify the runs mount before reconnecting")}
 		}
 	} else {
 		if errors.Is(readErr, os.ErrNotExist) {
-			actual = []byte(rand.Text())
-			readErr = root.WriteFile(".kpl-store-id", actual, 0600)
+			actual, readErr = createArchiveIdentity(root)
 		}
 		if readErr != nil {
 			root.Close()
-			return nil, readErr
+			return nil, &archiveAccessError{kind: "unavailable", err: fmt.Errorf("initialize archive storage identity: %w", readErr)}
 		}
 		if len(actual) == 0 || len(actual) > 128 {
 			root.Close()
-			return nil, errors.New("invalid archive storage identity")
+			return nil, &archiveAccessError{kind: "unavailable", err: errors.New("invalid archive storage identity")}
 		}
-		if err := writeFileAtomic(expectedPath, actual, 0600); err != nil {
+		if err := writeImportedMetadata(data, ".archive-store-id", actual); err != nil {
 			root.Close()
-			return nil, err
+			return nil, &archiveAccessError{kind: "local", err: fmt.Errorf("save local archive identity: %w", err)}
+		}
+		if err := syncRunDirectory(data); err != nil {
+			root.Close()
+			return nil, &archiveAccessError{kind: "local", err: fmt.Errorf("synchronize local archive identity: %w", err)}
 		}
 	}
 	return root, nil
+}
+
+// A lost local identity is not a first-time store when local manifests still
+// refer to remote bytes. This local-only scan runs before any NAS operation and
+// never holds experiment or persistence locks. Empty, partially imported indexes
+// remain eligible for the original first-time archive discovery path.
+func localArchiveReferencesPresent(data *os.Root) (bool, error) {
+	parent, err := openResultDirectory(data, currentRunsDirectory)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer parent.Close()
+	entries, err := localRunEntries(parent)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !validResultID(entry.Name()) {
+			continue
+		}
+		local, err := openResultDirectory(parent, entry.Name())
+		if errors.Is(err, os.ErrNotExist) {
+			continue // A local-only result may have been deleted after the scan.
+		}
+		if err != nil {
+			return false, err
+		}
+		manifest, err := readRunArchive(local, entry.Name())
+		local.Close()
+		if err != nil {
+			return false, fmt.Errorf("read archive references for %s: %w", entry.Name(), err)
+		}
+		if len(manifest.Files) > 0 {
+			return true, nil
+		}
+		for _, segments := range manifest.Logs {
+			if len(segments) > 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func createArchiveIdentity(root *os.Root) ([]byte, error) {
+	identity := []byte(rand.Text())
+	file, err := root.OpenFile(".kpl-store-id", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return readArchiveIdentity(root)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err = file.Write(identity); err == nil {
+		err = file.Sync()
+	}
+	if err = errors.Join(err, file.Close()); err != nil {
+		_ = root.Remove(".kpl-store-id")
+		return nil, err
+	}
+	if err := syncRunDirectory(root); err != nil {
+		return nil, err
+	}
+	return identity, nil
 }
 func bytesEqual(a, b []byte) bool { return string(a) == string(b) }
 
@@ -72,11 +174,18 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var firstError error
+	recordError := func(id string, err error) {
+		s.logger.Warn("index saved archive deferred", "run", id, "error", err)
+		if firstError == nil {
+			firstError = fmt.Errorf("index archive %s: %w", id, err)
+		}
+	}
 	defer archive.Close()
 	s.archiveProgress()
 	entries, err := localRunEntries(archive)
 	if err != nil {
-		return err
+		return &archiveAccessError{kind: "unavailable", err: fmt.Errorf("list archive directory: %w", err)}
 	}
 	for _, entry := range entries {
 		s.archiveProgress()
@@ -100,20 +209,22 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 		}
 		s.state.persistMu.Unlock()
 		if checkErr != nil {
-			return checkErr
+			recordError(id, checkErr)
+			continue
 		}
 		if deleted || indexed {
 			continue
 		}
 		remote, err := openResultDirectory(archive, id)
 		if err != nil {
+			recordError(id, err)
 			continue
 		}
 		s.archiveProgress()
 		manifest, err := readRunArchive(remote, id)
 		if err != nil {
 			remote.Close()
-			s.logger.Warn("read archive index", "run", id, "error", err)
+			recordError(id, err)
 			continue
 		}
 		s.archiveProgress()
@@ -165,7 +276,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 		}
 		remote.Close()
 		if err != nil {
-			s.logger.Warn("index saved archive", "run", id, "error", err)
+			recordError(id, err)
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -257,10 +368,10 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 			return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
 		}()
 		if err != nil {
-			return err
+			recordError(id, err)
 		}
 	}
-	return nil
+	return firstError
 }
 
 func (s *Server) cleanDeletedArchives(ctx context.Context) error {
@@ -293,6 +404,13 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		return err
 	}
 	defer done.Close()
+	var firstError error
+	recordError := func(id string, err error) {
+		s.logger.Warn("delete saved archive deferred", "run", id, "error", err)
+		if firstError == nil {
+			firstError = fmt.Errorf("delete archive %s: %w", id, err)
+		}
+	}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -304,7 +422,8 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		if _, err := done.Lstat(id); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
+			recordError(id, err)
+			continue
 		}
 		s.setArchivePhase("deleting")
 		archive, err := s.openArchiveStore()
@@ -325,15 +444,16 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		}
 		archive.Close()
 		if err != nil {
-			return err
+			recordError(id, err)
+			continue
 		}
 		s.archiveProgress()
 		s.setArchivePhase("preparing")
 		if err := done.WriteFile(id, []byte("removed\n"), 0600); err != nil {
-			return err
+			recordError(id, err)
 		}
 	}
-	return nil
+	return firstError
 }
 
 func readArchiveIdentity(root *os.Root) ([]byte, error) {

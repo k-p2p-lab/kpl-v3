@@ -626,7 +626,7 @@ function runTimingMarkup(run, stopping) {
   if (!isPendingRun(run)) return "";
   const timing = run.timing;
   const remaining = stopping ? "Stopping…" : timing?.overdue ? "Taking longer than estimated" : formatEstimateRemaining(timing?.remainingSeconds);
-  return `<div class="run-timing${timing?.overdue ? " overdue" : ""}" title="Estimates update as phases finish. Readiness timeouts are initial allowances; node startup, available capacity and cleanup can change the finish time.">
+  return `<div class="run-timing${timing?.overdue ? " overdue" : ""}" title="Estimates include earlier queued experiments and update as phases finish. Readiness timeouts are initial allowances; node startup, available capacity and cleanup can change the finish time.">
     <div><span>Est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.estimatedFinishAt)}</strong></div>
     <small>${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small>
   </div>`;

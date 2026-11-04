@@ -360,7 +360,6 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 		s.state.runTimings[run.ID] = &runTiming{plan: plan, phases: make([]phaseTiming, len(spec.Phases))}
 		batch.members = append(batch.members, run.ID)
 	}
-	s.state.estimateRunFinishesLocked(pending, time.Now().UTC())
 	s.state.mu.Unlock()
 	ctx, cancel := context.WithCancel(parent)
 	batch.cancel, batch.executionID = cancel, executionID
@@ -373,8 +372,6 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 	}
 	s.state.notify()
 	s.enqueueExperimentsLocked(ctx, batch, pending, spec)
-	s.state.mu.RLock()
-	first := s.state.experiments[pending[0].ID]
-	s.state.mu.RUnlock()
+	first, _ := s.state.experimentWithTiming(pending[0].ID)
 	return first, nil
 }

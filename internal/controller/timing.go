@@ -10,7 +10,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
-// Plans are shared by a batch. Observations live only while its scheduler runs;
+// Plans are shared by a submission. Observations live only while its scheduler runs;
 // snapshots never parse YAML or sample distributions under the state lock.
 type timingPlan struct {
 	phases   []scenario.Phase
@@ -226,102 +226,234 @@ func (s *state) timingHistoryLocked(runs []model.Experiment, indices []int, plan
 }
 
 // Caller holds state.mu. Only copies in the response are annotated; live
-// predictions are never written to experiment.json.
+// predictions are never written to experiment.json. ExecutionID distinguishes
+// a retry/continuation from failed history retained in the same result batch.
 func (s *state) estimateRunFinishesLocked(runs []model.Experiment, now time.Time) {
-	groups := make(map[string][]int)
+	type groupKey struct{ batch, execution string }
+	type timingGroup struct {
+		key      groupKey
+		indices  []int
+		position int
+		active   bool
+	}
+	byKey := make(map[groupKey]*timingGroup)
 	for i := range runs {
 		runs[i].Timing = nil
-		key := runs[i].BatchID
+		if runs[i].Superseded {
+			continue
+		}
+		batch := runs[i].BatchID
+		if batch == "" {
+			batch = runs[i].ID
+		}
+		key := groupKey{batch, runs[i].ExecutionID}
+		group := byKey[key]
+		if group == nil {
+			group = &timingGroup{key: key}
+			byKey[key] = group
+		}
+		group.indices = append(group.indices, i)
+		if runs[i].State == "running" || runs[i].State == "queued" {
+			group.active = true
+			group.position = max(group.position, runs[i].QueuePosition)
+		}
+	}
+	var groups []*timingGroup
+	for _, group := range byKey {
+		if group.active {
+			groups = append(groups, group)
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		a, b := groups[i], groups[j]
+		if a.position != b.position {
+			return a.position < b.position
+		}
+		if a.key.batch != b.key.batch {
+			return a.key.batch < b.key.batch
+		}
+		return a.key.execution < b.key.execution
+	})
+	cursor, known, overdue := now, true, false
+	nextPosition := 0
+	for first := 0; first < len(groups); {
+		// A terminal submission can still own its FIFO slot while finishing
+		// cleanup. Do not omit that unresolved predecessor from the forecast.
+		if groups[first].position != nextPosition {
+			known = false
+		}
+		end, positionKnown, positionOverdue := cursor, known, overdue
+		last := first
+		// Equal positions can occur in legacy/in-memory views with independent
+		// running groups. Project those together, then advance the FIFO cursor.
+		for last < len(groups) && groups[last].position == groups[first].position {
+			if known {
+				finish, groupKnown, groupOverdue := s.estimateTimingGroupLocked(runs, groups[last].indices, now, cursor, overdue)
+				if finish.After(end) {
+					end = finish
+				}
+				positionKnown = positionKnown && groupKnown
+				positionOverdue = positionOverdue || groupOverdue
+			}
+			last++
+		}
+		cursor, known, overdue = end, positionKnown, positionOverdue
+		nextPosition = groups[first].position + 1
+		first = last
+	}
+	setBatchFinishEstimates(runs, now)
+}
+
+// Several submissions can belong to one result batch. Its finish must cover
+// all pending members, including later additions separated by other submissions.
+func setBatchFinishEstimates(runs []model.Experiment, now time.Time) {
+	type summary struct {
+		finish  time.Time
+		known   bool
+		overdue bool
+	}
+	batches := make(map[string]*summary)
+	for _, run := range runs {
+		if run.Superseded || run.State != "running" && run.State != "queued" {
+			continue
+		}
+		key := run.BatchID
 		if key == "" {
-			key = runs[i].ID
+			key = run.ID
 		}
-		groups[key] = append(groups[key], i)
+		batch := batches[key]
+		if batch == nil {
+			batch = &summary{known: true}
+			batches[key] = batch
+		}
+		if run.Timing == nil {
+			batch.known = false
+			continue
+		}
+		if run.Timing.EstimatedFinishAt.After(batch.finish) {
+			batch.finish = run.Timing.EstimatedFinishAt
+		}
+		batch.overdue = batch.overdue || run.Timing.Overdue || run.Timing.BatchOverdue
 	}
-	for _, indices := range groups {
-		var plan *timingPlan
-		blocked := false
-		for _, i := range indices {
-			run := runs[i]
-			// Earlier submissions and their cleanup have no reliable finish
-			// time yet. Never show an ETA as if this batch were already active.
-			if run.QueuePosition > 0 || run.State == "queued" && run.PhaseName != "" {
-				blocked = true
-			}
-			if run.State == "failed" || run.State == "canceled" || run.State == "interrupted" {
-				blocked = true
-			}
-			if run.State == "running" || run.State == "queued" {
-				if timing := s.runTimings[run.ID]; timing != nil {
-					plan = timing.plan
-				}
-			}
-		}
-		if plan == nil || blocked {
+	for i := range runs {
+		run := &runs[i]
+		if run.Timing == nil || run.Repetitions <= 1 {
 			continue
 		}
-		sort.Slice(indices, func(i, j int) bool {
-			a, b := runs[indices[i]], runs[indices[j]]
-			if a.Iteration != b.Iteration {
-				return a.Iteration < b.Iteration
-			}
-			return a.ID < b.ID
-		})
-		history := s.timingHistoryLocked(runs, indices, plan)
-		duration, basis := plan.duration, "scenario"
-		if history.count > 0 {
-			duration, basis = history.duration, "observed-runs"
+		key := run.BatchID
+		if key == "" {
+			key = run.ID
 		}
-		cursor := now
-		var pending []int
-		var batchFinish time.Time
-		overdue, incomplete := false, false
-		for _, i := range indices {
-			run := &runs[i]
-			if run.State != "running" && run.State != "queued" {
-				continue
-			}
-			seconds := duration
-			start := cursor
-			if run.State == "running" && !run.StartedAt.IsZero() {
-				start = run.StartedAt
-				if timing := s.runTimings[run.ID]; timing != nil {
-					seconds = boundedEstimate(projectRunDuration(plan, timing.phases, start, &history) + history.tail)
-				}
-			}
-			if seconds <= 0 {
-				incomplete = true
-				continue
-			}
-			finish := start.Add(estimateDuration(seconds))
-			run.Timing = &model.ExperimentTiming{
-				EstimatedFinishAt: finish, RemainingSeconds: max(0, finish.Sub(now).Seconds()),
-				Basis: basis, ObservedRuns: history.count, Overdue: finish.Before(now),
-			}
-			overdue = overdue || run.Timing.Overdue
-			batchFinish = finish
-			pending = append(pending, i)
-			// A late active run still occupies the queue. Do not predict that
-			// subsequent runs already finished while it is actually running.
-			cursor = finish
-			if cursor.Before(now) {
-				cursor = now
-			}
+		run.Timing.BatchEstimatedFinishAt = nil
+		run.Timing.BatchRemainingSeconds, run.Timing.BatchOverdue = 0, false
+		if batch := batches[key]; batch != nil && batch.known {
+			run.Timing.BatchEstimatedFinishAt = &batch.finish
+			run.Timing.BatchRemainingSeconds = max(0, batch.finish.Sub(now).Seconds())
+			run.Timing.BatchOverdue = batch.overdue
 		}
-		if incomplete {
-			// Unknown predecessors make a queued run's absolute finish unknown.
-			for _, i := range pending {
-				if runs[i].State == "queued" {
-					runs[i].Timing = nil
-				}
-			}
-			continue
+	}
+}
+
+func (s *state) estimateTimingGroupLocked(runs []model.Experiment, indices []int, now, cursor time.Time, predecessorOverdue bool) (time.Time, bool, bool) {
+	var plan *timingPlan
+	for _, i := range indices {
+		run := runs[i]
+		if run.State == "failed" || run.State == "canceled" || run.State == "interrupted" || run.StopRequested || run.State == "queued" && run.PhaseName != "" {
+			return cursor, false, predecessorOverdue
 		}
-		for _, i := range pending {
-			if runs[i].Repetitions > 1 {
-				runs[i].Timing.BatchEstimatedFinishAt = &batchFinish
-				runs[i].Timing.BatchRemainingSeconds = max(0, batchFinish.Sub(now).Seconds())
-				runs[i].Timing.BatchOverdue = overdue
+		if run.State == "running" || run.State == "queued" {
+			if timing := s.runTimings[run.ID]; timing != nil {
+				plan = timing.plan
 			}
 		}
 	}
+	if plan == nil {
+		return cursor, false, predecessorOverdue
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		a, b := runs[indices[i]], runs[indices[j]]
+		if a.Iteration != b.Iteration {
+			return a.Iteration < b.Iteration
+		}
+		return a.ID < b.ID
+	})
+	history := s.timingHistoryLocked(runs, indices, plan)
+	duration, basis := plan.duration, "scenario"
+	if history.count > 0 {
+		duration, basis = history.duration, "observed-runs"
+	}
+	var pending []int
+	var batchFinish time.Time
+	overdue := predecessorOverdue
+	complete := true
+	for _, i := range indices {
+		run := &runs[i]
+		if run.State != "running" && run.State != "queued" {
+			continue
+		}
+		seconds, start := duration, cursor
+		if run.State == "running" && !run.StartedAt.IsZero() {
+			start = run.StartedAt
+			if timing := s.runTimings[run.ID]; timing != nil {
+				seconds = boundedEstimate(projectRunDuration(plan, timing.phases, start, &history) + history.tail)
+			}
+		}
+		if seconds <= 0 {
+			complete = false
+			continue
+		}
+		if !complete && run.State == "queued" {
+			continue
+		}
+		finish := start.Add(estimateDuration(seconds))
+		// Bound the whole queue horizon, not just individual runs. Repeated
+		// saturated durations must not overflow JSON's supported year range.
+		if horizon := now.Add(time.Duration(math.MaxInt64)); finish.After(horizon) {
+			finish = horizon
+		}
+		run.Timing = &model.ExperimentTiming{
+			EstimatedFinishAt: finish, RemainingSeconds: max(0, finish.Sub(now).Seconds()),
+			Basis: basis, ObservedRuns: history.count, Overdue: finish.Before(now),
+		}
+		overdue = overdue || run.Timing.Overdue
+		batchFinish = finish
+		pending = append(pending, i)
+		cursor = finish
+		if cursor.Before(now) {
+			cursor = now
+		}
+	}
+	if !complete {
+		return cursor, false, overdue
+	}
+	for _, i := range pending {
+		if runs[i].Repetitions > 1 {
+			runs[i].Timing.BatchEstimatedFinishAt = &batchFinish
+			runs[i].Timing.BatchRemainingSeconds = max(0, batchFinish.Sub(now).Seconds())
+			runs[i].Timing.BatchOverdue = overdue
+		}
+	}
+	return cursor, true, overdue
+}
+
+// Admission and idempotent replay return the same complete-queue forecast as
+// snapshots. Calling the estimator on only the submitted runs omits their
+// predecessors and cannot produce a correct absolute finish time.
+func (s *state) experimentWithTiming(id string) (model.Experiment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.experiments[id]; !ok {
+		return model.Experiment{}, false
+	}
+	runs := make([]model.Experiment, 0, len(s.experiments))
+	for _, run := range s.experiments {
+		runs = append(runs, run)
+	}
+	s.estimateRunFinishesLocked(runs, time.Now().UTC())
+	for _, run := range runs {
+		if run.ID == id {
+			return run, true
+		}
+	}
+	return model.Experiment{}, false
 }

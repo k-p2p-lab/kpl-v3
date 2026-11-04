@@ -81,8 +81,11 @@ func TestExperimentQueueFIFOAndBatchFailureAdvances(t *testing.T) {
 			second := queueRun(t, s, queueShortScenario, 2)
 			third := queueRun(t, s, queueShortScenario, 1)
 			for index, run := range []model.Experiment{second, third} {
-				if run.State != "queued" || !run.StartedAt.IsZero() || run.QueuePosition != index+1 || run.Timing != nil {
+				if run.State != "queued" || !run.StartedAt.IsZero() || run.QueuePosition != index+1 {
 					t.Fatalf("submission started before its turn: %+v", run)
+				}
+				if !failed && run.Timing == nil {
+					t.Fatalf("known predecessor did not produce a queued forecast: %+v", run)
 				}
 			}
 			close(release)
@@ -130,12 +133,12 @@ func TestExperimentQueueCancelWaitingSubmissionAndIdempotency(t *testing.T) {
 	}
 	third := queueRun(t, s, queueShortScenario, 1)
 	for _, run := range s.state.snapshot().Experiments {
-		if run.QueuePosition > 0 && run.Timing != nil {
-			t.Fatalf("waiting submission ignored earlier experiments in its estimate: %+v", run)
+		if run.QueuePosition > 0 && (run.Timing == nil || run.Timing.RemainingSeconds < 3500) {
+			t.Fatalf("waiting submission omitted earlier experiments from its estimate: %+v", run)
 		}
 	}
 	replay, err := s.submitScenario(context.Background(), []byte(queueShortScenario), 2, "queue-idempotency")
-	if err != nil || replay.ID != second.ID || replay.QueuePosition != 1 {
+	if err != nil || replay.ID != second.ID || replay.QueuePosition != 1 || replay.Timing == nil || replay.Timing.RemainingSeconds < 3500 {
 		t.Fatalf("duplicate admission: %+v %v", replay, err)
 	}
 	if len(s.state.snapshot().Experiments) != 4 {

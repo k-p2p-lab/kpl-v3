@@ -32,7 +32,10 @@ func (s *Server) runArchiveLoop(ctx context.Context) {
 		s.archivePhase = "preparing"
 		s.archiveLastProgressAt = time.Now()
 		s.archiveStatusMu.Unlock()
-		err := s.archiveMaintenance(ctx)
+		err := s.processArchiveReconnect(ctx)
+		if err == nil {
+			err = s.archiveMaintenance(ctx)
+		}
 		s.archiveStatusMu.Lock()
 		s.archiveChecking = false
 		if s.archivePhase != "paused" {
@@ -40,12 +43,13 @@ func (s *Server) runArchiveLoop(ctx context.Context) {
 		}
 		s.archiveCheckedAt = time.Now().UTC()
 		s.archiveError = ""
+		s.archiveErrorKind = archiveFailureKind(err)
 		if err != nil {
 			s.archiveError = err.Error()
 		}
 		s.archiveStatusMu.Unlock()
 		if err != nil && ctx.Err() == nil {
-			s.logger.Warn("result archive unavailable", "error", err)
+			s.logger.Warn("result archive work deferred", "kind", archiveFailureKind(err), "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -119,19 +123,30 @@ func (s *Server) archiveMaintenance(ctx context.Context) error {
 		}
 		s.archiveQueueLoaded = true
 	}
+	var firstError error
 	// Avoid rescanning a large NAS directory on every local status poll or run.
 	if s.archiveLastScan.IsZero() || time.Since(s.archiveLastScan) >= time.Minute {
 		if err := s.importArchivedRuns(ctx); err != nil {
-			return err
+			if ctx.Err() != nil || archiveFailureKind(err) != "maintenance" {
+				return err
+			}
+			firstError = err
 		}
+		// Per-result failures still complete the directory scan. Keep the normal
+		// retry interval so one damaged index cannot cause repeated NAS scans.
 		s.archiveLastScan = time.Now()
 	}
 	if err := s.cleanDeletedArchives(ctx); err != nil {
-		return err
+		if ctx.Err() != nil || archiveFailureKind(err) != "maintenance" {
+			return err
+		}
+		if firstError == nil {
+			firstError = err
+		}
 	}
 	if !s.archiveIdle() {
 		s.setArchivePhase("paused")
-		return nil
+		return firstError
 	}
 	s.state.archiveQueueMu.Lock()
 	pending := map[string]uint64{}
@@ -139,7 +154,6 @@ func (s *Server) archiveMaintenance(ctx context.Context) error {
 		pending[id] = s.state.archiveVersions[id]
 	}
 	s.state.archiveQueueMu.Unlock()
-	var firstError error
 	for id, version := range pending {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -157,6 +171,9 @@ func (s *Server) archiveMaintenance(ctx context.Context) error {
 		} else if !errors.Is(err, errResultBusy) {
 			s.setRunArchiveStatus(id, "pending", err)
 			s.logger.Warn("archive result deferred", "run", id, "error", err)
+			if archiveFailureKind(err) != "maintenance" {
+				return err
+			}
 			if firstError == nil {
 				firstError = err
 			}

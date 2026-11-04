@@ -253,9 +253,7 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 	}
 	s.state.notify()
 	s.enqueueExperimentsLocked(ctx, batch, pending, spec)
-	s.state.mu.RLock()
-	first := s.state.experiments[pending[0].ID]
-	s.state.mu.RUnlock()
+	first, _ := s.state.experimentWithTiming(pending[0].ID)
 	return first, nil
 }
 

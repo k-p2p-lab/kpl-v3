@@ -6,8 +6,13 @@
     const unit = Math.min(4, Math.floor(Math.log(value) / Math.log(1024)));
     return `${(value / 1024 ** unit).toLocaleString("en-US", {maximumFractionDigits: 1})} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
   }
+  function reconnectFailureIsCurrent(status) {
+    const checked = status.lastCheckedAt && !status.lastCheckedAt.startsWith("0001-");
+    return status.reconnectState === "failed" && (!!status.error || !checked && !status.checking);
+  }
   function describe(status) {
-    const low = status.minFreeBytes > 0 && status.availableBytes < status.minFreeBytes;
+    const localUnknown = status.localSpaceKnown === false || status.localSpaceKnown === undefined && status.errorKind === "local";
+    const low = !localUnknown && status.minFreeBytes > 0 && status.availableBytes < status.minFreeBytes;
     // The server measures time since worker progress. A long transfer, a pause,
     // or a different clock on a mobile device must not imply a stalled NAS.
     const stalled = status.stalled === true && status.phase !== "paused";
@@ -20,38 +25,116 @@
       deleting: "Removing deleted archives…",
       paused: "Archiving paused while experiments are running.",
     };
-    const archive = status.error ? "Archive unavailable; results remain local."
+    const reconnecting = ["queued", "running"].includes(status.reconnectState);
+    const reconnectFailed = reconnectFailureIsCurrent(status);
+    const errorMessages = {
+      unavailable: "Archive unavailable; results remain local.",
+      maintenance: "Some archive work is deferred; local results are retained.",
+      local: localUnknown ? "Local result storage could not be inspected." : "Local result storage needs attention.",
+    };
+    const archive = reconnecting ? status.phase === "paused" ? "Archive reconnection is waiting for running experiments." : status.reconnectState === "queued" ? "Archive reconnection queued." : "Checking archived data before reconnecting…"
+      : status.error ? errorMessages[status.errorKind] || "Archiving needs attention; results remain local."
+      : reconnectFailed ? "Archive reconnection failed; local results are retained."
       : stalled ? "Archive progress is delayed; local recording remains available."
       : status.phase === "paused" ? phases.paused
       : status.checking ? phases[status.phase] || "Archive work in progress…"
       : !status.lastCheckedAt || status.lastCheckedAt.startsWith("0001-") ? "Discovering saved archives…" : "Archive connected.";
-    return {text: `Local result space: ${bytes(status.availableBytes)} free. ${low ? "Waiting for space before starting the next run. " : ""}${archive}`, warning: low || !!status.error || stalled};
+    let detail = reconnecting ? "" : status.error || "";
+    // ReconnectState records the last request. A later ordinary archive cycle
+    // can recover after the operator restores the original mount externally.
+    // While a cycle is still checking, preserve the request failure as history
+    // without claiming that the current check has already succeeded.
+    if (!reconnecting && status.reconnectState === "failed" && (reconnectFailed || status.checking) && status.reconnectError) {
+      detail = `Last reconnect attempt failed: ${status.reconnectError}${detail && detail !== status.reconnectError ? ` Current status: ${detail}` : ""}`;
+    }
+    detail = String(detail).replace(/\s+/g, " ").trim();
+    const shortDetail = detail.length > 240 ? `${detail.slice(0, 239)}…` : detail;
+    return {text: `Local result space: ${bytes(localUnknown ? undefined : status.availableBytes)} free. ${low ? "Waiting for space before starting the next run. " : ""}${archive}${shortDetail ? ` ${shortDetail}` : ""}`, warning: low || !reconnecting && (!!status.error || reconnectFailed) || stalled};
   }
   function init({api, onStatus}) {
     const element = root.document.querySelector("#resultStorageStatus");
     if (!element) return;
-    let timer, controller, stopped = false;
+    const reconnect = root.document.querySelector("#reconnectArchive");
+    const prompt = root.document.querySelector("#archiveReconnectPrompt");
+    const confirm = root.document.querySelector("#confirmArchiveReconnect");
+    const cancel = root.document.querySelector("#cancelArchiveReconnect");
+    let timer, controller, stopped = false, lastStatus, reconnectBusy = false, revision = 0;
+    function closePrompt() {
+      if (prompt) prompt.hidden = true;
+      reconnect?.setAttribute("aria-expanded", "false");
+    }
+    function render(status) {
+      const message = describe(status);
+      element.textContent = message.text;
+      element.dataset.warning = String(message.warning);
+      const failed = reconnectFailureIsCurrent(status);
+      element.title = status.error || (failed ? status.reconnectError : "") || (status.minFreeBytes ? `Minimum local free space before starting a run: ${bytes(status.minFreeBytes)}.` : "Local free-space admission guard is disabled.");
+      const pending = reconnectBusy || ["queued", "running"].includes(status.reconnectState);
+      if (reconnect) {
+        reconnect.hidden = !(status.errorKind === "unavailable" && status.error || failed || pending);
+        reconnect.disabled = pending;
+        reconnect.textContent = pending ? "Reconnecting…" : "Reconnect archive";
+        if (pending || reconnect.hidden) closePrompt();
+      }
+      if (confirm) confirm.disabled = pending;
+    }
     async function refresh() {
-      if (stopped || controller || root.document.hidden) return;
+      if (stopped || controller || reconnectBusy || root.document.hidden) return;
       controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 8000);
+      const request = controller;
+      const requestRevision = revision;
+      const timeout = setTimeout(() => request.abort(), 8000);
       try {
-        const status = await api("/api/v1/result-storage", {signal: controller.signal});
-        const message = describe(status);
-        element.textContent = message.text;
-        element.dataset.warning = String(message.warning);
-        element.title = status.error || (status.minFreeBytes ? `Minimum local free space before starting a run: ${bytes(status.minFreeBytes)}.` : "Local free-space admission guard is disabled.");
+        const status = await api("/api/v1/result-storage", {signal: request.signal});
+        if (requestRevision !== revision || stopped || root.document.hidden) return;
+        lastStatus = status;
+        render(status);
         if (!stopped && !root.document.hidden) onStatus?.(status);
       } catch (error) {
-        if (!stopped && error.status !== 401) {
+        if (!stopped && requestRevision === revision && error.status !== 401) {
           element.textContent = "Storage status is temporarily unavailable.";
           element.dataset.warning = "true";
         }
       } finally {
         clearTimeout(timeout); controller = null;
-        if (!stopped) timer = setTimeout(refresh, 15000);
+        if (!stopped && !reconnectBusy && !root.document.hidden) {
+          clearTimeout(timer);
+          if (requestRevision !== revision) void refresh();
+          else timer = setTimeout(refresh, 15000);
+        }
       }
     }
+    reconnect?.addEventListener("click", () => {
+      if (reconnect.disabled || reconnect.hidden || !prompt) return;
+      prompt.hidden = false;
+      reconnect.setAttribute("aria-expanded", "true");
+      cancel?.focus();
+    });
+    cancel?.addEventListener("click", () => { closePrompt(); reconnect?.focus(); });
+    confirm?.addEventListener("click", async () => {
+      if (!lastStatus || reconnectBusy || prompt?.hidden || ["queued", "running"].includes(lastStatus.reconnectState)) return;
+      reconnectBusy = true;
+      revision++;
+      clearTimeout(timer);
+      controller?.abort();
+      closePrompt();
+      render(lastStatus);
+      const request = new AbortController();
+      const timeout = setTimeout(() => request.abort(), 8000);
+      try {
+        const response = await api("/api/v1/result-storage/reconnect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({confirmCurrentArchive: true}), signal: request.signal});
+        lastStatus = {...lastStatus, reconnectState: response.state, reconnectError: ""};
+      } catch (error) {
+        lastStatus = {...lastStatus, reconnectState: "failed", reconnectError: `Reconnect request could not be confirmed: ${error.message}`};
+      } finally {
+        clearTimeout(timeout);
+        revision++;
+        reconnectBusy = false;
+        render(lastStatus);
+        clearTimeout(timer);
+        void refresh();
+      }
+    });
     root.document.addEventListener("visibilitychange", () => {
       clearTimeout(timer);
       if (root.document.hidden) controller?.abort(); else void refresh();

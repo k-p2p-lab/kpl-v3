@@ -79,8 +79,12 @@ type Server struct {
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}
 	archiveStatusMu            sync.RWMutex
+	archiveIdentityInitMu      sync.Mutex
 	archiveCheckedAt           time.Time
 	archiveError               string
+	archiveReconnectState      string
+	archiveReconnectError      string
+	archiveErrorKind           string
 	archiveIOCheck             func()
 	resultArchiveMu            sync.Mutex
 	resultArchives             map[string]resultArchiveInfo

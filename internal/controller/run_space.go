@@ -60,6 +60,8 @@ func (s *Server) waitRunStorage(ctx context.Context, id string) error {
 }
 
 type resultStorageOverview struct {
+	ReconnectState   string    `json:"reconnectState,omitempty"`
+	ReconnectError   string    `json:"reconnectError,omitempty"`
 	ResultsRevision  string    `json:"resultsRevision"`
 	Phase            string    `json:"phase"`
 	LastProgressAt   time.Time `json:"lastProgressAt"`
@@ -69,9 +71,11 @@ type resultStorageOverview struct {
 	LocalDirectory   string    `json:"localDirectory"`
 	ArchiveDirectory string    `json:"archiveDirectory"`
 	AvailableBytes   uint64    `json:"availableBytes"`
+	LocalSpaceKnown  bool      `json:"localSpaceKnown"`
 	MinFreeBytes     uint64    `json:"minFreeBytes"`
 	LastCheckedAt    time.Time `json:"lastCheckedAt"`
 	Error            string    `json:"error,omitempty"`
+	ErrorKind        string    `json:"errorKind,omitempty"`
 }
 
 func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
@@ -82,13 +86,18 @@ func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
 	free, err := s.runStorageFree()
 	s.archiveStatusMu.RLock()
 	result := resultStorageOverview{Checking: s.archiveChecking, CheckStartedAt: s.archiveCheckStartedAt, LocalDirectory: currentRunsDirectory, ArchiveDirectory: archivedRunsDirectory, AvailableBytes: free, MinFreeBytes: s.config.RunMinFreeBytes, LastCheckedAt: s.archiveCheckedAt, Error: s.archiveError}
+	result.LocalSpaceKnown = err == nil
 	result.ResultsRevision = strconv.FormatUint(s.state.resultsRevision.Load(), 10)
+	result.ReconnectState = s.archiveReconnectState
+	result.ReconnectError = s.archiveReconnectError
+	result.ErrorKind = s.archiveErrorKind
 	result.Phase = s.archivePhase
 	result.LastProgressAt = s.archiveLastProgressAt
 	result.Stalled = result.Checking && archivePhaseCanStall(result.Phase) && !result.LastProgressAt.IsZero() && time.Since(result.LastProgressAt) > archiveStallAfter
 	s.archiveStatusMu.RUnlock()
 	if err != nil {
 		result.Error = "Cannot inspect local result storage: " + err.Error()
+		result.ErrorKind = "local"
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, result)

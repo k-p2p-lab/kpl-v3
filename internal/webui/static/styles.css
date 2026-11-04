@@ -763,7 +763,11 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 
 .result-storage { font-size: .7rem; padding: .05rem .4rem; border: 1px solid var(--line); border-radius: .35rem; color: var(--muted); white-space: nowrap; }
 .result-storage:is(.pending,.archiving) { color: var(--amber); border-color: rgba(242,183,76,.3); }
-.results-storage-status { margin: 0; padding: .4rem 1.2rem .75rem; color: var(--muted); font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
+.results-storage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; padding: .4rem 1.2rem .75rem; }
+.results-storage-status { flex: 1 1 18rem; min-width: 0; margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
+.archive-reconnect-prompt { flex-basis: 100%; color: var(--muted); font-size: .8rem; }
+.archive-reconnect-prompt p { margin: .3rem 0 .6rem; }
+.archive-reconnect-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .results-storage-status[data-warning="true"] { color: var(--amber); }
 
 #appendBatchDialog { width: min(34rem, calc(100% - 1rem)); }

@@ -6,21 +6,24 @@
   const research = node ? require("./research-charts.js") : root.KPLResearch;
   const files = node ? require("./research-files.js") : root.KPLResearchFiles;
   const maxArchiveBytes = 128 * 1024 * 1024;
-  const archiveTooLarge = () => new Error("CSV export exceeds 128 MiB. Select fewer results and download again.");
-  const checkAbort = signal => { if (signal?.aborted) throw new DOMException("CSV download canceled.", "AbortError"); };
+  const archiveTooLarge = label => new Error(`${label} export exceeds 128 MiB. Select fewer results and download again.`);
+  const checkAbort = signal => { if (signal?.aborted) throw new DOMException("Analysis export canceled.", "AbortError"); };
 
   function pause(signal, milliseconds) {
     checkAbort(signal);
     return new Promise((resolve, reject) => {
       const done = () => { signal?.removeEventListener("abort", abort); resolve(); };
       const timer = setTimeout(done, milliseconds);
-      const abort = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(new DOMException("CSV download canceled.", "AbortError")); };
+      const abort = () => { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(new DOMException("Analysis export canceled.", "AbortError")); };
       signal?.addEventListener("abort", abort, {once:true});
     });
   }
 
   function createDownloads({api, getResults, document = root.document, url = root.URL, pollInterval = 2000,
-    requestTimeout = 30000, byteLimit = maxArchiveBytes}) {
+    requestTimeout = 30000, byteLimit = maxArchiveBytes, format = "csv"}) {
+    if (!["csv", "json"].includes(format)) throw new Error("Unknown analysis export format.");
+    const label = format === "json" ? "JSON" : "CSV";
+    const tooLarge = () => archiveTooLarge(label);
     async function request(path, options, signal) {
       checkAbort(signal);
       const controller = new AbortController();
@@ -34,7 +37,7 @@
       } catch (error) {
         checkAbort(signal);
         if (error.name === "AbortError" && !signal?.aborted)
-          throw new Error("Loading analysis timed out. Download CSV ZIP again to reconnect; accepted analysis continues on the server.");
+          throw new Error(`Loading analysis timed out. Choose Download → ${format === "json" ? "Analysis JSON ZIP" : "CSV ZIP"} again to reconnect; accepted analysis continues on the server.`);
         throw error;
       } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
     }
@@ -49,7 +52,7 @@
       let job = await request(path, {}, signal);
       validateJob(job);
       // Export the last completed snapshot even during verification or a new
-      // analysis. CSV download never requests a forced reanalysis.
+      // analysis. Selection downloads never request forced reanalysis.
       const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
       let analysisID = savedID;
       if (!analysisID) {
@@ -68,14 +71,26 @@
       }
       if (typeof analysisID !== "string" || !analysisID) throw new Error("Analysis snapshot identity is missing.");
       progress("Loading completed analysis");
-      const data = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${savedID ? "&saved=1" : ""}`, {}, signal);
+      const source = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${savedID ? "&saved=1" : ""}`, format === "json" ? {responseType:"text"} : {}, signal);
+      const data = format === "json" ? JSON.parse(source) : source;
       images.validateResponse(data, id);
       if (data.analysisId !== analysisID) throw new Error("The saved analysis changed. Download again to capture the current snapshot.");
-      return data;
+      return {data, source};
     }
 
     async function runArchive(id, signal, progress, availableBytes) {
-      const data = await loadAnalysis(id, signal, progress);
+      const {data, source} = await loadAnalysis(id, signal, progress);
+      if (format === "json") {
+        checkAbort(signal);
+        progress("Preparing analysis JSON");
+        if (source.length > availableBytes) throw tooLarge();
+        // Preserve the original JSON text, including integers beyond JS precision.
+        const bytes = new TextEncoder().encode(source);
+        if (bytes.length > availableBytes) throw tooLarge();
+        const name = images.imageZIPFilename(data.result.name, id).replace(/-images\.zip$/, "-analysis.json");
+        await pause(signal, 0);
+        return {name, data:bytes};
+      }
       const charts = images.buildCharts(data).map(research.formatChart), bundle = [], encoder = new TextEncoder();
       if (charts.length > 65535) throw new Error("This result has too many charts for one CSV ZIP.");
       let size = 22;
@@ -84,7 +99,7 @@
         progress(`Preparing CSV ${index + 1}/${charts.length}`);
         const name = `${id}-${chart.id}.csv`, bytes = encoder.encode(files.chartCSV(chart));
         size += 76 + 2 * encoder.encode(name).length + bytes.length;
-        if (size > availableBytes) throw archiveTooLarge();
+        if (size > availableBytes) throw tooLarge();
         bundle.push({name, data:bytes});
         // Yield between charts so cancel and progress remain responsive.
         await pause(signal, 0);
@@ -96,7 +111,7 @@
     }
 
     return async (scope, keys, {signal, onProgress = () => {}} = {}) => {
-      if (scope !== "results") throw new Error("CSV ZIP export is available for saved results only.");
+      if (scope !== "results") throw new Error(`${label} ZIP export is available for saved results only.`);
       const ids = selection.selectedIDs(scope, keys, [], getResults());
       // IDs are also filename components. The server accepts this same alphabet.
       if (ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) throw new Error("Invalid result identity. Refresh the list and select again.");
@@ -110,11 +125,11 @@
       try {
         for (const [index, id] of ids.entries()) {
           checkAbort(controller.signal);
-          const progress = message => onProgress(`CSV ZIP ${index + 1}/${ids.length} · ${id} · ${message}`);
+          const progress = message => onProgress(`${label} ZIP ${index + 1}/${ids.length} · ${id} · ${message}`);
           try {
             const archive = await runArchive(id, controller.signal, progress, byteLimit - size);
             size += 76 + 2 * encoder.encode(archive.name).length + archive.data.length;
-            if (size > byteLimit) throw archiveTooLarge();
+            if (size > byteLimit) throw tooLarge();
             bundle.push(archive);
           } catch (error) {
             if (error.name === "AbortError") throw error;
@@ -122,12 +137,12 @@
           }
         }
         checkAbort(controller.signal);
-        onProgress("Preparing selected CSV bundles…");
+        onProgress(format === "json" ? "Preparing selected analysis JSON files…" : "Preparing selected CSV bundles…");
         objectURL = url.createObjectURL(files.zip(bundle));
         checkAbort(controller.signal);
         const link = document.createElement("a");
         link.href = objectURL;
-        link.download = `results-csv-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.zip`;
+        link.download = `results-${format === "json" ? "analysis" : "csv"}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.zip`;
         link.hidden = true;
         document.body.appendChild(link);
         try { link.click(); } finally { link.remove(); }
@@ -144,5 +159,5 @@
   }
   const exported = {createDownloads};
   if (node) module.exports = exported;
-  else root.KPLResultCSVDownloads = exported;
+  else root.KPLResultAnalysisDownloads = exported;
 })(globalThis);

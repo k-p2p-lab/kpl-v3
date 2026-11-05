@@ -849,6 +849,10 @@ func (s *Server) handleResultDownload(w http.ResponseWriter, r *http.Request, id
 			http.NotFound(w, r)
 			return
 		}
+		if errors.Is(err, errArchivedRunUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		s.logger.Warn("capture saved result", "run", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "saved result files are unreadable")
 		return

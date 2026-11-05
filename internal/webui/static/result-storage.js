@@ -122,7 +122,7 @@
       const request = new AbortController();
       const timeout = setTimeout(() => request.abort(), 8000);
       try {
-        const response = await api("/api/v1/result-storage/reconnect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({confirmCurrentArchive: true}), signal: request.signal});
+        const response = await api("/api/v1/result-storage/reconnect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({confirmCurrentArchive: true, allowMissingRuns: true}), signal: request.signal});
         lastStatus = {...lastStatus, reconnectState: response.state, reconnectError: ""};
       } catch (error) {
         lastStatus = {...lastStatus, reconnectState: "failed", reconnectError: `Reconnect request could not be confirmed: ${error.message}`};

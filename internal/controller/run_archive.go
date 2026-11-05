@@ -297,6 +297,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	var files []resultFile
 	var manifest runArchiveManifestData
 	var sourceRevision, capturedFingerprint string
+	var archiveMissing bool
 	defer func() {
 		for _, file := range files {
 			file.close()
@@ -330,6 +331,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			return err
 		}
 		defer root.Close()
+		archiveMissing = readRunArchiveStatus(root).State == "unavailable"
 		if _, err := root.Lstat(runArchiveImportFile); err == nil {
 			return errResultBusy
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -421,6 +423,11 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	}()
 	if err != nil {
 		return err
+	}
+	if archiveMissing {
+		if err := s.recoverMissingArchiveRun(ctx, id, manifest); err != nil {
+			return err
+		}
 	}
 	// Hashing, NAS opening, copying, verification and publication all run outside
 	// Controller locks. Logs are sealed segments and metadata uses pinned inodes.

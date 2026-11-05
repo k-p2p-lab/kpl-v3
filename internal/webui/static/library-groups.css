@@ -97,5 +97,6 @@
 @container library-tools (max-width: 22rem) {
   .library-group-selection { grid-template-columns: minmax(0, 1fr) auto; }
   .library-selection-downloads { grid-column: 1 / -1; }
-  .library-selection-downloads > button { flex: 1 1 auto; }
+  .library-selection-downloads > button, .library-selection-downloads > .action-menu { flex: 1 1 auto; }
+  .library-selection-downloads > .action-menu > button { width: 100%; }
 }

@@ -341,9 +341,10 @@ async function logout() {
 }
 
 async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
+  const {responseType, ...fetchOptions} = options;
+  const headers = new Headers(fetchOptions.headers || {});
   if (!["GET", "HEAD"].includes((options.method || "GET").toUpperCase())) headers.set("X-KPL-Request", "dashboard");
-  const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
+  const response = await fetch(path, { ...fetchOptions, headers, credentials: "same-origin" });
   if (response.status === 401) redirectToLogin();
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
@@ -352,7 +353,7 @@ async function api(path, options = {}) {
     throw failure;
   }
   if (response.status === 204) return null;
-  return response.json();
+  return responseType === "text" ? response.text() : response.json();
 }
 
 const scenarioRequestTimeoutMs = 30000;
@@ -926,8 +927,14 @@ function renderSavedScenarios() {
   $("#scenarioName").disabled = busy;
   $("#scenarioText").disabled = busy;
   $("#runRepetitions").disabled = busy;
-  $("#runScenario").disabled = busy;
-  $("#runScenario").textContent = state.scenarioSubmitting ? "Submitting…" : "Run";
+  const runSelection = globalThis.KPLLibraryGroups?.getSelection?.("scenarios");
+  $("#runScenario").disabled = busy || Boolean(globalThis.KPLLibraryGroups?.isBusy?.()) || runSelection?.length === 0;
+  $("#runScenario").textContent = state.scenarioSubmitting
+    ? state.scenarioRunProgress ? `${state.scenarioRunProgress.accepted + 1}/${state.scenarioRunProgress.total}…` : "Submitting…"
+    : runSelection ? "Run selected" : "Run";
+  $("#runScenario").setAttribute("aria-label", state.scenarioSubmitting && state.scenarioRunProgress
+    ? `Submitting scenario ${state.scenarioRunProgress.accepted + 1} of ${state.scenarioRunProgress.total}`
+    : runSelection ? `Run ${runSelection.length} selected scenarios` : "Run editor scenario");
   $("#scenarioLibraryError").textContent = state.scenarioActionScope === "library" ? "" : state.scenarioActionError;
   $("#scenarioListError").textContent = state.scenarioActionScope === "library" ? state.scenarioActionError : "";
   $("#scenarioListError").hidden = !$("#scenarioListError").textContent;
@@ -1737,10 +1744,11 @@ function renderSavedResults() {
 }
 
 function resultStorageMarkup(run) {
-  const labels = {local: "Local", pending: "Archive pending", archiving: "Archiving", archived: "Archived"};
+  const labels = {local: "Local", pending: "Archive pending", archiving: "Archiving", archived: "Archived", unavailable: "Archive missing"};
   const status = run.storage?.state;
   if (!labels[status]) return "";
-  const help = status === "archived" ? "Source logs are stored in the archive; a small local index keeps results available."
+  const help = status === "unavailable" ? run.storage.error || "Archived objects are missing. Restore the original objects; other results can still be archived."
+    : status === "archived" ? "Source logs are stored in the archive; a small local index keeps results available."
     : status === "local" ? "Recording locally. Results are archived after recording stops."
     : "Local data is retained until the archive copy is verified. Transfers pause between chunks while an experiment runs.";
   return `<span class="result-storage ${escapeHTML(status)}" title="${escapeHTML(help)}">${labels[status]}</span>`;
@@ -2492,12 +2500,24 @@ function scenarioSubmissionKey(payload) {
 }
 
 async function submitScenarioRun() {
-  if (scenarioOperationBusy()) return;
+  if (scenarioOperationBusy() || globalThis.KPLLibraryGroups?.isBusy?.()) return;
   const error = $("#scenarioError");
   const repetitions = Number($("#runRepetitions").value);
   if (!Number.isInteger(repetitions) || repetitions < 1 || repetitions > 100) {
     error.textContent = "Enter a whole number of runs from 1 to 100.";
     $("#runRepetitions").focus();
+    return;
+  }
+  const selectedKeys = globalThis.KPLLibraryGroups?.getSelection?.("scenarios");
+  if (selectedKeys) {
+    if (!selectedKeys.length) return;
+    const selected = new Set(selectedKeys);
+    const scenarios = (state.savedScenarios || []).filter(item => selected.has(`scenario:${item.id}`));
+    if (scenarios.length !== selected.size) {
+      error.textContent = "Refresh the saved scenario list and select the scenarios again.";
+      return;
+    }
+    await submitSelectedScenarioRuns(scenarios, repetitions);
     return;
   }
   const editorVersion = state.scenarioEditorVersion;
@@ -2533,6 +2553,40 @@ async function submitScenarioRun() {
   } finally {
     state.scenarioSubmitting = false;
     renderSavedScenarios();
+  }
+}
+
+async function submitSelectedScenarioRuns(scenarios, repetitions) {
+  const error = $("#scenarioError"), editorVersion = state.scenarioEditorVersion;
+  state.scenarioSubmitting = true;
+  state.pendingScenarioDeleteId = null;
+  state.scenarioActionError = "";
+  error.textContent = "";
+  renderSavedScenarios();
+  try {
+    if (!state.scenarioRunQueue) {
+      let storage;
+      try { storage = globalThis.sessionStorage; } catch {}
+      state.scenarioRunQueue = globalThis.KPLScenarioRunQueue.createQueue({request: scenarioRequest, storage});
+    }
+    const result = await state.scenarioRunQueue.submit(scenarios, repetitions, progress => {
+      state.scenarioRunProgress = progress;
+      $("#runScenario").textContent = `${progress.accepted + 1}/${progress.total}…`;
+      $("#runScenario").setAttribute("aria-label", `Submitting scenario ${progress.accepted + 1} of ${progress.total}`);
+    });
+    if (state.scenarioEditorVersion === editorVersion && $("#scenarioDialog").open) {
+      $("#scenarioDialog").close();
+      globalThis.KPLDashboardTabs?.show("experiments");
+    }
+    showToast(`Queued ${result.runs} runs from ${result.scenarios} selected scenario${result.scenarios === 1 ? "" : "s"}. Submissions run in order.`);
+  } catch (caught) {
+    error.textContent = caught.message;
+  } finally {
+    state.scenarioSubmitting = false;
+    state.scenarioRunProgress = null;
+    renderSavedScenarios();
+    // A partial submission can also have inherited saved scenario groups.
+    void Promise.resolve().then(() => globalThis.KPLLibraryGroups?.refresh({fresh: true})).catch(() => {});
   }
 }
 
@@ -2750,9 +2804,13 @@ $("#deleteResultDialog").addEventListener("close", () => {
 });
 
 globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisibleKeys: visibleLibraryGroupKeys,
+  isExternallyBusy: () => state.scenarioSubmitting,
+  onSelectionChanged: renderSavedScenarios,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,
     getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),
-  downloadCSV: globalThis.KPLResultCSVDownloads?.createDownloads({api,
+  downloadCSV: globalThis.KPLResultAnalysisDownloads?.createDownloads({api,
+    getResults: () => state.savedResults || []}),
+  downloadJSON: globalThis.KPLResultAnalysisDownloads?.createDownloads({api, format:"json",
     getResults: () => state.savedResults || []}),
   onChanged: () => { renderSavedScenarios(); renderSavedResults(); } });
 globalThis.KPLResultStorage?.init({ api, onStatus: refreshResultsForStorage });

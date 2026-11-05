@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const {createDownloads} = require('./static/result-csv-downloads.js');
+const {createDownloads} = require('./static/result-analysis-downloads.js');
 const images = require('./static/result-images.js');
 const research = require('./static/research-charts.js');
 const files = require('./static/research-files.js');
@@ -156,7 +156,7 @@ test('size, selection and path limits reject exports before a completed download
 
 test('CSV export module is embedded before the app and selection UI connects it separately',()=>{
   const html=fs.readFileSync(__dirname+'/static/index.html','utf8'),app=fs.readFileSync(__dirname+'/static/app.js','utf8');
-  assert.ok(html.indexOf('/result-csv-downloads.js')>html.indexOf('/result-images.js'));
-  assert.ok(html.indexOf('/result-csv-downloads.js')<html.indexOf('/app.js'));
-  assert.match(app,/downloadCSV: globalThis.KPLResultCSVDownloads\?\.createDownloads/);
+  assert.ok(html.indexOf('/result-analysis-downloads.js')>html.indexOf('/result-images.js'));
+  assert.ok(html.indexOf('/result-analysis-downloads.js')<html.indexOf('/app.js'));
+  assert.match(app,/downloadCSV: globalThis.KPLResultAnalysisDownloads\?\.createDownloads/);
 });

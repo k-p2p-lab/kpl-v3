@@ -12,7 +12,7 @@ function harness(api, configuration={}) {
     const entries=listeners.get(type)||[];entries.push({handler,capture});listeners.set(type,entries);
   }};
   let changes=0;
-  const groups=createLibraryGroups({document});
+  const groups=createLibraryGroups({document,KPLActionMenus:configuration.actionMenus});
   const items=[{key:'scenario:one',name:'First scenario'},{key:'scenario:two',name:'Second scenario'},
     {key:'batch:one',name:'First batch'},{key:'run:single',name:'Single run'}];
   const initialized=groups.init({api,getItems:()=>items,onChanged:()=>changes++,...configuration});
@@ -29,6 +29,42 @@ function harness(api, configuration={}) {
   }
   return {groups,initialized,items,action,check,changes:()=>changes,listeners};
 }
+
+test('scenario execution reads a selection snapshot and updates on individual checkbox changes',async()=>{
+  let changes=0;
+  const h=harness(async()=>initial(),{onSelectionChanged:()=>changes++});await h.initialized;
+  assert.equal(h.groups.getSelection('scenarios'),null);
+  await h.action('select');
+  assert.deepEqual(h.groups.getSelection('scenarios'),[]);
+  h.check('scenario:one',true);
+  const frozen=h.groups.getSelection('scenarios');
+  h.check('scenario:two',true);
+  assert.deepEqual(frozen,['scenario:one']);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one','scenario:two']);
+  assert.equal(h.groups.getSelection('results'),null);
+  assert.equal(changes,2);
+});
+
+test('registration locks group mutations, filters, downloads and selection until it finishes',async()=>{
+  let registering=false,downloads=0,writes=0;
+  const h=harness(async(path,options)=>{if(options?.method)writes++;return initial();},
+    {isExternallyBusy:()=>registering,download:async()=>downloads++});await h.initialized;
+  await h.action('select');h.check('scenario:one',true);
+  registering=true;h.groups.refreshUI();
+  assert.equal(h.groups.isBusy(),true);
+  assert.match(h.groups.selectionMarkup('scenario:one','One'),/ disabled/);
+  assert.equal(h.check('scenario:one',false),true);
+  assert.equal(h.check('scenario:two',true),false);
+  await h.action('clear');await h.action('select-visible');await h.action('select','results');await h.action('download');
+  h.groups.setFilter('g2');
+  assert.equal(h.groups.isFiltered(),false);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  await assert.rejects(h.groups.assign(['scenario:one'],'g2'));
+  assert.equal(writes,0);assert.equal(downloads,0);
+  registering=false;
+  assert.equal(h.groups.isBusy(),false);
+  await h.action('clear');assert.deepEqual(h.groups.getSelection('scenarios'),[]);
+});
 
 test('scenario and result filters use one shared group snapshot', async()=>{
   const h=harness(async()=>initial());await h.initialized;
@@ -293,7 +329,7 @@ test('CSV ZIP is limited to Saved Results selection and reports progress without
   assert.doesNotMatch(bars['#scenarioGroupTools'].innerHTML,/download-csv/);
   await h.action('download-csv','scenarios');assert.equal(downloads.length,0);
   await h.action('select','results');h.check('batch:one',true);
-  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="download-csv"[^>]*>Download CSV ZIP/);
+  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="download-csv"[^>]*>CSV ZIP/);
   await h.action('download-csv','results');
   assert.equal(downloads.length,1);
   assert.deepEqual(downloads[0].keys,['batch:one']);
@@ -334,4 +370,59 @@ test('CSV export errors keep selected results retryable and preserve original ZI
   assert.equal(csvAttempts,2);
   await h.action('download','results');assert.equal(original,1);
   assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
+});
+
+test('one Download dropdown offers the three result formats and only YAML for scenarios',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  let refreshes=0;
+  const h=harness(async()=>initial(),{bars,download:async()=>{},downloadCSV:async()=>{},downloadJSON:async()=>{},actionMenus:{refresh(){refreshes++}}});
+  await h.initialized;await h.action('select','results');
+  let html=bars['#resultGroupTools'].innerHTML;
+  assert.match(html,/data-action-menu-toggle="library-download:results"[^>]* disabled/);
+  h.check('batch:one',true);html=bars['#resultGroupTools'].innerHTML;
+  assert.match(html,/class="action-menu" data-action-menu="library-download:results"/);
+  assert.equal((html.match(/data-action-menu-toggle=/g)||[]).length,1);
+  assert.match(html,/data-action-menu-toggle="library-download:results" aria-expanded="false">Download/);
+  assert.match(html,/class="action-menu-items">[\s\S]*>Results ZIP<\/button>[\s\S]*>CSV ZIP<\/button>[\s\S]*>Analysis JSON ZIP<\/button>/);
+  await h.action('select','scenarios');h.check('scenario:one',true);html=bars['#scenarioGroupTools'].innerHTML;
+  assert.match(html,/data-action-menu-toggle="library-download:scenarios"/);
+  assert.match(html,/>Scenarios ZIP<\/button>/);
+  assert.doesNotMatch(html,/download-json|download-csv/);
+  assert.ok(refreshes>0,'dynamic dropdown markup must refresh the shared menu controller');
+});
+
+test('JSON menu export supports progress and cancel, blocks all other formats and restores trigger focus',async()=>{
+  const calls=[];let cancelFocus=0,triggerFocus=0;
+  const bar={innerHTML:'',contains:()=>false,querySelector:selector=>({focus(){if(selector.includes('cancel-download'))cancelFocus++;else if(selector.includes('action-menu-toggle'))triggerFocus++}})};
+  const h=harness(async()=>initial(),{bars:{'#resultGroupTools':bar},download:async()=>{calls.push('raw')},downloadCSV:async()=>{calls.push('csv')},downloadJSON:(scope,keys,options)=>{
+    calls.push({scope,keys,options});
+    return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Canceled','AbortError'))));
+  }});
+  await h.initialized;await h.action('select','scenarios');h.check('scenario:one',true);
+  await h.action('download-json','scenarios');assert.equal(calls.length,0);
+  await h.action('select','results');h.check('batch:one',true);
+  await h.action('download-json','results');assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].keys,['batch:one']);assert.equal(calls[0].scope,'results');
+  assert.equal(cancelFocus,1);
+  calls[0].options.onProgress('JSON ZIP 1/2 · <unsafe>');
+  assert.match(bar.innerHTML,/JSON ZIP 1\/2 · &lt;unsafe&gt;/);
+  assert.match(bar.innerHTML,/data-action-menu-toggle="library-download:results"[^>]* disabled/);
+  await h.action('download-json','results');await h.action('download-csv','results');await h.action('download','results');await h.action('clear','results');
+  assert.equal(calls.length,1);assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
+  await h.action('cancel-download','results');
+  assert.equal(calls[0].options.signal.aborted,true);
+  assert.match(bar.innerHTML,/JSON download canceled.*continues on the server/);
+  assert.doesNotMatch(bar.innerHTML,/data-action-menu-toggle="library-download:results"[^>]* disabled/);
+  assert.equal(triggerFocus,1);
+  assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
+});
+
+test('JSON failure keeps selection retryable and leaves the existing download formats available',async()=>{
+  let failures=0,csv=0,raw=0;
+  const h=harness(async()=>initial(),{download:async()=>raw++,downloadCSV:async()=>csv++,downloadJSON:async()=>{failures++;throw new Error('analysis unavailable')}});
+  await h.initialized;await h.action('select','results');h.check('run:single',true);
+  await h.action('download-json','results');await h.action('download-json','results');
+  await h.action('download-csv','results');await h.action('download','results');
+  assert.equal(failures,2);assert.equal(csv,1);assert.equal(raw,1);
+  assert.match(h.groups.selectionMarkup('run:single','Single'),/ checked/);
 });

@@ -445,7 +445,7 @@
             <p class="results-storage-status" id="resultStorageStatus" role="status" aria-live="polite"></p>
             <button class="secondary-button" id="reconnectArchive" type="button" aria-controls="archiveReconnectPrompt" aria-expanded="false" hidden>Reconnect archive</button>
             <div class="archive-reconnect-prompt" id="archiveReconnectPrompt" hidden>
-              <p>Confirm that the intended archive storage is mounted on this Controller. Reconnecting checks existing archived data before accepting the current storage. Local results are retained.</p>
+              <p>Confirm that the intended archive storage is mounted on this Controller. Reconnecting verifies existing archived data. Missing runs remain marked Archive missing while other results can be archived. Restore missing objects to recover those runs. Corrupt objects still block reconnection. Local results are retained.</p>
               <div class="archive-reconnect-actions">
                 <button class="secondary-button" id="cancelArchiveReconnect" type="button">Cancel</button>
                 <button class="primary-button" id="confirmArchiveReconnect" type="button">Confirm reconnect</button>
@@ -626,7 +626,7 @@
         <button class="secondary-button" type="button" data-scenario-close>Cancel</button>
         <button class="primary-button" id="runScenario" type="button">Run</button>
       </footer>
-      <p class="dialog-help" id="repetitionHelp">Submissions run in order. You can queue more while an experiment runs. Stop or failure cancels that batch's remaining runs; the next submission starts after Peer cleanup.</p>
+      <p class="dialog-help" id="repetitionHelp">Choose Select in Saved scenarios to run several scenarios. Runs applies to each selected scenario; Run without selection uses the editor YAML. Submissions run in order, after Peer cleanup. Stop or failure cancels only that batch's remaining runs.</p>
     </form>
   </dialog>
 
@@ -702,8 +702,9 @@
   <script src="/agent-resources.js" defer></script>
   <script src="/service-resources.js" defer></script>
   <script src="/library-downloads.js" defer></script>
-  <script src="/result-csv-downloads.js" defer></script>
+  <script src="/result-analysis-downloads.js" defer></script>
   <script src="/library-groups.js" defer></script>
+  <script src="/scenario-run-queue.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/action-menus.js" defer></script>
 </body>

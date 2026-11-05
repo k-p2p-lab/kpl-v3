@@ -84,6 +84,7 @@ type Server struct {
 	archiveError               string
 	archiveReconnectState      string
 	archiveReconnectError      string
+	archiveAllowMissing        bool
 	archiveErrorKind           string
 	archiveIOCheck             func()
 	resultArchiveMu            sync.Mutex

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -20,6 +21,8 @@ const runArchiveStatusFile = ".archive-status.json"
 const runArchiveImportFile = ".archive-import"
 const runArchiveManifestLimit = 4 << 20
 const archiveQuietPeriod = 5 * time.Second
+
+var errArchivedRunUnavailable = errors.New("archived result is unavailable")
 
 // Objects are immutable after publication. Segment identifies a local sealed
 // log file, allowing a crash between manifest publication and unlink to recover
@@ -283,6 +286,9 @@ func (s *Server) setRunArchiveStatus(id, state string, cause error) {
 	}
 	defer root.Close()
 	status := runArchiveStatus{State: state, UpdatedAt: time.Now().UTC()}
+	if readRunArchiveStatus(root).State == "unavailable" && state != "archived" {
+		status.State = "unavailable"
+	}
 	if cause != nil {
 		status.Error = cause.Error()
 	}
@@ -322,6 +328,9 @@ func readRunArchiveStatus(root *os.Root) runArchiveStatus {
 
 func resultStorageStatus(root *os.Root, id string) runArchiveStatus {
 	status := readRunArchiveStatus(root)
+	if status.State == "unavailable" {
+		return status
+	}
 	manifest, err := readRunArchive(root, id)
 	if err != nil {
 		return runArchiveStatus{State: "pending", Error: err.Error()}
@@ -383,6 +392,18 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 	}
 	s.state.persistMu.Lock()
 	deleted, err := s.state.resultDeletedLocked(id)
+	if err == nil && !deleted {
+		local, openErr := s.analysisDirectory(id)
+		if openErr != nil {
+			err = openErr
+		} else {
+			status := readRunArchiveStatus(local)
+			local.Close()
+			if status.State == "unavailable" {
+				err = fmt.Errorf("%w: run %s; restore and verify the missing archive objects: %s", errArchivedRunUnavailable, id, status.Error)
+			}
+		}
+	}
 	if err == nil && !deleted {
 		s.resultReadPins[id]++
 	}

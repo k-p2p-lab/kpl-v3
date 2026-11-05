@@ -110,6 +110,7 @@ function fixture(fetch) {
     else clearTimeout(timer);
   };
   const sandbox = {
+    KPLScenarioRunQueue: require('./static/scenario-run-queue.js'),
     state,
     defaultScenario: 'version: 1\nname: default\n',
     $: (selector) => elements.get(selector),
@@ -669,6 +670,93 @@ test('new unsaved runs omit scenarioId even while viewing a group', async () => 
   assert.equal(Object.hasOwn(submitted,'scenarioId'),false);
   assert.equal(refreshes,0);
   assert.equal(elements.get('#scenarioError').textContent,'');
+});
+
+test('Run selected uses saved YAML and applies Runs to every selected scenario in library order', async () => {
+  const requests=[],refreshes=[];
+  const {api,state,elements}=fixture(async(url,options)=>{
+    requests.push({url,options});
+    if(url.startsWith('/api/v1/scenarios/'))return response({id:url.split('/').at(-1),yaml:'saved '+url.split('/').at(-1)});
+    return response({id:'run-'+requests.length,name:'Saved'});
+  });
+  state.savedScenarios=[{id:'a',name:'Alpha'},{id:'b',name:'Beta'}];
+  state.selectedScenarioId='a';
+  elements.get('#scenarioText').value='unsaved editor draft';
+  elements.get('#runRepetitions').value='3';
+  api.KPLLibraryGroups={getSelection:()=>['scenario:b','scenario:a'],matches:()=>true,isFiltered:()=>false,
+    selectionMarkup:()=>'',badgeMarkup:()=>'',refreshUI(){},refresh(value){refreshes.push(value);return Promise.resolve();}};
+  api.renderSavedScenarios();
+  assert.equal(elements.get('#runScenario').textContent,'Run selected');
+  assert.equal(elements.get('#runScenario').getAttribute('aria-label'),'Run 2 selected scenarios');
+  await api.submitScenarioRun();
+  const posts=requests.filter(item=>item.options.method==='POST');
+  assert.deepEqual(posts.map(item=>JSON.parse(item.options.body)),[
+    {scenario:'saved a',repetitions:3,scenarioId:'a'},{scenario:'saved b',repetitions:3,scenarioId:'b'},
+  ]);
+  assert.equal(new Set(posts.map(item=>item.options.headers.get('Idempotency-Key'))).size,2);
+  assert.equal(elements.get('#scenarioText').value,'unsaved editor draft');
+  assert.equal(state.selectedScenarioId,'a');
+  assert.equal(elements.get('#scenarioDialog').open,false);
+  assert.match(elements.get('#toast').textContent,/Queued 6 runs from 2 selected scenarios/);
+  assert.equal(refreshes.length,1);
+});
+
+test('empty selection disables Run selected and group operations block submission', async () => {
+  const {api,elements}=fixture(async()=>{throw Error('must not request');});
+  let busy=false,selected=[];
+  api.KPLLibraryGroups={getSelection:()=>selected,isBusy:()=>busy,matches:()=>true,isFiltered:()=>false,refreshUI(){}};
+  api.renderSavedScenarios();
+  assert.equal(elements.get('#runScenario').disabled,true);
+  assert.equal(elements.get('#runScenario').textContent,'Run selected');
+  await api.submitScenarioRun();
+  busy=true;selected=null;
+  api.renderSavedScenarios();
+  assert.equal(elements.get('#runScenario').disabled,true);
+  await api.submitScenarioRun();
+});
+
+test('bulk registration retains partial success, shows progress, and safely retries the unknown response', async () => {
+  let fail=true;const posts=[],reads=[];
+  const {api,state,elements}=fixture(async(url,options)=>{
+    if(options.method!=='POST'){reads.push(url);return response({id:url.split('/').at(-1),yaml:'saved'});}
+    const payload=JSON.parse(options.body);posts.push({payload,key:options.headers.get('Idempotency-Key')});
+    if(payload.scenarioId==='b'&&fail){fail=false;throw Error('Response lost');}
+    return response({id:'run-'+payload.scenarioId});
+  });
+  state.savedScenarios=[{id:'a',name:'Alpha'},{id:'b',name:'Beta'}];
+  api.KPLLibraryGroups={getSelection:()=>['scenario:a','scenario:b'],matches:()=>true,isFiltered:()=>false,
+    selectionMarkup:()=>'',badgeMarkup:()=>'',refreshUI(){},refresh:async()=>{}};
+  await api.submitScenarioRun();
+  assert.equal(elements.get('#scenarioDialog').open,true);
+  assert.match(elements.get('#scenarioError').textContent,/Confirmed 1\/2.*Beta: Response lost/);
+  assert.equal(elements.get('#runScenario').disabled,false);
+  await api.submitScenarioRun();
+  assert.deepEqual(posts.map(item=>item.payload.scenarioId),['a','b','b']);
+  assert.equal(posts[1].key,posts[2].key);
+  assert.equal(reads.length,2);
+  assert.equal(elements.get('#scenarioError').textContent,'');
+  assert.equal(elements.get('#scenarioDialog').open,false);
+});
+
+test('closing and reopening the dialog during bulk registration retains the draft and registration continues', async () => {
+  let release;const hold=new Promise(resolve=>release=resolve);let posts=0;
+  const {api,state,elements,closes}=fixture(async(url,options)=>{
+    if(options.method!=='POST'){await hold;return response({id:url.split('/').at(-1),yaml:'saved'});}
+    posts++;return response({id:'run-'+posts});
+  });
+  state.savedScenarios=[{id:'a',name:'Alpha'},{id:'b',name:'Beta'}];
+  api.KPLLibraryGroups={getSelection:()=>['scenario:a','scenario:b'],matches:()=>true,isFiltered:()=>false,selectionMarkup:()=>'',badgeMarkup:()=>'',refreshUI(){},refresh:async()=>{}};
+  const submitting=api.submitScenarioRun();
+  assert.equal(state.scenarioSubmitting,true);
+  assert.equal(elements.get('#runScenario').textContent,'1/2…');
+  assert.equal(elements.get('#runScenario').getAttribute('aria-label'),'Submitting scenario 1 of 2');
+  assert.ok(closes.every(button=>!button.disabled));
+  await api.submitScenarioRun();
+  api.closeScenarioEditor();api.openScenarioEditor();
+  release();await submitting;
+  assert.equal(posts,2);
+  assert.equal(elements.get('#scenarioDialog').open,true,'an earlier registration must not close the reopened editor');
+  assert.equal(state.scenarioSubmitting,false);
 });
 
 test('changing the selected scenario changes an uncertain submission idempotency key', async () => {

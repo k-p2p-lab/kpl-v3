@@ -530,6 +530,15 @@ test('recording errors still warn during an active run and escape error text', (
   assert.doesNotMatch(markup, /class="result-activity"|<disk>/);
 });
 
+test('missing archive data is visible independently of completed experiment state and escapes detail', () => {
+  const f=fixture([{id:'missing',state:'completed',storage:{state:'unavailable',error:'Missing <archived data>'}}]);
+  const html=f.element('#savedResultsRows').innerHTML;
+  assert.match(html,/result-storage unavailable/);
+  assert.match(html,/Archive missing/);
+  assert.match(html,/Missing &lt;archived data&gt;/);
+  assert.doesNotMatch(html,/>Archived<|Missing <archived data>/);
+});
+
 test('storage revisions refresh completed Local results through Archived without analysis jobs', async () => {
   const run = {id:'saved', state:'completed', storage:{state:'local'}};
   const {api,state,element,resolve} = fixture([run]);

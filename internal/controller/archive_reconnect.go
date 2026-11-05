@@ -23,6 +23,7 @@ func (s *Server) handleArchiveReconnect(w http.ResponseWriter, r *http.Request) 
 	}
 	var request struct {
 		ConfirmCurrentArchive bool `json:"confirmCurrentArchive"`
+		AllowMissingRuns      bool `json:"allowMissingRuns,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 	decoder.DisallowUnknownFields()
@@ -44,6 +45,7 @@ func (s *Server) handleArchiveReconnect(w http.ResponseWriter, r *http.Request) 
 	if s.archiveReconnectState != "queued" && s.archiveReconnectState != "running" {
 		s.archiveReconnectState = "queued"
 		s.archiveReconnectError = ""
+		s.archiveAllowMissing = request.AllowMissingRuns
 	}
 	state := s.archiveReconnectState
 	s.archiveStatusMu.Unlock()
@@ -61,8 +63,9 @@ func (s *Server) processArchiveReconnect(ctx context.Context) error {
 	}
 	s.archiveReconnectState = "running"
 	s.archiveReconnectError = ""
+	allowMissing := s.archiveAllowMissing
 	s.archiveStatusMu.Unlock()
-	err := s.reconnectArchiveStore(ctx)
+	err := s.reconnectArchiveStore(ctx, allowMissing)
 	s.archiveStatusMu.Lock()
 	s.archiveReconnectState = "completed"
 	if err != nil {
@@ -179,7 +182,7 @@ func readReconnectLocalIdentity(data *os.Root) ([]byte, bool, error) {
 	return identity, true, err
 }
 
-func (s *Server) reconnectArchiveStore(ctx context.Context) error {
+func (s *Server) reconnectArchiveStore(ctx context.Context, allowMissing bool) error {
 	s.setArchivePhase("preparing")
 	if err := s.waitArchiveIdle(ctx); err != nil {
 		return err
@@ -217,9 +220,22 @@ func (s *Server) reconnectArchiveStore(ctx context.Context) error {
 	if identityErr != nil && !errors.Is(identityErr, os.ErrNotExist) {
 		return &archiveAccessError{kind: "unavailable", err: fmt.Errorf("read archive reconnect identity: %w", identityErr)}
 	}
+	missing := make(map[string]error)
 	for _, run := range runs {
 		if err := s.verifyArchiveReconnectRun(ctx, archive, run); err != nil {
+			if allowMissing && errors.Is(err, os.ErrNotExist) {
+				missing[run.id] = fmt.Errorf("archived data for run %s is missing: %w; restore the original archived objects", run.id, err)
+				continue
+			}
 			return &archiveAccessError{kind: "unavailable", err: fmt.Errorf("verify archive run %s: %w", run.id, err)}
+		}
+	}
+	// Record incomplete results durably BEFORE accepting the destination. A
+	// missing historic run must neither disable unrelated transfers nor become
+	// downloadable or appear Archived merely because its local tails are empty.
+	for id, cause := range missing {
+		if err := s.quarantineMissingArchiveRun(id, cause); err != nil {
+			return &archiveAccessError{kind: "local", err: err}
 		}
 	}
 	if err := s.waitArchiveIdle(ctx); err != nil {
@@ -281,10 +297,13 @@ func (s *Server) reconnectArchiveStore(ctx context.Context) error {
 		return &archiveAccessError{kind: "local", err: fmt.Errorf("synchronize reconnected archive identity: %w", err)}
 	}
 	s.archiveProgress()
+	for id := range missing {
+		s.state.markRunArchiveDirty(id)
+	}
 	return nil
 }
 
-func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root, run archiveReconnectRun) error {
+func archiveReconnectObjects(run archiveReconnectRun) (map[string]storedRunFile, error) {
 	objects := make(map[string]storedRunFile)
 	add := func(stored storedRunFile) error {
 		digest, err := hex.DecodeString(stored.SHA256)
@@ -299,15 +318,23 @@ func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root
 	}
 	for _, stored := range run.manifest.Files {
 		if err := add(stored); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, segments := range run.manifest.Logs {
 		for _, stored := range segments {
 			if err := add(stored); err != nil {
-				return err
+				return nil, err
 			}
 		}
+	}
+	return objects, nil
+}
+
+func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root, run archiveReconnectRun) error {
+	objects, err := archiveReconnectObjects(run)
+	if err != nil {
+		return err
 	}
 	if len(objects) == 0 {
 		return nil
@@ -325,6 +352,7 @@ func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	var missing error
 	for _, name := range names {
 		if err := s.waitArchiveIdle(ctx); err != nil {
 			return err
@@ -332,6 +360,12 @@ func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root
 		stored := objects[name]
 		file, err := openResultFile(remote, name)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				if missing == nil {
+					missing = fmt.Errorf("open object %s: %w", name, err)
+				}
+				continue // Still reject corruption in every object that is present.
+			}
 			return fmt.Errorf("open object %s: %w", name, err)
 		}
 		if file.size != stored.Size {
@@ -347,5 +381,69 @@ func (s *Server) verifyArchiveReconnectRun(ctx context.Context, archive *os.Root
 			return fmt.Errorf("object %s SHA256 differs from the local archive manifest", name)
 		}
 	}
-	return nil
+	return missing
+}
+
+func (s *Server) quarantineMissingArchiveRun(id string, cause error) error {
+	s.state.persistMu.Lock()
+	defer s.state.persistMu.Unlock()
+	local, err := s.analysisDirectory(id)
+	if err != nil {
+		return err
+	}
+	defer local.Close()
+	if err := s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "unavailable", Error: cause.Error(), UpdatedAt: time.Now().UTC()}); err != nil {
+		return err
+	}
+	return syncRunDirectory(local)
+}
+
+// A quarantined run is retried by the same worker, including after restart.
+// Check presence before hashing so a still-missing object never forces repeated
+// full reads of the remaining archive. All NAS work stays outside local locks.
+func (s *Server) recoverMissingArchiveRun(ctx context.Context, id string, manifest runArchiveManifestData) error {
+	if err := s.waitArchiveIdle(ctx); err != nil {
+		return err
+	}
+	archive, err := s.openArchiveStore()
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	run := archiveReconnectRun{id: id, manifest: manifest}
+	objects, err := archiveReconnectObjects(run)
+	if err != nil {
+		return err
+	}
+	remote, err := openResultDirectory(archive, id)
+	if err != nil {
+		return fmt.Errorf("archived data for run %s is still unavailable: %w", id, err)
+	}
+	for name := range objects {
+		if err := s.waitArchiveIdle(ctx); err != nil {
+			remote.Close()
+			return err
+		}
+		file, err := openResultFile(remote, name)
+		if err != nil {
+			remote.Close()
+			return fmt.Errorf("archived data for run %s is still unavailable: object %s: %w", id, name, err)
+		}
+		file.close()
+	}
+	remote.Close()
+	if err := s.verifyArchiveReconnectRun(ctx, archive, run); err != nil {
+		return fmt.Errorf("verify restored archive run %s: %w", id, err)
+	}
+	s.state.persistMu.Lock()
+	defer s.state.persistMu.Unlock()
+	local, err := s.analysisDirectory(id)
+	if err != nil {
+		return err
+	}
+	defer local.Close()
+	if err := s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "pending", UpdatedAt: time.Now().UTC()}); err != nil {
+		return err
+	}
+	return syncRunDirectory(local)
 }

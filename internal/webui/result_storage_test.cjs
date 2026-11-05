@@ -150,7 +150,7 @@ test('archive reconnection needs explicit confirmation and coalesces repeated cl
   assert.equal(requests.filter(r=>r.options?.method==='POST').length,1);
   const post=requests.find(r=>r.options?.method==='POST');
   assert.equal(post.path,'/api/v1/result-storage/reconnect');
-  assert.deepEqual(JSON.parse(post.options.body),{confirmCurrentArchive:true});
+  assert.deepEqual(JSON.parse(post.options.body),{confirmCurrentArchive:true,allowMissingRuns:true});
   assert.equal(get('reconnectArchive').disabled,true);
   release();await pending;await new Promise(setImmediate);
   assert.match(get('resultStorageStatus').textContent,/reconnection queued/);

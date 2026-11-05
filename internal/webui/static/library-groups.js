@@ -11,7 +11,7 @@
     let filter = "*", selectionScope = "", selected = new Set(), targetGroup = "";
     let readTask = null, mutationTask = null, epoch = 0, busy = false, needsRefresh = false;
     let errorText = "", noticeText = "", dialog = null, returnFocus = null, returnScope = "", editing = "", confirming = false;
-    let csvDownloadController = null;
+    let analysisDownloadController = null;
     const markupCache = new WeakMap();
 
     function setMarkup(element, html) {
@@ -33,7 +33,8 @@
     function groupFor(key) { return snapshot.memberships[key] || ""; }
     function getGroupName(id) { return snapshot.groups.find(group => group.id === id)?.name || ""; }
     function matches(key) { return filter === "*" || groupFor(key) === filter; }
-    function ready() { return loaded && !busy && !needsRefresh; }
+    function locked() { return busy || Boolean(options?.isExternallyBusy?.()); }
+    function ready() { return loaded && !locked() && !needsRefresh; }
     function changed() { options?.onChanged?.(); }
 
     function validateSnapshot(value) {
@@ -126,6 +127,7 @@
     function mutate(path, method, body, successMessage) {
       if (!ready()) return Promise.reject(new Error(busy ? "A group update is still in progress." : "Refresh groups before making changes."));
       busy = true;
+      options?.onSelectionChanged?.();
       errorText = "";
       noticeText = "";
       epoch++;
@@ -157,6 +159,7 @@
           throw error;
         } finally {
           busy = false;
+          options?.onSelectionChanged?.();
           mutationTask = null;
           refreshUI();
         }
@@ -173,6 +176,7 @@
     }
 
     function setFilter(id) {
+      if (locked()) return;
       if (id !== "*" && id && !getGroupName(id)) return;
       if (filter === id) return;
       filter = id;
@@ -185,7 +189,7 @@
 
     function selectionMarkup(key, label) {
       if (selectionScope !== scopeFor(key)) return "";
-      return '<label class="library-item-select" data-library-select title="Select item"><input type="checkbox" data-library-select-key="' + escape(key) + '" aria-label="Select ' + escape(label) + '"' + (selected.has(key) ? " checked" : "") + (busy ? " disabled" : "") + '></label>';
+      return '<label class="library-item-select" data-library-select title="Select item"><input type="checkbox" data-library-select-key="' + escape(key) + '" aria-label="Select ' + escape(label) + '"' + (selected.has(key) ? " checked" : "") + (locked() ? " disabled" : "") + '></label>';
     }
 
     function badgeMarkup(key) {
@@ -210,20 +214,25 @@
         }
         const selecting = selectionScope === scope;
         const disabled = ready() ? "" : " disabled";
-        const downloadControls = (options?.download || scope === "results" && options?.downloadCSV)
-          ? '<div class="library-selection-downloads">'
-            + (options?.download ? '<button class="secondary-button" type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (selected.size && ready() ? "" : " disabled") + '>Download ZIP</button>' : "")
-            + (scope === "results" && options?.downloadCSV ? '<button class="secondary-button" type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (selected.size && ready() ? "" : " disabled") + '>Download CSV ZIP</button>' : "")
-            + (scope === "results" && csvDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
-        const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !busy ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
-          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !busy ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + downloadControls + '</div>' : "") +
-          (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (busy ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
+        const canDownload = selected.size && ready();
+        const downloadControls = (options?.download || scope === "results" && (options?.downloadCSV || options?.downloadJSON))
+          ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
+            + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Download<span class="visually-hidden"> selected ' + scope + '</span></button><span class="action-menu-items">'
+            + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
+            + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
+            + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download completed per-Run analysis JSON files in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
+            + '</span></span>'
+            + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
+        const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
+          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !locked() ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + downloadControls + '</div>' : "") +
+          (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (locked() ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
         const active = document.activeElement;
-        const focusKind = container.contains(active) ? active?.hasAttribute("data-library-filter") ? "[data-library-filter]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : "" : "";
+        const focusKind = container.contains(active) ? active?.hasAttribute("data-library-filter") ? "[data-library-filter]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : active?.hasAttribute("data-action-menu-toggle") ? "[data-action-menu-toggle]" : "" : "";
         if (setMarkup(container, html)) {
           if (focusKind) container.querySelector(focusKind)?.focus({preventScroll: true});
         }
       }
+      environment.KPLActionMenus?.refresh();
     }
 
     function ensureDialog() {
@@ -263,8 +272,8 @@
       const draft = editor.dataset.group === editing ? editor.querySelector("input")?.value : null;
       const name = getGroupName(editing);
       const editorHTML = !name ? "" : confirming
-        ? '<section class="library-group-confirm"><h3>Delete ' + escape(name) + '?</h3><p>Only this group will be deleted. Its scenarios and results will remain saved and become Ungrouped.</p><div class="library-group-editor-actions"><button class="secondary-button" type="button" data-library-action="cancel-delete"' + (busy ? " disabled" : "") + '>Cancel</button><button class="danger-button" type="button" data-library-action="confirm-delete"' + (ready() ? "" : " disabled") + '>Delete group</button></div></section>'
-        : '<form data-library-rename><label for="libraryRenameGroup">Group name</label><input id="libraryRenameGroup" name="name" value="' + escape(draft ?? name) + '" maxlength="256" autocomplete="off" required><div class="library-group-editor-actions"><button class="secondary-button" type="button" data-library-action="cancel-edit"' + (busy ? " disabled" : "") + '>Cancel</button><button class="secondary-button" type="submit"' + (ready() ? "" : " disabled") + '>Rename</button><button class="danger-button" type="button" data-library-action="delete"' + (ready() ? "" : " disabled") + '>Delete group</button></div></form>';
+        ? '<section class="library-group-confirm"><h3>Delete ' + escape(name) + '?</h3><p>Only this group will be deleted. Its scenarios and results will remain saved and become Ungrouped.</p><div class="library-group-editor-actions"><button class="secondary-button" type="button" data-library-action="cancel-delete"' + (locked() ? " disabled" : "") + '>Cancel</button><button class="danger-button" type="button" data-library-action="confirm-delete"' + (ready() ? "" : " disabled") + '>Delete group</button></div></section>'
+        : '<form data-library-rename><label for="libraryRenameGroup">Group name</label><input id="libraryRenameGroup" name="name" value="' + escape(draft ?? name) + '" maxlength="256" autocomplete="off" required><div class="library-group-editor-actions"><button class="secondary-button" type="button" data-library-action="cancel-edit"' + (locked() ? " disabled" : "") + '>Cancel</button><button class="secondary-button" type="submit"' + (ready() ? "" : " disabled") + '>Rename</button><button class="danger-button" type="button" data-library-action="delete"' + (ready() ? "" : " disabled") + '>Delete group</button></div></form>';
       const focusedInput = editor.contains(document.activeElement) && document.activeElement?.tagName === "INPUT";
       const selection = focusedInput ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
       setMarkup(editor, editorHTML);
@@ -278,7 +287,7 @@
       status.textContent = errorText || noticeText;
       status.dataset.error = String(Boolean(errorText));
       for (const control of dialog.querySelectorAll("[data-library-create] input, [data-library-create] button")) control.disabled = !ready();
-      for (const control of dialog.querySelectorAll('[data-library-action="refresh"]')) control.disabled = busy;
+      for (const control of dialog.querySelectorAll('[data-library-action="refresh"]')) control.disabled = locked();
     }
 
     function refreshUI() {
@@ -288,7 +297,7 @@
       renderBars(allItems);
       renderDialog(allItems);
       for (const input of document?.querySelectorAll?.("[data-library-select-key]") || []) {
-        input.disabled = busy;
+        input.disabled = locked();
         input.checked = selected.has(input.dataset.librarySelectKey);
       }
     }
@@ -305,10 +314,10 @@
       const action = button.dataset.libraryAction;
       try {
         if (action === "cancel-download") {
-          csvDownloadController?.abort();
+          analysisDownloadController?.abort();
           return;
         }
-        if (busy && ["select", "clear", "select-visible", "download", "download-csv", "move"].includes(action)) return;
+        if (locked() && ["select", "clear", "select-visible", "download", "download-csv", "download-json", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -340,31 +349,36 @@
           selected = new Set(keys);
           refreshUI();
           changed();
-        } else if (action === "download" || action === "download-csv") {
+        } else if (action === "download" || action === "download-csv" || action === "download-json") {
           const csv = action === "download-csv";
-          const download = csv ? options?.downloadCSV : options?.download;
-          if (!selected.size || !ready() || !download || csv && selectionScope !== "results") return;
+          const json = action === "download-json", analysis = csv || json;
+          const download = json ? options?.downloadJSON : csv ? options?.downloadCSV : options?.download;
+          if (!selected.size || !ready() || !download || analysis && selectionScope !== "results") return;
           const keys = [...selected], scope = selectionScope;
-          if (csv) csvDownloadController = new AbortController();
+          if (analysis) analysisDownloadController = new AbortController();
           busy = true;
+          options?.onSelectionChanged?.();
           errorText = "";
           noticeText = "Preparing download…";
           refreshUI();
+          if (analysis) document?.querySelector("#resultGroupTools")
+            ?.querySelector('[data-library-action="cancel-download"]')?.focus({preventScroll:true});
           try {
-            await download(scope, keys, csv ? {signal:csvDownloadController.signal, onProgress:message => {
+            await download(scope, keys, analysis ? {signal:analysisDownloadController.signal, onProgress:message => {
               noticeText = message;
               renderBars(items());
             }} : undefined);
             noticeText = "Download requested. Check your browser's downloads.";
           } catch (error) {
-            if (csv && error.name === "AbortError") noticeText = "CSV download canceled. Accepted analysis continues on the server.";
+            if (analysis && error.name === "AbortError") noticeText = `${json ? "JSON" : "CSV"} download canceled. Accepted analysis continues on the server.`;
             else throw error;
           } finally {
-            csvDownloadController = null;
+            analysisDownloadController = null;
             busy = false;
+            options?.onSelectionChanged?.();
             refreshUI();
             document?.querySelector(scope === "results" ? "#resultGroupTools" : "#scenarioGroupTools")
-              ?.querySelector('[data-library-action="' + action + '"]')?.focus({preventScroll:true});
+              ?.querySelector("[data-action-menu-toggle]")?.focus({preventScroll:true});
           }
         } else if (action === "move") {
           await assign([...selected], targetGroup);
@@ -424,12 +438,13 @@
           else if (element.matches?.("[data-library-move-target]")) targetGroup = element.value;
           else if (element.matches?.("[data-library-select-key]")) {
             const key = element.dataset.librarySelectKey;
-            if (busy || selectionScope !== scopeFor(key)) { element.checked = selected.has(key); return; }
+            if (locked() || selectionScope !== scopeFor(key)) { element.checked = selected.has(key); return; }
             if (element.checked) {
               if (selected.size >= maxSelection) { element.checked = false; showError(new Error("Select up to 2,000 items at a time.")); return; }
               selected.add(key);
             } else selected.delete(key);
             renderBars(items());
+            options?.onSelectionChanged?.();
           }
         });
       }
@@ -438,6 +453,7 @@
     }
 
     return {init, refresh, refreshUI, matches, selectionMarkup, badgeMarkup, getGroupName, assign, setFilter,
+      getSelection: scope => selectionScope === scope ? [...selected] : null, isBusy: locked,
       isFiltered: () => filter !== "*", getImportGroup: () => loaded && filter !== "*" ? filter : ""};
   }
 

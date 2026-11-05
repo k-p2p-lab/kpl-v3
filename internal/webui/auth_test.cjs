@@ -25,6 +25,23 @@ test('dashboard operations reuse cookies and send the same-origin marker without
   }
 });
 
+test('raw analysis JSON keeps numeric text while using the same authentication and error handling', async () => {
+  const source = '{"large":18446744073709551615}\n', calls = [];
+  let failing = false;
+  const context = {Headers, state:{}, fetch:async(url,options)=>{
+    calls.push({url,options});
+    if(failing)return {ok:false,status:403,json:async()=>({error:'forbidden'})};
+    return {ok:true,status:200,text:async()=>source,json:async()=>{throw new Error('raw export must not parse and reserialize JSON')}};
+  }};
+  vm.createContext(context);vm.runInContext(functions,context);
+  assert.equal(await context.api('/api/v1/analysis-jobs/run/result',{responseType:'text'}),source);
+  assert.equal(calls[0].options.credentials,'same-origin');
+  assert.equal(calls[0].options.headers.get('Authorization'),null);
+  assert.equal('responseType' in calls[0].options,false);
+  failing=true;
+  await assert.rejects(context.api('/api/v1/analysis-jobs/run/result',{responseType:'text'}),error=>error.status===403&&error.message==='forbidden');
+});
+
 test('an expired session redirects once and stops stream reconnection without asking for tokens', async () => {
   let redirects=0, closed=0, cleared=0;
   const context = {

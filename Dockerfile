@@ -14,11 +14,11 @@ RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 120s \
 
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates tzdata docker-cli iproute2 iproute2-tc \
-    && addgroup -S kpl \
-    && adduser -S -G kpl kpl
+    && addgroup -S -g 101 kpl \
+    && adduser -S -u 100 -G kpl kpl
 COPY --from=builder /out/kpl /usr/local/bin/kpl
 WORKDIR /var/lib/kpl
-RUN mkdir -p /var/lib/kpl/data /var/lib/kpl/agent \
-    && chown -R kpl:kpl /var/lib/kpl
-USER kpl
+RUN mkdir -p /var/lib/kpl/data/current-run /var/lib/kpl/data/runs /var/lib/kpl/agent \
+    && chown -R 100:101 /var/lib/kpl
+USER 100:101
 ENTRYPOINT ["kpl"]

@@ -10,6 +10,16 @@
     const checked = status.lastCheckedAt && !status.lastCheckedAt.startsWith("0001-");
     return status.reconnectState === "failed" && (!!status.error || !checked && !status.checking);
   }
+  function storageErrorDetail(status) {
+    if (["queued", "running"].includes(status.reconnectState)) return "";
+    let detail = status.error || "";
+    // Preserve request history during the next check, but retire it once a
+    // completed ordinary check confirms that the archive has recovered.
+    if (status.reconnectState === "failed" && (reconnectFailureIsCurrent(status) || status.checking) && status.reconnectError) {
+      detail = `Last reconnect attempt failed: ${status.reconnectError}${detail && detail !== status.reconnectError ? ` Current status: ${detail}` : ""}`;
+    }
+    return String(detail).replace(/\s+/g, " ").trim();
+  }
   function describe(status) {
     const localUnknown = status.localSpaceKnown === false || status.localSpaceKnown === undefined && status.errorKind === "local";
     const low = !localUnknown && status.minFreeBytes > 0 && status.availableBytes < status.minFreeBytes;
@@ -39,15 +49,7 @@
       : status.phase === "paused" ? phases.paused
       : status.checking ? phases[status.phase] || "Archive work in progress…"
       : !status.lastCheckedAt || status.lastCheckedAt.startsWith("0001-") ? "Discovering saved archives…" : "Archive connected.";
-    let detail = reconnecting ? "" : status.error || "";
-    // ReconnectState records the last request. A later ordinary archive cycle
-    // can recover after the operator restores the original mount externally.
-    // While a cycle is still checking, preserve the request failure as history
-    // without claiming that the current check has already succeeded.
-    if (!reconnecting && status.reconnectState === "failed" && (reconnectFailed || status.checking) && status.reconnectError) {
-      detail = `Last reconnect attempt failed: ${status.reconnectError}${detail && detail !== status.reconnectError ? ` Current status: ${detail}` : ""}`;
-    }
-    detail = String(detail).replace(/\s+/g, " ").trim();
+    const detail = storageErrorDetail(status);
     const shortDetail = detail.length > 240 ? `${detail.slice(0, 239)}…` : detail;
     return {text: `Local result space: ${bytes(localUnknown ? undefined : status.availableBytes)} free. ${low ? "Waiting for space before starting the next run. " : ""}${archive}${shortDetail ? ` ${shortDetail}` : ""}`, warning: low || !reconnecting && (!!status.error || reconnectFailed) || stalled};
   }
@@ -68,7 +70,7 @@
       element.textContent = message.text;
       element.dataset.warning = String(message.warning);
       const failed = reconnectFailureIsCurrent(status);
-      element.title = status.error || (failed ? status.reconnectError : "") || (status.minFreeBytes ? `Minimum local free space before starting a run: ${bytes(status.minFreeBytes)}.` : "Local free-space admission guard is disabled.");
+      element.title = storageErrorDetail(status) || (status.minFreeBytes ? `Minimum local free space before starting a run: ${bytes(status.minFreeBytes)}.` : "Local free-space admission guard is disabled.");
       const pending = reconnectBusy || ["queued", "running"].includes(status.reconnectState);
       if (reconnect) {
         reconnect.hidden = !(status.errorKind === "unavailable" && status.error || failed || pending);

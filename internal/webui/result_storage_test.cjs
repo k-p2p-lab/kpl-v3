@@ -161,6 +161,18 @@ test('archive reconnection needs explicit confirmation and coalesces repeated cl
   fixture.listeners.pagehide();
 });
 
+test('the storage tooltip keeps the full reconnect permission diagnostic and current error', async () => {
+  const permission='confirm archive reconnect identity: '+ 'archive/path/'.repeat(24) +'.kpl-store-id: permission denied (controller uid=100 gid=1000)';
+  const status={...ready,errorKind:'unavailable',error:'archive storage identity is missing',reconnectState:'failed',reconnectError:permission};
+  const fixture=reconnectFixture(async()=>status);
+  await new Promise(setImmediate);
+  const element=fixture.elements.get('#resultStorageStatus');
+  assert.match(element.textContent,/Last reconnect attempt failed/);
+  assert.doesNotMatch(element.textContent,/uid=100/,'the inline status remains bounded');
+  assert.match(element.title,/permission denied \(controller uid=100 gid=1000\)/);
+  assert.match(element.title,/Current status: archive storage identity is missing/);
+});
+
 test('reconnect verification failure stays visible and permits a deliberate retry', async () => {
   let status={...ready,errorKind:'unavailable',error:'identity changed'};
   const fixture=reconnectFixture(async (_path,options)=>{

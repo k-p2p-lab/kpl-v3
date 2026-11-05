@@ -152,19 +152,66 @@ func createArchiveIdentity(root *os.Root) ([]byte, error) {
 		return readArchiveIdentity(root)
 	}
 	if err != nil {
-		return nil, err
+		return nil, archiveIdentityIOError(root, "create", err)
 	}
 	if _, err = file.Write(identity); err == nil {
 		err = file.Sync()
 	}
 	if err = errors.Join(err, file.Close()); err != nil {
 		_ = root.Remove(".kpl-store-id")
-		return nil, err
+		return nil, archiveIdentityIOError(root, "write", err)
 	}
 	if err := syncRunDirectory(root); err != nil {
 		return nil, err
 	}
 	return identity, nil
+}
+
+func archiveIdentityIOError(root *os.Root, operation string, err error) error {
+	return archiveStorageIOError(root, operation+" archive identity", ".kpl-store-id", err)
+}
+
+func archiveStorageIOError(root *os.Root, operation, name string, err error) error {
+	wrapped := fmt.Errorf("%s %s (controller uid=%d gid=%d): %w", operation, filepath.Join(root.Name(), name), os.Geteuid(), os.Getegid(), err)
+	if errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("%w; grant this Controller identity access on the mounted archive directory and check the NAS ACL", wrapped)
+	}
+	return wrapped
+}
+
+// Probe only a confirmed candidate that needs a new identity. Fail before a
+// potentially long source verification if the NAS cannot accept writes. The
+// single archive worker owns this temporary file and never holds local locks.
+func (s *Server) checkArchiveWriteAccess(ctx context.Context, root *os.Root) error {
+	if err := s.waitArchiveIdle(ctx); err != nil {
+		return err
+	}
+	s.setArchivePhase("verifying")
+	name := ".kpl-write-check-" + rand.Text()
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return archiveStorageIOError(root, "create archive write probe", name, err)
+	}
+	defer root.Remove(name)
+	_, err = io.WriteString(file, "KPL archive write probe\n")
+	if err == nil {
+		err = file.Sync()
+	}
+	if err = errors.Join(err, file.Close()); err != nil {
+		return archiveStorageIOError(root, "write archive probe", name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	renamed := name + "-verified"
+	if err := root.Rename(name, renamed); err != nil {
+		return archiveStorageIOError(root, "rename archive probe", name, err)
+	}
+	defer root.Remove(renamed)
+	if err := root.Remove(renamed); err != nil {
+		return archiveStorageIOError(root, "remove archive probe", renamed, err)
+	}
+	return syncRunDirectory(root)
 }
 func bytesEqual(a, b []byte) bool { return string(a) == string(b) }
 
@@ -459,7 +506,7 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 func readArchiveIdentity(root *os.Root) ([]byte, error) {
 	file, err := openResultFile(root, ".kpl-store-id")
 	if err != nil {
-		return nil, err
+		return nil, archiveIdentityIOError(root, "read", err)
 	}
 	defer file.close()
 	if file.size == 0 || file.size > 128 {

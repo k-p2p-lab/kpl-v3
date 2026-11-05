@@ -220,6 +220,11 @@ func (s *Server) reconnectArchiveStore(ctx context.Context, allowMissing bool) e
 	if identityErr != nil && !errors.Is(identityErr, os.ErrNotExist) {
 		return &archiveAccessError{kind: "unavailable", err: fmt.Errorf("read archive reconnect identity: %w", identityErr)}
 	}
+	if errors.Is(identityErr, os.ErrNotExist) {
+		if err := s.checkArchiveWriteAccess(ctx, archive); err != nil {
+			return &archiveAccessError{kind: "unavailable", err: err}
+		}
+	}
 	missing := make(map[string]error)
 	for _, run := range runs {
 		if err := s.verifyArchiveReconnectRun(ctx, archive, run); err != nil {

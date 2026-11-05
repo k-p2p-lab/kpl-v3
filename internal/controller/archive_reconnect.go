@@ -297,9 +297,6 @@ func (s *Server) reconnectArchiveStore(ctx context.Context, allowMissing bool) e
 		return &archiveAccessError{kind: "local", err: fmt.Errorf("synchronize reconnected archive identity: %w", err)}
 	}
 	s.archiveProgress()
-	for id := range missing {
-		s.state.markRunArchiveDirty(id)
-	}
 	return nil
 }
 
@@ -395,6 +392,9 @@ func (s *Server) quarantineMissingArchiveRun(id string, cause error) error {
 	if err := s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "unavailable", Error: cause.Error(), UpdatedAt: time.Now().UTC()}); err != nil {
 		return err
 	}
+	// Also retry if the later identity commit fails; the durable quarantine must
+	// not be stranded merely because this worker already scanned the local runs.
+	s.state.markRunArchiveDirty(id)
 	return syncRunDirectory(local)
 }
 
@@ -435,6 +435,9 @@ func (s *Server) recoverMissingArchiveRun(ctx context.Context, id string, manife
 	if err := s.verifyArchiveReconnectRun(ctx, archive, run); err != nil {
 		return fmt.Errorf("verify restored archive run %s: %w", id, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
 	local, err := s.analysisDirectory(id)
@@ -442,7 +445,9 @@ func (s *Server) recoverMissingArchiveRun(ctx context.Context, id string, manife
 		return err
 	}
 	defer local.Close()
-	if err := s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "pending", UpdatedAt: time.Now().UTC()}); err != nil {
+	// All manifest references are verified. resultStorageStatus still reports
+	// pending when additional local tails or metadata need to be transferred.
+	if err := s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()}); err != nil {
 		return err
 	}
 	return syncRunDirectory(local)

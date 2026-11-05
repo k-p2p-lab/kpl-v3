@@ -4,6 +4,7 @@ package controller
 // after releasing Controller locks; sealed log segments remain immutable.
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -380,6 +381,13 @@ func resultStorageStatus(root *os.Root, id string) runArchiveStatus {
 // context cancellation once inside a syscall; it must never exhaust goroutines
 // doing more NAS opens or hold the local persistence lock while blocked.
 func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []resultFile) (func(), error) {
+	return s.resolveArchivedRead(ctx, id, files, false)
+}
+
+// A completed analysis is a retained snapshot. While source objects are missing,
+// its existing artifact remains readable if that single object independently
+// passes its recorded size and checksum. This never clears the run quarantine.
+func (s *Server) resolveArchivedRead(ctx context.Context, id string, files []resultFile, verifiedArtifact bool) (func(), error) {
 	remote := false
 	for _, file := range files {
 		remote = remote || file.hasRemote()
@@ -392,6 +400,7 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 	}
 	s.state.persistMu.Lock()
 	deleted, err := s.state.resultDeletedLocked(id)
+	quarantined := false
 	if err == nil && !deleted {
 		local, openErr := s.analysisDirectory(id)
 		if openErr != nil {
@@ -400,7 +409,11 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 			status := readRunArchiveStatus(local)
 			local.Close()
 			if status.State == "unavailable" {
-				err = fmt.Errorf("%w: run %s; restore and verify the missing archive objects: %s", errArchivedRunUnavailable, id, status.Error)
+				if verifiedArtifact && len(files) == 1 && len(files[0].parts) == 0 && files[0].remote != nil {
+					quarantined = true
+				} else {
+					err = fmt.Errorf("%w: run %s; restore and verify the missing archive objects: %s", errArchivedRunUnavailable, id, status.Error)
+				}
 			}
 		}
 	}
@@ -445,9 +458,26 @@ func (s *Server) resolveArchivedFiles(ctx context.Context, id string, files []re
 			release()
 			return nil, err
 		}
+		expected := files[i].remote
 		if err := files[i].resolveRemote(root); err != nil {
 			release()
 			return nil, err
+		}
+		if quarantined {
+			proof, proofErr := hex.DecodeString(expected.SHA256)
+			if proofErr != nil || len(proof) != 32 {
+				release()
+				return nil, fmt.Errorf("%w: analysis artifact has no valid SHA256 evidence", errArchivedRunUnavailable)
+			}
+			digest, hashErr := hashRunFileContext(ctx, files[i])
+			if hashErr != nil {
+				release()
+				return nil, hashErr
+			}
+			if !strings.EqualFold(digest, expected.SHA256) {
+				release()
+				return nil, fmt.Errorf("%w: analysis artifact checksum mismatch", errArchivedRunUnavailable)
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

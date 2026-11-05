@@ -618,7 +618,7 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	captured := []resultFile{file}
-	release, resolveErr := s.resolveArchivedFiles(r.Context(), id, captured)
+	release, resolveErr := s.resolveArchivedRead(r.Context(), id, captured, true)
 	file = captured[0]
 	if resolveErr != nil {
 		file.close()

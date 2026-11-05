@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 func TestArchiveReconnectMissingRunDoesNotBlockOtherTransfers(t *testing.T) {
@@ -188,4 +190,134 @@ func TestArchiveMissingQuarantineBlocksUnverifiedRemoteReads(t *testing.T) {
 		t.Fatalf("verification did not clear quarantine: %s", got)
 	}
 	requireReconnectSourcesEqual(t, original, storageZIP(t, s, "archived"))
+}
+
+func TestArchiveMissingKeepsLateLocalDataUntilVerifiedRecovery(t *testing.T) {
+	s, _, _ := reconnectFixture(t)
+	local, err := s.analysisDirectory("archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := readRunArchive(local, "archived")
+	local.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := filepath.Join(s.config.DataDir, archivedRunsDirectory, "archived", manifest.Logs["events.jsonl"][0].Object)
+	data, err := os.ReadFile(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(object); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.quarantineMissingArchiveRun("archived", errors.New("missing source object")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.state.appendEvents(model.EventBatch{Events: []model.TraceEvent{storageEvent("archived", "late-local")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.archiveRun(t.Context(), "archived", 0); err == nil {
+		t.Fatal("incomplete run was published")
+	}
+	entries, err := os.ReadDir(filepath.Join(s.config.DataDir, currentRunsDirectory, "archived"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range entries {
+		if logSegment(entry.Name(), "events.jsonl") {
+			bytes, err := os.ReadFile(filepath.Join(s.config.DataDir, currentRunsDirectory, "archived", entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range storedEventIDs(t, bytes) {
+				found = found || id == "late-local"
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing archive discarded late local telemetry")
+	}
+	if err := os.WriteFile(object, bytes.Repeat([]byte("x"), len(data)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.archiveRun(t.Context(), "archived", 0); err == nil {
+		t.Fatal("corrupted restore passed verification")
+	}
+	if got := listedStorageState(t, s, "archived"); got != "unavailable" {
+		t.Fatalf("corrupted restore cleared quarantine: %s", got)
+	}
+	if err := os.WriteFile(object, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.archiveRun(t.Context(), "archived", 0); err != nil {
+		t.Fatal(err)
+	}
+	ids := storedEventIDs(t, storageZIP(t, s, "archived")["events.jsonl"])
+	if len(ids) != 2 || ids[0] != "preserved" || ids[1] != "late-local" {
+		t.Fatalf("lost or duplicated telemetry: %v", ids)
+	}
+}
+
+func TestArchiveMissingPolicyIsFixedAtAdmission(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	s.archiveIOCheck = func() { t.Fatal("admission performed NAS I/O") }
+	for _, body := range []string{`{"confirmCurrentArchive":true,"allowMissingRuns":true}`, `{"confirmCurrentArchive":true}`} {
+		if r := reconnectRequest(s, body); r.Code != http.StatusAccepted {
+			t.Fatal(r.Body)
+		}
+		if !s.archiveAllowMissing {
+			t.Fatal("duplicate request changed the in-flight policy")
+		}
+	}
+	s.archiveReconnectState = "failed"
+	if r := reconnectRequest(s, `{"confirmCurrentArchive":true}`); r.Code != http.StatusAccepted {
+		t.Fatal(r.Body)
+	}
+	if s.archiveAllowMissing {
+		t.Fatal("strict API default inherited a previous request's missing-run policy")
+	}
+}
+
+func TestArchiveMissingPreservesVerifiedCompletedAnalysis(t *testing.T) {
+	f := newAnalysisStorageFixture(t, false)
+	if err := f.save(map[string]string{"analysisId": "retained-job"}); err != nil {
+		t.Fatal(err)
+	}
+	s := f.server
+	archiveTestRun(t, s, "run")
+	if err := s.quarantineMissingArchiveRun("run", errors.New("source objects missing")); err != nil {
+		t.Fatal(err)
+	}
+	url := f.path + "/result?jobId=job-old"
+	response := resultRequest(s, http.MethodGet, url)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "retained-job") {
+		t.Fatalf("completed snapshot unavailable: %d %s", response.Code, response.Body)
+	}
+	if got := listedStorageState(t, s, "run"); got != "unavailable" {
+		t.Fatalf("artifact read cleared source quarantine: %s", got)
+	}
+	local, err := s.analysisDirectory("run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := readRunArchive(local, "run")
+	local.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := analysisArtifactFile(analysisResultFile, f.job.status.ArtifactSlot)
+	stored := manifest.Files[name]
+	remote := filepath.Join(s.config.DataDir, archivedRunsDirectory, "run", stored.Object)
+	if err := os.WriteFile(remote, bytes.Repeat([]byte("x"), int(stored.Size)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response = resultRequest(s, http.MethodGet, url)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unverified snapshot served: %d", response.Code)
+	}
+	if len(s.resultReadPins) != 0 || len(s.archiveReadSlots) != 0 {
+		t.Fatal("artifact read leaked NAS capacity or result pins")
+	}
 }

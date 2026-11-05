@@ -203,8 +203,12 @@ func (s *state) markRunArchiveDirty(id string) {
 }
 
 func hashRunFile(file resultFile) (string, error) {
+	return hashRunFileContext(context.Background(), file)
+}
+
+func hashRunFileContext(ctx context.Context, file resultFile) (string, error) {
 	hash := sha256.New()
-	n, err := io.Copy(hash, file.reader())
+	n, err := io.Copy(hash, resultContextReader{ctx: ctx, reader: file.reader()})
 	if err != nil {
 		return "", err
 	}

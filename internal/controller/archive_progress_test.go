@@ -71,7 +71,16 @@ func TestArchiveRejectsTruncatedCapturedFile(t *testing.T) {
 // Measures the complete copy + destination checksum verification on local disk.
 // NAS throughput can be lower; no experiment is running during this benchmark.
 func BenchmarkArchiveCopy8MiB(b *testing.B) {
-	s := New(ServerConfig{DataDir: b.TempDir()}, nil)
+	for _, option := range []struct {
+		name string
+		rate uint64
+	}{{"32MiB", 32}, {"128MiB", 128}, {"unlimited", 0}} {
+		b.Run(option.name, func(b *testing.B) { benchmarkArchiveCopy8MiB(b, &option.rate) })
+	}
+}
+
+func benchmarkArchiveCopy8MiB(b *testing.B, rate *uint64) {
+	s := New(ServerConfig{DataDir: b.TempDir(), ArchiveMiBPerSecond: rate}, nil)
 	local, err := os.OpenRoot(b.TempDir())
 	if err != nil {
 		b.Fatal(err)

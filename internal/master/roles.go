@@ -94,6 +94,15 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		minimumFree = value
 	}
 	runMinFree := flags.Uint64("run-min-free-bytes", minimumFree, "minimum local free bytes before starting each run (0 disables admission guard)")
+	archiveRate := controller.DefaultArchiveMiBPerSecond
+	if raw := os.Getenv("KPL_ARCHIVE_MIB_PER_SECOND"); raw != "" {
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid KPL_ARCHIVE_MIB_PER_SECOND: %w", err)
+		}
+		archiveRate = value
+	}
+	archiveMiB := flags.Uint64("archive-mib-per-second", archiveRate, "idle archive copy/verification limit in MiB/s (0 disables throttling; experiment pauses remain)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
@@ -111,17 +120,18 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
-		NetworkManagerURL: strings.TrimSpace(*networkManager),
-		AgentDiscoveryDNS: strings.TrimSpace(*agentDiscoveryDNS),
-		Listen:            *listen,
-		DataDir:           *dataDir,
-		RunMinFreeBytes:   *runMinFree,
-		User:              user,
-		Password:          password,
-		MetricsURL:        *metricsURL,
-		PrometheusURL:     *prometheusURL,
-		PrometheusPort:    parsedPrometheusPort,
-		GrafanaPort:       parsedGrafanaPort,
+		NetworkManagerURL:   strings.TrimSpace(*networkManager),
+		AgentDiscoveryDNS:   strings.TrimSpace(*agentDiscoveryDNS),
+		Listen:              *listen,
+		DataDir:             *dataDir,
+		RunMinFreeBytes:     *runMinFree,
+		ArchiveMiBPerSecond: archiveMiB,
+		User:                user,
+		Password:            password,
+		MetricsURL:          *metricsURL,
+		PrometheusURL:       *prometheusURL,
+		PrometheusPort:      parsedPrometheusPort,
+		GrafanaPort:         parsedGrafanaPort,
 	}, logger)
 	return server.Run(ctx)
 }

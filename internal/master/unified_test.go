@@ -12,6 +12,7 @@ import (
 
 func TestContainerRolesNeedNoCheckoutOrOperatorConfiguration(t *testing.T) {
 	t.Setenv("KPL_RUN_MIN_FREE_BYTES", "")
+	t.Setenv("KPL_ARCHIVE_MIB_PER_SECOND", "")
 	for _, role := range roleCommands {
 		t.Run(role, func(t *testing.T) {
 			if command, _ := canonicalCLICommand(role, nil); command != role {

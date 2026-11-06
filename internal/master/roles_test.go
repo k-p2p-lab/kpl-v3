@@ -2,11 +2,29 @@ package master
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"log/slog"
 	"strings"
 	"testing"
 )
+
+func TestControllerArchiveRateFlagAndEnvironment(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, raw := range []string{"", "0", "128", "18446744073709551615"} {
+		t.Setenv("KPL_ARCHIVE_MIB_PER_SECOND", raw)
+		if err := runController(t.Context(), logger, []string{"--archive-mib-per-second=0", "--help"}); !errors.Is(err, flag.ErrHelp) {
+			t.Fatalf("valid rate %q: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"-1", "abc", "18446744073709551616"} {
+		t.Setenv("KPL_ARCHIVE_MIB_PER_SECOND", raw)
+		if err := runController(t.Context(), logger, nil); err == nil || !strings.Contains(err.Error(), "KPL_ARCHIVE_MIB_PER_SECOND") {
+			t.Fatalf("invalid rate %q: %v", raw, err)
+		}
+	}
+}
 
 func TestParsePort(t *testing.T) {
 	tests := []struct {

@@ -14,8 +14,19 @@ import (
 	"time"
 )
 
-const archiveBytesPerSecond = 32 << 20
-const archiveChunkBytes = 256 << 10
+// DefaultArchiveMiBPerSecond limits each idle copy or verification pass.
+const DefaultArchiveMiBPerSecond uint64 = 128
+const archiveChunkBytes = 1 << 20
+
+func archiveTransferDelay(bytes int, miBPerSecond uint64, elapsed time.Duration) time.Duration {
+	if bytes <= 0 || miBPerSecond == 0 {
+		return 0
+	}
+	// bytes is at most one chunk. Divide before using the configured rate so
+	// even the largest uint64 setting cannot overflow a bytes/second product.
+	budget := time.Duration(uint64(bytes) * uint64(time.Second) / (1 << 20) / miBPerSecond)
+	return max(0, budget-elapsed)
+}
 
 // There is exactly one background NAS worker. A blocked mount consumes this
 // worker, not a new goroutine per tick or any Controller control/persistence lock.
@@ -254,9 +265,9 @@ func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string
 		if err != nil {
 			break
 		}
-		// Bound background traffic even while idle (32 MiB/s). A new run pauses the
-		// next chunk instead of waiting for a potentially stalled NAS syscall.
-		if err = sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
+		// A new run still pauses the next chunk, including when the configured
+		// idle transfer limit is disabled.
+		if err = sleepContext(ctx, archiveTransferDelay(n, s.archiveMiBPerSecond, time.Since(started))); err != nil {
 			break
 		}
 	}
@@ -720,7 +731,7 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 		if err != nil {
 			return "", err
 		}
-		if err := sleepContext(ctx, time.Duration(n)*time.Second/archiveBytesPerSecond-time.Since(started)); err != nil {
+		if err := sleepContext(ctx, archiveTransferDelay(n, s.archiveMiBPerSecond, time.Since(started))); err != nil {
 			return "", err
 		}
 	}

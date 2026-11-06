@@ -30,6 +30,17 @@ function harness(api, configuration={}) {
   return {groups,initialized,items,action,check,changes:()=>changes,listeners};
 }
 
+test('selection Actions opens deletion confirmation for exactly the checked units',async()=>{
+  const requests=[];let locked=false;
+  const h=harness(async()=>initial(),{onDeleteSelected:(scope,keys)=>requests.push({scope,keys}),isExternallyBusy:()=>locked});await h.initialized;
+  await h.action('select');h.check('scenario:one',true);h.check('scenario:two',true);
+  await h.action('delete-selected');
+  assert.deepEqual(requests,[{scope:'scenarios',keys:['scenario:one','scenario:two']}]);
+  locked=true;await h.action('delete-selected');assert.equal(requests.length,1);
+  locked=false;h.groups.forgetSelection(['scenario:one']);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:two']);
+});
+
 test('scenario execution reads a selection snapshot and updates on individual checkbox changes',async()=>{
   let changes=0;
   const h=harness(async()=>initial(),{onSelectionChanged:()=>changes++});await h.initialized;
@@ -382,7 +393,7 @@ test('one Download dropdown offers the three result formats and only YAML for sc
   h.check('batch:one',true);html=bars['#resultGroupTools'].innerHTML;
   assert.match(html,/class="action-menu" data-action-menu="library-download:results"/);
   assert.equal((html.match(/data-action-menu-toggle=/g)||[]).length,1);
-  assert.match(html,/data-action-menu-toggle="library-download:results" aria-expanded="false">Download/);
+  assert.match(html,/data-action-menu-toggle="library-download:results" aria-expanded="false">Actions/);
   assert.match(html,/class="action-menu-items">[\s\S]*>Results ZIP<\/button>[\s\S]*>CSV ZIP<\/button>[\s\S]*>Analysis JSON ZIP<\/button>/);
   await h.action('select','scenarios');h.check('scenario:one',true);html=bars['#scenarioGroupTools'].innerHTML;
   assert.match(html,/data-action-menu-toggle="library-download:scenarios"/);

@@ -60,22 +60,23 @@ func (s *Server) waitRunStorage(ctx context.Context, id string) error {
 }
 
 type resultStorageOverview struct {
-	ReconnectState   string    `json:"reconnectState,omitempty"`
-	ReconnectError   string    `json:"reconnectError,omitempty"`
-	ResultsRevision  string    `json:"resultsRevision"`
-	Phase            string    `json:"phase"`
-	LastProgressAt   time.Time `json:"lastProgressAt"`
-	Stalled          bool      `json:"stalled"`
-	Checking         bool      `json:"checking"`
-	CheckStartedAt   time.Time `json:"checkStartedAt"`
-	LocalDirectory   string    `json:"localDirectory"`
-	ArchiveDirectory string    `json:"archiveDirectory"`
-	AvailableBytes   uint64    `json:"availableBytes"`
-	LocalSpaceKnown  bool      `json:"localSpaceKnown"`
-	MinFreeBytes     uint64    `json:"minFreeBytes"`
-	LastCheckedAt    time.Time `json:"lastCheckedAt"`
-	Error            string    `json:"error,omitempty"`
-	ErrorKind        string    `json:"errorKind,omitempty"`
+	ArchiveMiBPerSecond uint64    `json:"archiveMiBPerSecond"`
+	ReconnectState      string    `json:"reconnectState,omitempty"`
+	ReconnectError      string    `json:"reconnectError,omitempty"`
+	ResultsRevision     string    `json:"resultsRevision"`
+	Phase               string    `json:"phase"`
+	LastProgressAt      time.Time `json:"lastProgressAt"`
+	Stalled             bool      `json:"stalled"`
+	Checking            bool      `json:"checking"`
+	CheckStartedAt      time.Time `json:"checkStartedAt"`
+	LocalDirectory      string    `json:"localDirectory"`
+	ArchiveDirectory    string    `json:"archiveDirectory"`
+	AvailableBytes      uint64    `json:"availableBytes"`
+	LocalSpaceKnown     bool      `json:"localSpaceKnown"`
+	MinFreeBytes        uint64    `json:"minFreeBytes"`
+	LastCheckedAt       time.Time `json:"lastCheckedAt"`
+	Error               string    `json:"error,omitempty"`
+	ErrorKind           string    `json:"errorKind,omitempty"`
 }
 
 func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +88,7 @@ func (s *Server) handleResultStorage(w http.ResponseWriter, r *http.Request) {
 	s.archiveStatusMu.RLock()
 	result := resultStorageOverview{Checking: s.archiveChecking, CheckStartedAt: s.archiveCheckStartedAt, LocalDirectory: currentRunsDirectory, ArchiveDirectory: archivedRunsDirectory, AvailableBytes: free, MinFreeBytes: s.config.RunMinFreeBytes, LastCheckedAt: s.archiveCheckedAt, Error: s.archiveError}
 	result.LocalSpaceKnown = err == nil
+	result.ArchiveMiBPerSecond = s.archiveMiBPerSecond
 	result.ResultsRevision = strconv.FormatUint(s.state.resultsRevision.Load(), 10)
 	result.ReconnectState = s.archiveReconnectState
 	result.ReconnectError = s.archiveReconnectError

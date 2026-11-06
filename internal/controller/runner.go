@@ -27,18 +27,19 @@ import (
 )
 
 type ServerConfig struct {
-	NetworkManagerURL string
-	AgentDiscoveryDNS string
-	PrometheusURL     string
-	RunMinFreeBytes   uint64
-	User              string
-	Password          string
-	Listen            string
-	DataDir           string
-	Token             string
-	MetricsURL        string
-	PrometheusPort    int
-	GrafanaPort       int
+	NetworkManagerURL   string
+	AgentDiscoveryDNS   string
+	PrometheusURL       string
+	RunMinFreeBytes     uint64
+	ArchiveMiBPerSecond *uint64 // nil uses the default; zero disables idle throttling.
+	User                string
+	Password            string
+	Listen              string
+	DataDir             string
+	Token               string
+	MetricsURL          string
+	PrometheusPort      int
+	GrafanaPort         int
 }
 
 type Server struct {
@@ -85,6 +86,7 @@ type Server struct {
 	archiveReconnectState      string
 	archiveReconnectError      string
 	archiveAllowMissing        bool
+	archiveMiBPerSecond        uint64
 	archiveErrorKind           string
 	archiveIOCheck             func()
 	resultArchiveMu            sync.Mutex
@@ -140,7 +142,12 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	archiveRate := DefaultArchiveMiBPerSecond
+	if config.ArchiveMiBPerSecond != nil {
+		archiveRate = *config.ArchiveMiBPerSecond
+	}
 	server := &Server{
+		archiveMiBPerSecond:    archiveRate,
 		libraryDownloadSlots:   make(chan struct{}, 2),
 		agentLookupIP:          net.DefaultResolver.LookupIPAddr,
 		startedAt:              time.Now().UTC(),

@@ -684,6 +684,17 @@
     </form>
   </dialog>
 
+  <dialog id="libraryDeleteDialog" aria-labelledby="libraryDeleteHeading" aria-describedby="libraryDeleteDescription">
+    <header><h2 id="libraryDeleteHeading">Delete selected items?</h2></header>
+    <p id="libraryDeleteDescription"></p>
+    <p id="libraryDeleteNames" class="library-delete-names"></p>
+    <p id="libraryDeleteError" class="dialog-error" role="alert" tabindex="-1"></p>
+    <footer>
+      <button class="secondary-button" id="cancelLibraryDelete" type="button">Cancel</button>
+      <button class="danger-button" id="confirmLibraryDelete" type="button">Delete selected</button>
+    </footer>
+  </dialog>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/navigation.js" defer></script>
   <script src="/topology-layout.js" defer></script>
@@ -702,6 +713,7 @@
   <script src="/agent-resources.js" defer></script>
   <script src="/service-resources.js" defer></script>
   <script src="/library-downloads.js" defer></script>
+  <script src="/library-deletions.js" defer></script>
   <script src="/result-analysis-downloads.js" defer></script>
   <script src="/library-groups.js" defer></script>
   <script src="/scenario-run-queue.js" defer></script>

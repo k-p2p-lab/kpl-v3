@@ -58,7 +58,8 @@ func configApp(t *testing.T) (*App, *configRunner, *bytes.Buffer) {
 
 func TestConfigSettingValidation(t *testing.T) {
 	valid := map[string][]string{
-		"KPL_STACK_NAME": {"kpl", "other-stack_2"}, "KPL_CONTROL_NODE_ID": {"manager1"}, "KPL_PEER_NETWORK": {"kpl-peers"},
+		"KPL_ARCHIVE_MIB_PER_SECOND": {"0", "32", "128", "18446744073709551615"},
+		"KPL_STACK_NAME":             {"kpl", "other-stack_2"}, "KPL_CONTROL_NODE_ID": {"manager1"}, "KPL_PEER_NETWORK": {"kpl-peers"},
 		"KPL_PEER_SUBNET": {"", "10.11.0.0/16", "0.0.0.0/1"}, "KPL_RUN_MIN_FREE_BYTES": {"0", "2147483648"},
 		"KPL_IMAGE":    {"registry.example:5000/team/kpl:v3", "team/kpl@sha256:" + strings.Repeat("a", 64), "team/kpl:tag@sha256:" + strings.Repeat("1", 64)},
 		"KPL_PASSWORD": {"$(touch should-not-run)", "'literal quote'"}, "KPL_USER": {"operator"}, "KPL_AGENT_METRICS_PORT": {"1", "65535"},
@@ -71,7 +72,8 @@ func TestConfigSettingValidation(t *testing.T) {
 		}
 	}
 	invalid := map[string][]string{
-		"UNKNOWN": {"ignored"}, "KPL_STACK_NAME": {"Kpl", "_kpl", "-kpl", "kpl.name", "two stacks"}, "KPL_CONTROL_NODE_ID": {"", "-manager", "node/id"},
+		"KPL_ARCHIVE_MIB_PER_SECOND": {"-1", "01", "1.5", "abc", "18446744073709551616"},
+		"UNKNOWN":                    {"ignored"}, "KPL_STACK_NAME": {"Kpl", "_kpl", "-kpl", "kpl.name", "two stacks"}, "KPL_CONTROL_NODE_ID": {"", "-manager", "node/id"},
 		"KPL_PEER_NETWORK": {"", "-peers", "peers/name"}, "KPL_PEER_SUBNET": {"10.11.0.1/24", "010.11.0.0/24", "10.0.0.0/08", "10.0.0.0/31", "::/64", "10.11.0.0/33", "10.0.0.0/24 extra"},
 		"KPL_RUN_MIN_FREE_BYTES": {"-1", "01", "abc", "9223372036854775808"}, "KPL_MIN_AGENTS": {"0", "08", "-1", "999999999999999999999999"},
 		"KPL_DOCKER_TIMEOUT": {"0", "9223372036854775807"}, "KPL_IMAGE": {"repo", "https://repo:v3", "repo:", "/repo:v3", "repo//foo:v3", "repo@other:abc", "repo@sha256:" + strings.Repeat("A", 64), "repo:bad tag", "repo:-bad"},

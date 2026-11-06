@@ -215,12 +215,13 @@
         const selecting = selectionScope === scope;
         const disabled = ready() ? "" : " disabled";
         const canDownload = selected.size && ready();
-        const downloadControls = (options?.download || scope === "results" && (options?.downloadCSV || options?.downloadJSON))
+        const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
-            + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Download<span class="visually-hidden"> selected ' + scope + '</span></button><span class="action-menu-items">'
+            + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Actions<span class="visually-hidden"> for selected ' + scope + '</span></button><span class="action-menu-items">'
             + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
             + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
             + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download completed per-Run analysis JSON files in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
+            + (options?.onDeleteSelected ? '<button class="library-delete-action" type="button" data-library-action="delete-selected"' + (canDownload ? "" : " disabled") + '>Delete selected…</button>' : "")
             + '</span></span>'
             + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
         const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
@@ -317,7 +318,7 @@
           analysisDownloadController?.abort();
           return;
         }
-        if (locked() && ["select", "clear", "select-visible", "download", "download-csv", "download-json", "move"].includes(action)) return;
+        if (locked() && ["select", "clear", "select-visible", "download", "download-csv", "download-json", "delete-selected", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -349,6 +350,8 @@
           selected = new Set(keys);
           refreshUI();
           changed();
+        } else if (action === "delete-selected") {
+          if (selected.size && ready()) options?.onDeleteSelected?.(selectionScope, [...selected]);
         } else if (action === "download" || action === "download-csv" || action === "download-json") {
           const csv = action === "download-csv";
           const json = action === "download-json", analysis = csv || json;
@@ -453,6 +456,7 @@
     }
 
     return {init, refresh, refreshUI, matches, selectionMarkup, badgeMarkup, getGroupName, assign, setFilter,
+      forgetSelection: keys => { for (const key of keys) selected.delete(key); refreshUI(); changed(); },
       getSelection: scope => selectionScope === scope ? [...selected] : null, isBusy: locked,
       isFiltered: () => filter !== "*", getImportGroup: () => loaded && filter !== "*" ? filter : ""};
   }

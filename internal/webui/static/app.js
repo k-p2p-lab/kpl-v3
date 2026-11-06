@@ -793,7 +793,7 @@ function validateSavedScenario(value, requireYAML = false) {
 }
 
 function scenarioOperationBusy() {
-  return state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
+  return state.libraryDeleting || state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
     || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId) || Boolean(state.scenarioImporting) || Boolean(state.scenarioImportBatch);
 }
 
@@ -1867,6 +1867,105 @@ async function confirmResultDeletion() {
   }
 }
 
+function renderLibraryDeletionPlan(plan) {
+  const count = plan.entries.length;
+  $("#libraryDeleteHeading").textContent = `Delete ${count} selected ${plan.scope === "scenarios" ? "scenario" : "result item"}${count === 1 ? "" : "s"}?`;
+  $("#libraryDeleteDescription").textContent = plan.scope === "scenarios"
+    ? "Saved scenarios will be deleted. Experiment results and your current editor draft are retained. This cannot be undone."
+    : "Selected batches include all current and previous runs, batch analyses and notes. Local results are deleted now; archived copies are removed by the background worker. This cannot be undone.";
+  $("#libraryDeleteNames").textContent = plan.entries.slice(0, 10).map(item => `${item.kind === "batch" ? "Batch: " : ""}${item.name} · ${item.id}`).join("\n")
+    + (count > 10 ? `\n…and ${count - 10} more.` : "");
+}
+
+function focusLibrarySelectionTools(scope) {
+  const tools = scope === "scenarios" ? "#scenarioGroupTools" : "#resultGroupTools";
+  const targets = [document.querySelector(tools + " [data-action-menu-toggle]"),
+    document.querySelector(tools + ' [data-library-action="select"]'),
+    $(scope === "scenarios" ? "#newScenario" : "#resultSearch")];
+  targets.find(target => target && !target.disabled)?.focus({preventScroll: true});
+}
+
+function requestLibraryDeletion(scope, keys) {
+  if (scenarioOperationBusy() || state.deletingResultId || globalThis.KPLLibraryGroups?.isBusy?.()) {
+    showToast("Wait for the current library operation to finish.");
+    return;
+  }
+  const plan = globalThis.KPLLibraryDeletions.prepareDeletion(scope, keys, libraryGroupItems(), state.savedResults || []);
+  state.libraryDeleteScope = scope;
+  state.pendingLibraryDeletion = plan;
+  renderLibraryDeletionPlan(plan);
+  $("#libraryDeleteError").textContent = "";
+  $("#confirmLibraryDelete").textContent = "Delete selected";
+  $("#libraryDeleteDialog").showModal();
+  $("#cancelLibraryDelete").focus();
+}
+
+function applyLibraryDeletion(entry, runIDs) {
+  if (entry.kind === "scenario") {
+    state.savedScenarios = (state.savedScenarios || []).filter(item => item.id !== entry.id);
+    if (state.selectedScenarioId === entry.id) state.selectedScenarioId = null;
+    if (state.pendingScenarioDeleteId === entry.id) state.pendingScenarioDeleteId = null;
+    return;
+  }
+  state.deletedResultIDs ||= new Set();
+  for (const id of runIDs) {
+    state.deletedResultIDs.add(id);
+    globalThis.KPLResultImages?.remove?.(id);
+  }
+  if (entry.kind === "batch") globalThis.KPLResultImages?.remove?.(entry.id);
+}
+
+async function confirmLibraryDeletion() {
+  const plan = state.pendingLibraryDeletion;
+  if (!plan || state.libraryDeleting || state.deletingResultId) return;
+  state.libraryDeleting = true;
+  state.deletingResultId = "library-selection";
+  $("#libraryDeleteError").textContent = "";
+  $("#confirmLibraryDelete").disabled = true;
+  $("#cancelLibraryDelete").disabled = true;
+  renderSavedScenarios();
+  renderSavedResults();
+  let complete = false;
+  try {
+    state.libraryDeletions ||= globalThis.KPLLibraryDeletions.createDeletions({api});
+    const report = await state.libraryDeletions.execute(plan, {onProgress: progress => {
+      $("#confirmLibraryDelete").textContent = `${progress.index + 1}/${progress.total}…`;
+      $("#confirmLibraryDelete").setAttribute("aria-label", `Deleting item ${progress.index + 1} of ${progress.total}`);
+    }});
+    for (const {entry, runIDs} of report.deletedItems) applyLibraryDeletion(entry, runIDs);
+    if (plan.scope === "results") state.savedResults = (state.savedResults || []).filter(run => !state.deletedResultIDs?.has(run.id));
+    globalThis.KPLLibraryGroups?.forgetSelection?.(report.deleted);
+    if (!report.failed.length && !report.remaining.length) {
+      state.pendingLibraryDeletion = null;
+      complete = true;
+      showToast(`Deleted ${report.deleted.length} selected item${report.deleted.length === 1 ? "" : "s"}.`);
+    } else {
+      const completed = new Set(report.deleted);
+      state.pendingLibraryDeletion = {scope: plan.scope, entries: plan.entries.filter(entry => !completed.has(entry.key))};
+      renderLibraryDeletionPlan(state.pendingLibraryDeletion);
+      $("#libraryDeleteError").textContent = `${report.deleted.length} deletion${report.deleted.length === 1 ? "" : "s"} confirmed. ${report.failed.length} failed; ${report.remaining.length} not attempted.\n`
+        + report.failed.slice(0, 3).map(failure => `${failure.entry.name}: ${failure.message}`).join("\n")
+        + (report.failed.length > 3 ? `\n…and ${report.failed.length - 3} more failures.` : "");
+      $("#libraryDeleteError").focus();
+    }
+  } catch (error) {
+    $("#libraryDeleteError").textContent = error.message;
+  } finally {
+    state.libraryDeleting = false;
+    state.deletingResultId = null;
+    $("#confirmLibraryDelete").disabled = false;
+    $("#confirmLibraryDelete").textContent = state.pendingLibraryDeletion ? "Retry deletion" : "Delete selected";
+    $("#confirmLibraryDelete").removeAttribute("aria-label");
+    $("#cancelLibraryDelete").disabled = false;
+    if (complete) $("#libraryDeleteDialog").close();
+    renderSavedScenarios();
+    renderResultViews();
+    void Promise.resolve().then(() => globalThis.KPLLibraryGroups?.refresh({fresh: true})).catch(() => {});
+    if (plan.scope === "results") void refreshSavedResults();
+    else if (!state.pendingLibraryDeletion) void refreshSavedScenarios();
+  }
+}
+
 async function refreshAgents(discover = false) {
   if (state.agentsRefreshing) return;
   state.agentsRefreshing = true;
@@ -2803,8 +2902,19 @@ $("#deleteResultDialog").addEventListener("close", () => {
   }
 });
 
+$("#confirmLibraryDelete").addEventListener("click", confirmLibraryDeletion);
+$("#cancelLibraryDelete").addEventListener("click", () => { if (!state.libraryDeleting) $("#libraryDeleteDialog").close(); });
+$("#libraryDeleteDialog").addEventListener("cancel", event => { if (state.libraryDeleting) event.preventDefault(); });
+$("#libraryDeleteDialog").addEventListener("close", () => {
+  if (state.libraryDeleting) return;
+  const scope = state.pendingLibraryDeletion?.scope || state.libraryDeleteScope;
+  state.pendingLibraryDeletion = null;
+  focusLibrarySelectionTools(scope);
+});
+
 globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisibleKeys: visibleLibraryGroupKeys,
-  isExternallyBusy: () => state.scenarioSubmitting,
+  isExternallyBusy: () => state.scenarioSubmitting || state.libraryDeleting,
+  onDeleteSelected: (scope, keys) => { state.libraryDeleteScope = scope; requestLibraryDeletion(scope, keys); },
   onSelectionChanged: renderSavedScenarios,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,
     getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),

@@ -92,12 +92,9 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 					}
 				})
 			}
-			if err := s.clearPendingWorkCleanup(ids); err != nil {
+			if err := s.completeQueueCleanup(ids); err != nil {
 				return fmt.Errorf("clear confirmed Peer cleanup: %w", err)
 			}
-			s.cancelMu.Lock()
-			s.queueCleanup = slices.DeleteFunc(s.queueCleanup, func(id string) bool { return slices.Contains(ids, id) })
-			s.cancelMu.Unlock()
 			phase("")
 			return ctx.Err()
 		}
@@ -113,4 +110,17 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 			return err
 		}
 	}
+}
+
+// Deletion retains pending cleanup under cancelMu. Retire both durable and live
+// barriers in that same critical section so deletion cannot recreate a marker
+// after it has been cleared but before the live obligation is removed.
+func (s *Server) completeQueueCleanup(ids []string) error {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if err := s.clearPendingWorkCleanup(ids); err != nil {
+		return err
+	}
+	s.queueCleanup = slices.DeleteFunc(s.queueCleanup, func(id string) bool { return slices.Contains(ids, id) })
+	return nil
 }

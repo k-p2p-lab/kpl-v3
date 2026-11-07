@@ -28,7 +28,7 @@ func resultFixture(t *testing.T, server *Server, id, state string, started time.
 	if state != "running" {
 		experiment.FinishedAt = started.Add(time.Minute)
 	}
-	if err := server.persistManifest(experiment, []byte("version: 3\nname: original scenario\n")); err != nil {
+	if err := server.persistManifest(experiment, []byte("version: 3\nname: original scenario\nphases:\n  - action: wait\n    duration: 1ms\n")); err != nil {
 		t.Fatal(err)
 	}
 	metadata, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, id, "experiment.json"))
@@ -134,7 +134,7 @@ func TestResultDownloadIncludesFullPersistedFilesAndOriginalInterruptedState(t *
 		}
 	}
 	files := decodeResultZIP(t, response.Body.Bytes())
-	if len(files) != 5 || !json.Valid(files["metrics.json"]) || !bytes.Equal(files["experiment.json"], original) || !bytes.Equal(files["events.jsonl"], events) || string(files["scenario.yaml"]) != "version: 3\nname: original scenario\n" {
+	if len(files) != 5 || !json.Valid(files["metrics.json"]) || !bytes.Equal(files["experiment.json"], original) || !bytes.Equal(files["events.jsonl"], events) || string(files["scenario.yaml"]) != "version: 3\nname: original scenario\nphases:\n  - action: wait\n    duration: 1ms\n" {
 		t.Fatalf("incorrect archive contents: %v", files)
 	}
 	var exported struct {

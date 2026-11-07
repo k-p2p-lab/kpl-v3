@@ -117,10 +117,30 @@ func (s *Server) recoverWorkCleanup(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return s.mergeRecoveredWorkCleanup(ctx, candidates, restored, scheduled)
+}
+
+// The unlocked metadata scan can race result deletion. Serialize its commit
+// with the deletion fence, retaining cleanup ownership without restoring deleted
+// history. All filesystem checks here are bounded local Controller metadata.
+func (s *Server) mergeRecoveredWorkCleanup(ctx context.Context, candidates map[string]bool, restored map[string]model.Experiment, scheduled map[string]bool) error {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	s.state.persistMu.Lock()
+	defer s.state.persistMu.Unlock()
+	deleted := make(map[string]bool, len(restored))
+	for id := range restored {
+		if !candidates[id] || !validResultID(id) || scheduled[id] {
+			continue
+		}
+		var err error
+		deleted[id], err = s.state.resultDeletedLocked(id)
+		if err != nil {
+			return fmt.Errorf("check recovered Peer cleanup history: %w", err)
+		}
 	}
 	s.state.mu.Lock()
 	for id := range candidates {
@@ -128,7 +148,7 @@ func (s *Server) recoverWorkCleanup(ctx context.Context) error {
 			continue
 		}
 		if _, exists := s.state.experiments[id]; !exists {
-			if run, found := restored[id]; found {
+			if run, found := restored[id]; found && !deleted[id] {
 				// Rehydrate known history solely for cleanup/status sealing. A
 				// persisted active state never starts a new scenario scheduler.
 				if run.State == "running" || run.State == "queued" {

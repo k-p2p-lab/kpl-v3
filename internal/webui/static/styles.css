@@ -361,6 +361,10 @@ tbody:last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
 .agent-host-targets li { display: grid; gap: .3rem; padding: .7rem; background: var(--surface); border: 1px solid var(--line); border-radius: .65rem; min-width: 0; overflow-wrap: anywhere; }
 .agent-host-targets code { font-size: .72rem; color: var(--muted); white-space: normal; }
 #agentHostDialog p { overflow-wrap: anywhere; }
+#agentHostDialog .dialog-shell { grid-template-rows: auto minmax(0, 1fr) auto; max-height: calc(100dvh - 2 * var(--dialog-gap) - 2px); overflow: hidden; }
+.agent-host-dialog-body { display: grid; align-content: start; gap: 1rem; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+#agentHostDialog .dialog-error:empty { display: none; }
+#agentHostDialog footer { margin: 0; padding-top: .75rem; border-top: 1px solid var(--line-soft); }
 .host-reboot-state { font-size: .8rem; color: var(--cyan); }
 .host-reboot-state[data-state="unknown"], .host-reboot-state[data-state="requested"] { color: var(--amber); }
 .host-reboot-state[data-state="rebooted"] { color: var(--green); }

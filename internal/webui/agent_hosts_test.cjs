@@ -9,7 +9,7 @@ function job(payload,state='queued',hostState='queued'){
 function fixture(handler,storage=new Map()){
  const elements=new Map(),listeners=new Map(),requests=[],timers=new Map(),inputs=[];let nextTimer=0,nextID=0;
  const element=id=>{if(!elements.has(id))elements.set(id,{id,textContent:'',innerHTML:'',hidden:false,disabled:false,open:false,checked:false,indeterminate:false,setAttribute(name,value){this[name]=value;},focus(){document.activeElement=this;},showModal(){this.open=true;},close(){this.open=false;},addEventListener(){}});return elements.get(id);};
- const ids=['selectAgentHosts','agentHostSelection','rebootAgentHosts','clearAgentHosts','viewHostReboot','agentHostStatus','agentHostDialog','agentHostTargets','agentHostDialogSummary','agentHostDialogStatus','confirmAgentHostReboot','closeAgentHostDialog','refreshHostReboot','agentHostDialogError'];
+ const ids=['selectAgentHosts','agentHostSelection','rebootAgentHosts','clearAgentHosts','viewHostReboot','agentHostStatus','agentHostAvailability','agentHostDialog','agentHostTargets','agentHostDialogSummary','agentHostDialogStatus','confirmAgentHostReboot','closeAgentHostDialog','refreshHostReboot','agentHostDialogError'];
  ids.forEach(element);
  const document={querySelector:selector=>elements.get(selector.slice(1)),querySelectorAll:()=>inputs,addEventListener(type,handler){if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push(handler);}};
  const environment={document,crypto:{randomUUID:()=>String(++nextID).padStart(8,'0')+'-1122-4333-8444-555566667777'},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},setTimeout(callback,delay){const id=++nextTimer;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id)};
@@ -31,14 +31,75 @@ test('host identity groups duplicate Agents without using container hostnames or
 });
 
 test('unavailable and unsupported hosts remain unselectable with an explicit reason',()=>{
- const values=[agent('offline','node-offline'),agent('disabled','node-disabled'),agent('pending','node-pending'),agent('old','node-old')];
- values[0].state='offline';values[1].host.rebootEnabled=false;values[2].host.rebootPending=true;values[3].host.rebootSupported=false;values[3].host.rebootReason='This manager host cannot be rebooted.';
+ const values=[agent('offline','node-offline'),agent('unknown','node-unknown'),agent('pending','node-pending'),agent('old','node-old')];
+ values[0].state='offline';values[1].startedAt='0001-01-01T00:00:00Z';values[2].host.rebootPending=true;values[3].host.rebootSupported=false;values[3].host.rebootReason='This manager host cannot be rebooted.';
  const h=fixture();h.view.update(values);
  for(const value of values){assert.match(h.view.checkbox(value),/ disabled/);h.change(value.host.nodeId,true);}
  assert.equal(h.element('agentHostSelection').textContent,'0 hosts selected');
  assert.equal(h.element('selectAgentHosts').disabled,true);
  assert.match(h.view.checkbox(values[3]),/This manager host cannot be rebooted/);
  assert.doesNotThrow(()=>groupHosts([{...agent(),startedAt:123}]));
+});
+
+test('disabled default hosts can be selected and reviewed without admitting reboot work',async()=>{
+ const value=agent();value.host.rebootEnabled=false;value.host.rebootSupported=false;value.host.rebootReason='Host reboot is disabled on this Agent.';
+ const h=fixture();h.view.update([value]);
+ assert.equal(groupHosts([value]).get('node-a').available,false);
+ assert.equal(groupHosts([value]).get('node-a').selectable,true);
+ assert.doesNotMatch(h.view.checkbox(value),/ disabled>$/);
+ assert.equal(h.element('selectAgentHosts').disabled,false);
+ assert.match(h.element('agentHostAvailability').textContent,/KPL_AGENT_HOST_REBOOT_ENABLED=true/);
+ h.master(true);assert.equal(h.element('agentHostSelection').textContent,'1 host selected · 1 not ready');
+ assert.equal(h.element('rebootAgentHosts').disabled,false);
+ h.action('rebootAgentHosts');
+ assert.equal(h.element('agentHostDialog').open,true);
+ assert.equal(h.element('confirmAgentHostReboot').disabled,true);
+ assert.match(h.element('agentHostDialogStatus').textContent,/KPL_AGENT_HOST_REBOOT_ENABLED=true/);
+ h.action('confirmAgentHostReboot');await turn();assert.equal(h.requests.length,0);
+ h.element('confirmAgentHostReboot').disabled=false;h.action('confirmAgentHostReboot');await turn();
+ assert.equal(h.requests.length,0);assert.match(h.element('agentHostDialogError').textContent,/KPL_AGENT_HOST_REBOOT_ENABLED=true/);
+ h.action('closeAgentHostDialog');h.change('node-a',false);
+ assert.equal(h.element('agentHostSelection').textContent,'0 hosts selected');
+ h.master(true);h.action('clearAgentHosts');assert.equal(h.element('agentHostSelection').textContent,'0 hosts selected');
+});
+
+test('the disabled unprobed reason matches the Agent report contract',()=>{
+ const source=require('node:fs').readFileSync(__dirname+'/../agent/host_reboot.go','utf8');
+ assert.match(source,/RebootReason:\s*"Host reboot is disabled on this Agent\."/);
+});
+
+test('known unsupported disabled hosts and hosts without proof stay blocked with visible reasons',()=>{
+ const manager=agent('manager','manager');manager.host.rebootEnabled=false;manager.host.rebootSupported=false;manager.host.rebootReason='Manager hosts cannot be rebooted.';
+ const unknown=agent('unknown','unknown');unknown.host.rebootEnabled=false;unknown.host.rebootSupported=false;unknown.host.bootId='';
+ const h=fixture();h.view.update([manager,unknown]);
+ assert.match(h.view.checkbox(manager),/ disabled/);assert.match(h.view.checkbox(unknown),/ disabled/);
+ h.master(true);assert.equal(h.element('agentHostSelection').textContent,'0 hosts selected');
+ assert.match(h.element('agentHostAvailability').textContent,/Manager hosts cannot be rebooted/);
+ const legacy=agent('legacy');delete legacy.host;h.view.update([legacy]);
+ assert.equal(h.element('selectAgentHosts').disabled,true);
+ assert.match(h.element('agentHostAvailability').textContent,/Update the Agent image/);
+});
+
+test('mixed ready and disabled selections keep execution blocked until only ready hosts remain',async()=>{
+ const ready=agent(),disabled=agent('disabled','node-disabled');disabled.host.rebootEnabled=false;
+ const h=fixture();h.view.update([ready,disabled]);h.master(true);h.action('rebootAgentHosts');
+ assert.equal(h.element('confirmAgentHostReboot').disabled,true);
+ h.action('confirmAgentHostReboot');await turn();assert.equal(h.requests.length,0);
+ h.action('closeAgentHostDialog');h.change('node-disabled',false);h.action('rebootAgentHosts');
+ assert.equal(h.element('confirmAgentHostReboot').disabled,false);
+ h.action('confirmAgentHostReboot');await turn();
+ assert.equal(h.requests.length,1);
+ assert.deepEqual(JSON.parse(h.requests[0].options.body).targets,[{agentId:'a',nodeId:'node-a',bootId:'boot-a',agentStartedAt:'2026-11-07T00:00:00Z'}]);
+});
+
+test('capability changes during review update the button and stale unavailable selection can be deselected',async()=>{
+ const h=fixture(),value=agent();h.view.update([value]);h.master(true);h.action('rebootAgentHosts');
+ value.host.rebootSupported=false;value.host.rebootReason='Host capability is no longer supported.';h.view.update([value]);
+ assert.equal(h.element('confirmAgentHostReboot').disabled,true);
+ assert.match(h.element('agentHostDialogStatus').textContent,/no longer supported/);
+ h.action('confirmAgentHostReboot');await turn();assert.equal(h.requests.length,0);
+ assert.doesNotMatch(h.view.checkbox(value),/ disabled/);
+ h.change('node-a',false);assert.equal(h.element('agentHostSelection').textContent,'0 hosts selected');
 });
 
 test('an offline alias from an older boot cannot permanently block a recovered host',()=>{

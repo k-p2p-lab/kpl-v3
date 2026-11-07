@@ -42,6 +42,9 @@
     menu.classList.add("is-open");
     if (menu.tagName === "DETAILS") menu.open = true;
     if (!panel.id) panel.id = "action-menu-panel-" + ++nextID;
+    // Plain text and label padding otherwise focus a container outside the
+    // popover on pointer down, closing it before selection or label activation.
+    if (!panel.hasAttribute("tabindex")) panel.setAttribute("tabindex", "-1");
     trigger.setAttribute("aria-controls", panel.id);
     trigger.setAttribute("aria-expanded", "true");
     // Top-layer popovers avoid clipping inside tables and modal scroll areas.

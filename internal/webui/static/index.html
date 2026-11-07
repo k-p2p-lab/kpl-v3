@@ -48,7 +48,7 @@
       </div>
       <details class="runtime-version action-menu" id="runtimeVersion">
         <summary id="runtimeVersionSummary" aria-controls="runtimeVersionDetails" aria-expanded="false">Version · Loading…</summary>
-        <div class="runtime-version-details action-menu-items" id="runtimeVersionDetails" role="region" aria-labelledby="runtimeVersionSummary">
+        <div class="runtime-version-details action-menu-items" id="runtimeVersionDetails" role="region" aria-labelledby="runtimeVersionSummary" tabindex="0">
           <header class="runtime-version-panel-heading"><strong>Runtime version</strong><button class="icon-button" type="button" aria-label="Close version information"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button></header>
           <dl>
             <dt>Controller version</dt><dd id="runtimeVersionBuild">Unknown</dd>
@@ -337,7 +337,7 @@
           <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
           <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
           <div class="agent-host-toolbar" aria-label="Linux host selection">
-            <label class="agent-host-master"><input id="selectAgentHosts" type="checkbox" aria-label="Select available Linux hosts" disabled><span>Select hosts</span></label>
+            <label class="agent-host-master"><input id="selectAgentHosts" type="checkbox" aria-label="Select Linux hosts" disabled><span>Select hosts</span></label>
             <span class="panel-note" id="agentHostSelection" aria-live="polite">0 hosts selected</span>
             <div class="agent-host-actions">
               <button class="secondary-button" id="clearAgentHosts" type="button" disabled>Clear</button>
@@ -346,6 +346,7 @@
             </div>
           </div>
           <p class="agent-refresh-status" id="agentHostStatus" role="status" aria-live="polite" hidden></p>
+          <p class="agent-refresh-status" id="agentHostAvailability" role="status" aria-live="polite" hidden></p>
           <section class="agent-resource-overview" aria-labelledby="agentResourceHeading">
             <div class="agent-resource-heading"><h3 id="agentResourceHeading">Agents &amp; Peers</h3><span class="panel-note">Refreshes about every 10 seconds</span></div>
             <div class="agent-resource-summaries">
@@ -561,12 +562,14 @@
   <dialog id="agentHostDialog" aria-labelledby="agentHostDialogHeading" aria-describedby="agentHostDialogHelp">
     <div class="dialog-shell">
       <header><h2 id="agentHostDialogHeading">Reboot Linux hosts</h2></header>
-      <p id="agentHostDialogSummary" class="dialog-help"></p>
-      <p id="agentHostDialogHelp" class="dialog-help">This reboots the selected host servers. Work queues behind experiments and analysis. Target hosts are excluded from new Peer placement and remain excluded until you enable them after reboot.</p>
-      <ul id="agentHostTargets" class="agent-host-targets" aria-label="Selected host outcomes"></ul>
-      <p class="dialog-help" id="agentHostDialogStatus" role="status" aria-live="polite"></p>
-      <p class="dialog-help">Canceling queue work stops unsent requests and waiting only. A reboot already requested on a host cannot be canceled here.</p>
-      <p class="dialog-error" id="agentHostDialogError" role="alert"></p>
+      <div class="agent-host-dialog-body">
+        <p id="agentHostDialogSummary" class="dialog-help"></p>
+        <p id="agentHostDialogHelp" class="dialog-help">This reboots the selected host servers. Work queues behind experiments and analysis. Target hosts are excluded from new Peer placement and remain excluded until you enable them after reboot.</p>
+        <ul id="agentHostTargets" class="agent-host-targets" aria-label="Selected host outcomes"></ul>
+        <p class="dialog-help" id="agentHostDialogStatus" role="status" aria-live="polite"></p>
+        <p class="dialog-help">Canceling queue work stops unsent requests and waiting only. A reboot already requested on a host cannot be canceled here.</p>
+        <p class="dialog-error" id="agentHostDialogError" role="alert"></p>
+      </div>
       <footer>
         <button class="secondary-button" id="refreshHostReboot" type="button" hidden>Refresh status</button>
         <button class="secondary-button" id="closeAgentHostDialog" type="button">Cancel</button>

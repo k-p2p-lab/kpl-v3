@@ -6,6 +6,10 @@
   const terminalStates = new Set(["completed", "failed", "interrupted"]);
   const hostStates = new Set(["queued", "checking", "requested", "rebooted", "unknown", "rejected"]);
   const labels = {queued:"Queued", checking:"Checking host", requested:"Reboot requested", rebooted:"Reboot confirmed", unknown:"Outcome unknown", rejected:"Not requested"};
+  const disabledReason = "Host reboot is disabled on this Agent.";
+  const enableHint = "Enable host reboot with kpl config set KPL_AGENT_HOST_REBOOT_ENABLED=true, then apply it through a planned Agent redeployment.";
+  const validAgentIdentity = agent => typeof agent?.host?.bootId === "string" && agent.host.bootId
+    && typeof agent.startedAt === "string" && Number.isFinite(Date.parse(agent.startedAt)) && !agent.startedAt.startsWith("0001-");
 
   function groupHosts(agents) {
     const groups = new Map();
@@ -20,17 +24,26 @@
       const live = agents.filter(agent => agent.state === "online");
       const boots = new Set(live.map(agent => agent.host.bootId).filter(Boolean));
       const eligible = agents.find(agent => agent.state === "online" && agent.host.rebootEnabled === true
-        && agent.host.rebootSupported === true && typeof agent.host.bootId === "string" && agent.host.bootId
-        && typeof agent.startedAt === "string" && Number.isFinite(Date.parse(agent.startedAt))
-        && !agent.startedAt.startsWith("0001-") && !agent.host.rebootPending);
-      group.agent = eligible || live[0] || agents[0];
+        && agent.host.rebootSupported === true && validAgentIdentity(agent) && !agent.host.rebootPending);
+      // Disabled Agents have not probed host support yet. Let an operator
+      // select and review that known host without granting reboot permission.
+      // An explicit unsupported-host reason still keeps selection blocked.
+      const configurable = agents.find(agent => agent.state === "online" && agent.host.rebootEnabled === false
+        && validAgentIdentity(agent) && !agent.host.rebootPending
+        && (agent.host.rebootSupported === true || !agent.host.rebootReason || agent.host.rebootReason === disabledReason));
+      const candidate = eligible || configurable;
+      const conflictingBoots = boots.size > 1;
+      const rebootPending = agents.some(agent => agent.host.rebootPending && (!candidate || agent.host.bootId === candidate.host.bootId));
+      group.agent = candidate || live[0] || agents[0];
       group.hostname = group.agent.host.hostname || group.agent.hostname || group.nodeId;
-      group.reason = boots.size > 1 ? "Host boot identity changed. Refresh Agents before selecting this host."
-        : agents.some(agent => agent.host.rebootPending && (!eligible || agent.host.bootId === eligible.host.bootId)) ? "A host reboot is already pending."
-        : eligible ? "" : group.agent.host.rebootReason || (group.agent.state !== "online" ? "The Agent is offline."
-          : !group.agent.host.rebootEnabled ? "Host reboot is not enabled on this Agent."
-          : "Host reboot is unavailable or its identity is unknown.");
+      group.reason = conflictingBoots ? "Host boot identity changed. Refresh Agents before selecting this host."
+        : rebootPending ? "A host reboot is already pending."
+        : eligible ? "" : group.agent.state !== "online" ? "The Agent is offline."
+          : !validAgentIdentity(group.agent) ? "Host or Agent identity is unavailable. Refresh Agents or update the Agent image."
+          : configurable ? disabledReason + " " + enableHint
+          : group.agent.host.rebootReason || "Host reboot is unavailable or its identity is unknown.";
       group.available = !group.reason;
+      group.selectable = !!candidate && !conflictingBoots && !rebootPending;
     }
     return groups;
   }
@@ -48,7 +61,7 @@
     const document = environment.document;
     const timer = environment.setTimeout || setTimeout, clearTimer = environment.clearTimeout || clearTimeout;
     let options, initialized = false, groups = new Map(), draft = null, receipt = null, inspection = null;
-    let submitting = false, polling = false, pollTimer = null, focus = null;
+    let submitting = false, polling = false, pollTimer = null, focus = null, unidentifiedAgents = 0;
     const selected = new Map();
     const element = id => document?.querySelector?.("#" + id);
     const text = (id,value) => { const target=element(id); if(target)target.textContent=value; };
@@ -70,9 +83,15 @@
         && ["requested","unknown"].includes(host.state));
       return blocked ? "A previous reboot request is not yet confirmed. Check the host before requesting another reboot." : "";
     }
-    function selectionError() {
+    function selectionUnavailable(group) {
+      if (!group || !group.selectable) return unavailable(group);
+      const blocked = receipt?.job?.hosts?.find(host => host.nodeId === group.nodeId && host.bootId === group.agent.host.bootId
+        && ["requested","unknown"].includes(host.state));
+      return blocked ? "A previous reboot request is not yet confirmed. Check the host before requesting another reboot." : "";
+    }
+    function selectionError(requireReady = true) {
       for (const [nodeId,target] of selected) {
-        const group = groups.get(nodeId), reason = unavailable(group);
+        const group = groups.get(nodeId), reason = requireReady ? unavailable(group) : selectionUnavailable(group);
         if (reason) return reason;
         const current = targetFor(group);
         if (current.agentId !== target.agentId || current.bootId !== target.bootId || current.agentStartedAt !== target.agentStartedAt) {
@@ -82,7 +101,7 @@
       return "";
     }
     function render() {
-      const available = [...groups.values()].filter(group => !unavailable(group));
+      const available = [...groups.values()].filter(group => !selectionUnavailable(group));
       const count = available.filter(group => selected.has(group.nodeId)).length;
       const master = element("selectAgentHosts");
       if (master) {
@@ -92,27 +111,39 @@
         master.setAttribute?.("aria-checked",master.indeterminate?"mixed":String(master.checked));
       }
       const invalid = [...selected.keys()].filter(nodeId => unavailable(groups.get(nodeId))).length;
-      text("agentHostSelection",selected.size + " host" + (selected.size===1?"":"s") + " selected" + (invalid?" · "+invalid+" unavailable":""));
+      text("agentHostSelection",selected.size + " host" + (selected.size===1?"":"s") + " selected" + (invalid?" · "+invalid+" not ready":""));
       const reboot = element("rebootAgentHosts");
       if (reboot) {
-        reboot.disabled = !selected.size || submitting || !!pending() || !!selectionError();
-        reboot.title = pending() ? "Resolve the current reboot request before starting another." : selectionError() || "Reboot the selected Linux hosts after earlier queue work finishes.";
+        reboot.disabled = !selected.size || submitting || !!pending() || !!selectionError(false);
+        reboot.title = pending() ? "Resolve the current reboot request before starting another." : selectionError(false) || selectionError() || "Reboot the selected Linux hosts after earlier queue work finishes.";
       }
+      const selectionReason = selectionError();
+      const unavailableHosts = [...groups.values()].filter(group => unavailable(group));
+      const explanation = unavailableHosts.find(group => group.selectable) || unavailableHosts[0];
+      const availability = selectionReason || (!selected.size && unavailableHosts.length
+        ? unavailableHosts.length + " host" + (unavailableHosts.length === 1 ? " is" : "s are") + " not ready for reboot. " + unavailable(explanation)
+        : !selected.size && unidentifiedAgents ? "Some Agents do not report a host identity. Update the Agent image and refresh Agents before selecting their hosts." : "");
+      text("agentHostAvailability", availability);hidden("agentHostAvailability", !availability);
       const clear = element("clearAgentHosts");if(clear)clear.disabled=!selected.size||submitting;
       hidden("viewHostReboot",!receipt);
       for (const checkbox of document?.querySelectorAll?.("[data-host-select]") || []) {
-        const group = groups.get(checkbox.dataset.hostSelect), reason = checkbox.dataset.hostSelect ? unavailable(group) : "This Agent does not report a host identity for reboot.";
+        const group = groups.get(checkbox.dataset.hostSelect), reason = checkbox.dataset.hostSelect ? selectionUnavailable(group) : "This Agent does not report a host identity for reboot.";
         checkbox.checked = selected.has(checkbox.dataset.hostSelect);
-        checkbox.disabled = submitting || !!reason;
-        checkbox.title = reason || "Select Linux host " + group.hostname;
+        checkbox.disabled = submitting || !!reason && !checkbox.checked;
+        checkbox.title = (checkbox.checked ? "Deselect Linux host " : "Select Linux host ") + (group?.hostname || "") + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
       }
     }
     function checkbox(agent) {
-      const nodeId = agent?.host?.nodeId || "", group = groups.get(nodeId), reason = nodeId ? unavailable(group) : "This Agent does not report a host identity for reboot.";
+      const nodeId = agent?.host?.nodeId || "", group = groups.get(nodeId), reason = nodeId ? selectionUnavailable(group) : "This Agent does not report a host identity for reboot.";
       const name = group?.hostname || agent.hostname || agent.name || agent.id;
-      return '<input class="agent-host-checkbox" type="checkbox" data-host-select="'+escape(nodeId)+'" data-host-agent="'+escape(agent.id)+'" aria-label="'+escape("Select Linux host "+name+(group?.agents.length>1?" (shared by "+group.agents.length+" Agents)":""))+'" title="'+escape(reason||"Select Linux host "+name)+'"'+(selected.has(nodeId)?' checked':'')+(submitting||reason?' disabled':'')+'>';
+      const title = (selected.has(nodeId) ? "Deselect Linux host " : "Select Linux host ") + name + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
+      return '<input class="agent-host-checkbox" type="checkbox" data-host-select="'+escape(nodeId)+'" data-host-agent="'+escape(agent.id)+'" aria-label="'+escape("Select Linux host "+name+(group?.agents.length>1?" (shared by "+group.agents.length+" Agents)":""))+'" title="'+escape(title)+'"'+(selected.has(nodeId)?' checked':'')+(submitting||reason&&!selected.has(nodeId)?' disabled':'')+'>';
     }
-    function update(agents) { groups=groupHosts(agents);render(); }
+    function update(agents) {
+      groups=groupHosts(agents);
+      unidentifiedAgents=(Array.isArray(agents)?agents:[]).filter(agent=>typeof agent?.host?.nodeId!=="string"||!agent.host.nodeId).length;
+      render();if(element("agentHostDialog")?.open)renderDialog();
+    }
     function beforeRender() {
       const active=document?.activeElement,table=active?.closest?.(".table-wrap");
       focus=active?.dataset?.hostSelect?{nodeId:active.dataset.hostSelect,agentId:active.dataset.hostAgent,table,left:table?.scrollLeft,top:table?.scrollTop}:null;
@@ -127,10 +158,11 @@
     }
     function select(nodeId,checked) {
       if(submitting)return;
+      if(!checked){selected.delete(nodeId);render();return;}
       const group=groups.get(nodeId);
-      if(!group||unavailable(group))return;
-      if(checked){if(selected.size>=128&&!selected.has(nodeId)){notice("Select at most 128 hosts.",true);render();return;}selected.set(nodeId,targetFor(group));}
-      else selected.delete(nodeId);
+      if(!group||selectionUnavailable(group))return;
+      if(selected.size>=128&&!selected.has(nodeId)){notice("Select at most 128 hosts.",true);render();return;}
+      selected.set(nodeId,targetFor(group));
       render();
     }
     function show() {
@@ -146,21 +178,21 @@
       const job=inspection||receipt?.job, list=element("agentHostTargets"), uncertain=!inspection&&receipt?.uncertain;
       const hosts=job?.hosts||draft?.targets||receipt?.payload?.targets||[];
       if(list){const markup=hosts.map(hostMarkup).join("");if(list.innerHTML!==markup)list.innerHTML=markup;}
-      text("agentHostDialogSummary", job ? "Request "+job.id+" · "+job.state : hosts.length+" Linux host"+(hosts.length===1?"":"s")+" will be rebooted.");
+      text("agentHostDialogSummary", job ? "Request "+job.id+" · "+job.state : hosts.length+" Linux host"+(hosts.length===1?"":"s")+" selected.");
       text("agentHostDialogStatus",(uncertain?"The response was not confirmed. Refresh status or retry this exact request; a new reboot request will not be generated."
         : job?.state==="queued"?"Queued behind earlier experiments and analysis."
         : job?.state==="running"?"Reboot work is running. A request acknowledgment does not confirm a completed reboot."
         : job?"Only a changed host boot identity and a new Agent report confirm a reboot. Unknown outcomes require checking the host."
-        : "The Controller will check the selected host identities again before requesting reboot.")+(job?.error?" "+String(job.error):""));
+        : selectionError() || "The Controller will check the selected host identities again before requesting reboot.")+(job?.error?" "+String(job.error):""));
       const confirm=element("confirmAgentHostReboot");
-      if(confirm){confirm.hidden=!!inspection||!!job&&!uncertain;confirm.disabled=submitting;confirm.textContent=submitting?"Submitting…":uncertain?"Retry same request":"Queue reboot";}
+      if(confirm){confirm.hidden=!!inspection||!!job&&!uncertain;confirm.disabled=submitting||!uncertain&&!job&&!!selectionError();confirm.textContent=submitting?"Submitting…":uncertain?"Retry same request":"Queue reboot";}
       const close=element("closeAgentHostDialog");if(close){close.disabled=submitting;close.textContent=job||receipt?.uncertain?"Close":"Cancel";}
       const refresh=element("refreshHostReboot");if(refresh){refresh.hidden=!receipt&&!inspection;refresh.disabled=submitting||polling;}
     }
     function open(id) {
       if(typeof id==="string")return openJob(id);
       if(submitting||pending()||!selected.size)return;
-      const error=selectionError();if(error){notice(error,true);return;}
+      const error=selectionError(false);if(error){notice(error,true);return;}
       draft={targets:[...selected.values()].sort((a,b)=>a.nodeId.localeCompare(b.nodeId)).map(target=>({...target,hostname:groups.get(target.nodeId)?.hostname}))};
       receipt=null;inspection=null;text("agentHostDialogError","");renderDialog();show();
     }
@@ -237,7 +269,7 @@
       try{const raw=environment.sessionStorage?.getItem(storageKey);const saved=raw&&raw.length<=524288?JSON.parse(raw):null;if(validStoredRequest(saved)){receipt=saved;receipt.uncertain=true;}}catch{}
       document?.addEventListener?.("change",event=>{
         const control=event.target;if(control?.dataset?.hostSelect!==undefined)select(control.dataset.hostSelect,control.checked);
-        else if(control?.id==="selectAgentHosts"){const checked=control.checked;for(const group of groups.values())if(!unavailable(group))select(group.nodeId,checked);}
+        else if(control?.id==="selectAgentHosts"){const checked=control.checked;for(const group of groups.values())if(!selectionUnavailable(group))select(group.nodeId,checked);}
       });
       document?.addEventListener?.("click",event=>{
         const button=event.target.closest?.("#rebootAgentHosts, #clearAgentHosts, #viewHostReboot, #confirmAgentHostReboot, #closeAgentHostDialog, #refreshHostReboot");

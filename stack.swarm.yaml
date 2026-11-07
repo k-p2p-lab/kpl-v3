@@ -7,8 +7,9 @@ services:
     labels:
       io.kpl.resource-monitor: 'true'
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
-    command: [controller, --listen, ':8080', --data-dir, /var/lib/kpl/data]
+    command: [run, controller, --listen, ':8080', --data-dir, /var/lib/kpl/data]
     environment:
+      KPL_RUNTIME_IMAGE: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
       KPL_USER: "${KPL_USER:?Set KPL_USER}"
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_RUN_MIN_FREE_BYTES: "${KPL_RUN_MIN_FREE_BYTES:-1073741824}"
@@ -41,7 +42,7 @@ services:
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     user: '0:0'
     entrypoint: [kpl]
-    command: [swarm-agent]
+    command: [run, swarm-agent]
     environment:
       KPL_USER: "${KPL_USER:?Set KPL_USER}"
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
@@ -81,7 +82,7 @@ services:
   network-manager:
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     user: '0:0'
-    command: [network-manager]
+    command: [run, network-manager]
     labels:
       io.kpl.resource-monitor: 'true'
     environment:
@@ -112,7 +113,7 @@ services:
   resource-monitor:
     image: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     user: '0:0'
-    command: [resource-monitor]
+    command: [run, resource-monitor]
     labels:
       io.kpl.resource-monitor: 'true'
     environment:

@@ -12,13 +12,13 @@ import (
 )
 
 func (a *App) runSwarmAgent(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("swarm-agent", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run swarm-agent", flag.ContinueOnError)
 	flags.SetOutput(a.Stderr)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return usageError("swarm-agent uses the Swarm task environment and takes no arguments")
+		return usageError("kpl run swarm-agent uses the Swarm task environment and takes no arguments")
 	}
 	resolved, err := a.swarmAgentArguments(ctx, swarmSleep)
 	if err != nil {

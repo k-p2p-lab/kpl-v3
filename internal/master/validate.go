@@ -23,7 +23,7 @@ func (a *App) validateScenario(args []string) error {
 		return usageError(err.Error())
 	}
 	if flags.NArg() > 1 {
-		return usageError("usage: kpl validate [--scenario FILE]")
+		return usageError("usage: kpl scenario validate [--scenario FILE]")
 	}
 	if flags.NArg() == 1 {
 		if flags.NFlag() != 0 {

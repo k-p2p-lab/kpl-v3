@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,13 +25,14 @@ var swarmPlatform = regexp.MustCompile(`^linux/[a-z0-9][a-z0-9_]*(/[a-z0-9][a-z0
 var swarmDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type swarmOptions struct {
-	name, selector, platforms, component, tail, logContext string
-	nodes                                                  []string
+	name, selector, platforms, image, component, tail, logContext string
+	nodes                                                         []string
 }
 
 type swarm struct {
 	a                     *App
 	config                Config
+	configuredImage       string
 	options               swarmOptions
 	stack, network, label string
 	timeout               time.Duration
@@ -51,6 +53,17 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 	case "nodes", "login", "check", "access", "status", "remove", "reset-peer-network":
 		if len(args) != 0 {
 			return bad(name + " takes no arguments")
+		}
+		return o, nil
+	case "image-inspect":
+		if len(args) > 1 {
+			return bad("image inspect accepts at most one image reference")
+		}
+		if len(args) == 1 {
+			if err := validateRequestedImage(args[0], false); err != nil {
+				return bad(err.Error())
+			}
+			o.image = args[0]
 		}
 		return o, nil
 	case "logs":
@@ -89,30 +102,54 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 			return bad("--context only applies to access/auth file reads")
 		}
 		return o, nil
-	case "publish", "restart":
-		if len(args) > 0 && args[0] == "--platforms" {
-			if len(args) < 2 {
-				return bad("--platforms requires Linux OS/architecture[/variant] tuples")
-			}
-			o.platforms = args[1]
-			for _, platform := range strings.Split(o.platforms, ",") {
-				if !swarmPlatform.MatchString(platform) {
-					return bad("--platforms requires Linux OS/architecture[/variant] tuples")
-				}
-			}
-			args = args[2:]
-		}
-		if name == "publish" {
-			if len(args) > 0 {
-				return bad("publish accepts only --platforms CSV")
-			}
-			return o, nil
-		}
-	case "deploy", "add-node", "remove-node":
+	case "publish", "restart", "deploy", "add-node", "remove-node":
 	default:
 		return bad("unknown Swarm command: " + name)
 	}
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		key, value, supplied := strings.Cut(arg, "=")
+		if key == "--image" || key == "--platforms" {
+			if key == "--platforms" && name == "restart" {
+				return bad("restart pulls the configured registry image; use kpl image publish --platforms CSV to build and publish first")
+			}
+			if key == "--image" && name != "deploy" && name != "restart" || key == "--platforms" && name != "publish" {
+				return bad("unsupported option for " + name + ": " + key)
+			}
+			if !supplied {
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					if key == "--platforms" {
+						return bad("--platforms requires Linux OS/architecture[/variant] tuples")
+					}
+					return bad("--image requires a registry sha256 digest or repository@sha256:digest")
+				}
+				i++
+				value = args[i]
+			}
+			if key == "--image" {
+				if o.image != "" {
+					return bad("--image may be specified only once")
+				}
+				if err := validateRequestedImage(value, true); err != nil {
+					return bad(err.Error())
+				}
+				o.image = value
+			} else {
+				if o.platforms != "" {
+					return bad("--platforms may be specified only once")
+				}
+				for _, platform := range strings.Split(value, ",") {
+					if !swarmPlatform.MatchString(platform) {
+						return bad("--platforms requires Linux OS/architecture[/variant] tuples")
+					}
+				}
+				o.platforms = value
+			}
+			continue
+		}
+		if name == "publish" {
+			return bad("publish accepts only --platforms CSV")
+		}
 		switch arg {
 		case "--all", "--all-excluding-self", "--workers":
 			if o.selector != "" || len(o.nodes) > 0 {
@@ -128,6 +165,9 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 			}
 			o.nodes = append(o.nodes, arg)
 		}
+	}
+	if o.image != "" && o.platforms != "" {
+		return bad("--image and --platforms cannot be combined; selecting a digest reuses an existing image")
 	}
 	if (name == "add-node" || name == "remove-node") && o.selector == "" && len(o.nodes) == 0 {
 		return bad(name + " requires nodes or a selector")
@@ -183,7 +223,18 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 	if err != nil {
 		return err
 	}
-	s := &swarm{a: a.WithConfig(config), config: config, options: o, stack: config["KPL_STACK_NAME"], network: config["KPL_PEER_NETWORK"], present: make(map[string]bool)}
+	configuredImage := config["KPL_IMAGE"]
+	if o.image != "" {
+		image, err := requestedImageReference(config["KPL_IMAGE"], o.image)
+		if err != nil {
+			return err
+		}
+		config["KPL_IMAGE"] = image
+	}
+	if name == "restart" && o.platforms != "" && strings.Contains(config["KPL_IMAGE"], "@") {
+		return usageError("--platforms cannot be used with a configured image digest; configure a mutable tag to build an image")
+	}
+	s := &swarm{a: a.WithConfig(config), config: config, configuredImage: configuredImage, options: o, stack: config["KPL_STACK_NAME"], network: config["KPL_PEER_NETWORK"], present: make(map[string]bool)}
 	s.label = "kpl." + s.stack + ".agent"
 	for key, target := range map[string]*time.Duration{"KPL_DOCKER_TIMEOUT": &s.timeout, "KPL_IMAGE_PULL_TIMEOUT": &s.pullTimeout, "KPL_IMAGE_BUILD_TIMEOUT": &s.buildTimeout, "KPL_IMAGE_PUSH_TIMEOUT": &s.pushTimeout, "KPL_AGENT_STOP_TIMEOUT": &s.agentTimeout, "KPL_CONTROLLER_STOP_TIMEOUT": &s.controllerTimeout} {
 		n, err := positiveSwarmInteger(config[key])
@@ -197,6 +248,8 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 		return s.login(ctx)
 	case "publish":
 		return s.publish(ctx)
+	case "image-inspect":
+		return s.inspectImage(ctx)
 	}
 	manager, err := s.output(ctx, "info", "--format", "{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}")
 	if err != nil {
@@ -475,15 +528,23 @@ func (s *swarm) publish(ctx context.Context) error {
 	if err := s.checkPublishContext(); err != nil {
 		return err
 	}
+	buildArgs, err := s.sourceBuildArguments(ctx)
+	if err != nil {
+		return err
+	}
 	a := s.a.WithEnv(map[string]*string{"DOCKER_DEFAULT_PLATFORM": nil})
 	buildCtx, cancel := context.WithTimeout(ctx, s.buildTimeout)
 	defer cancel()
 	if s.options.platforms != "" {
-		if err := a.Run(buildCtx, "docker", "buildx", "build", "--platform", s.options.platforms, "--tag", image, "--push", s.a.Repo); err != nil {
+		args := append([]string{"buildx", "build", "--platform", s.options.platforms, "--tag", image, "--push"}, buildArgs...)
+		args = append(args, s.a.Repo)
+		if err := a.Run(buildCtx, "docker", args...); err != nil {
 			return fmt.Errorf("multi-platform build/push failed: %w", err)
 		}
 	} else {
-		if err := a.Run(buildCtx, "docker", "build", "--tag", image, s.a.Repo); err != nil {
+		args := append([]string{"build", "--tag", image}, buildArgs...)
+		args = append(args, s.a.Repo)
+		if err := a.Run(buildCtx, "docker", args...); err != nil {
 			return fmt.Errorf("image build failed; push was not started: %w", err)
 		}
 		pushCtx, pushCancel := context.WithTimeout(ctx, s.pushTimeout)
@@ -573,10 +634,12 @@ func (s *swarm) checkPublishContext() error {
 
 func (s *swarm) resolveImage(ctx context.Context) error {
 	image := s.config["KPL_IMAGE"]
-	if strings.Contains(image, "@sha256:") {
-		return nil
+	_, pinnedDigest, pinned := strings.Cut(image, "@")
+	if pinned {
+		fmt.Fprintf(s.a.Stdout, "Checking pinned image %s (pull timeout: %s)...\n", image, s.pullTimeout)
+	} else {
+		fmt.Fprintf(s.a.Stdout, "Resolving image tag %s (pull timeout: %s)...\n", image, s.pullTimeout)
 	}
-	fmt.Fprintf(s.a.Stdout, "Resolving image tag %s (pull timeout: %s)...\n", image, s.pullTimeout)
 	pullCtx, cancel := context.WithTimeout(ctx, s.pullTimeout)
 	defer cancel()
 	pullApp := s.a.WithEnv(map[string]*string{"DOCKER_DEFAULT_PLATFORM": nil})
@@ -602,16 +665,95 @@ func (s *swarm) resolveImage(ctx context.Context) error {
 	if count != 1 {
 		return errors.New("pull must return exactly one registry digest; no deployment changes made")
 	}
-	colon := strings.LastIndex(image, ":")
-	if colon <= strings.LastIndex(image, "/") {
-		return errors.New("image tag is missing")
+	if pinned {
+		if digest != pinnedDigest {
+			return errors.New("pull returned a different registry digest than requested; no deployment changes made")
+		}
+	} else {
+		colon := strings.LastIndex(image, ":")
+		if colon <= strings.LastIndex(image, "/") {
+			return errors.New("image tag is missing")
+		}
+		s.config["KPL_IMAGE"] = image[:colon] + "@" + digest
 	}
-	s.config["KPL_IMAGE"] = image[:colon] + "@" + digest
 	s.a = s.a.WithConfig(s.config)
+	if err := s.verifyImageLayout(ctx); err != nil {
+		return err
+	}
 	if err := s.a.Preflight(ctx, s.config, true); err != nil {
 		return err
 	}
 	fmt.Fprintf(s.a.Stdout, "Deploying resolved image %s\n", s.config["KPL_IMAGE"])
+	return nil
+}
+
+func validateRequestedImage(value string, digestRequired bool) error {
+	if value == "" {
+		return usageError("image reference cannot be empty")
+	}
+	if swarmDigest.MatchString(value) {
+		return nil
+	}
+	if err := ValidateSetting("KPL_IMAGE", value); err != nil {
+		return usageError("invalid image reference: " + err.Error())
+	}
+	if digestRequired && !strings.Contains(value, "@sha256:") {
+		return usageError("--image requires a registry sha256 digest or repository@sha256:digest; use config set KPL_IMAGE=repository:tag to select a tag")
+	}
+	return nil
+}
+
+func requestedImageReference(configured, requested string) (string, error) {
+	if !swarmDigest.MatchString(requested) {
+		return requested, nil
+	}
+	if configured == "" {
+		return "", usageError("a bare registry digest requires KPL_IMAGE to identify its repository; use repository@sha256:digest")
+	}
+	if err := ValidateSetting("KPL_IMAGE", configured); err != nil {
+		return "", err
+	}
+	repository, _, _ := strings.Cut(configured, "@")
+	if colon := strings.LastIndex(repository, ":"); colon > strings.LastIndex(repository, "/") {
+		repository = repository[:colon]
+	}
+	return repository + "@" + requested, nil
+}
+
+// inspectImage only consults the selected daemon's local image metadata. Registry
+// digests identify distributable images; an Image ID identifies local content.
+func (s *swarm) inspectImage(ctx context.Context) error {
+	image := s.config["KPL_IMAGE"]
+	if image == "" {
+		return usageError("configure KPL_IMAGE or supply an image reference to inspect")
+	}
+	configured := s.configuredImage
+	if configured == "" {
+		configured = s.config["KPL_IMAGE"]
+	}
+	fmt.Fprintf(s.a.Stdout, "Configured image: %s\nInspecting local image: %s\n", configured, image)
+	out, err := s.output(ctx, "image", "inspect", "--format", "{{json .}}", image)
+	if err != nil {
+		return fmt.Errorf("inspect local image (no image was pulled or changed): %w", err)
+	}
+	var metadata struct {
+		ID          string
+		RepoDigests []string
+	}
+	if err := json.Unmarshal([]byte(out), &metadata); err != nil || !swarmDigest.MatchString(metadata.ID) {
+		return errors.New("Docker returned invalid local image metadata")
+	}
+	fmt.Fprintf(s.a.Stdout, "Local image ID: %s\n", metadata.ID)
+	if len(metadata.RepoDigests) == 0 {
+		fmt.Fprintln(s.a.Stdout, "Registry digests: unknown (no RepoDigests recorded locally)")
+		return nil
+	}
+	for _, digest := range metadata.RepoDigests {
+		if !strings.Contains(digest, "@sha256:") || ValidateSetting("KPL_IMAGE", digest) != nil {
+			return errors.New("Docker returned an invalid registry digest reference")
+		}
+		fmt.Fprintf(s.a.Stdout, "Registry digest: %s\n", digest)
+	}
 	return nil
 }
 

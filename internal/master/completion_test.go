@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -72,8 +73,8 @@ func completionCandidates(t *testing.T, a *App, out *bytes.Buffer, args ...strin
 
 func TestCompletionPlatformsAndNodeSelection(t *testing.T) {
 	a, runner, out := completionFixture(t)
-	for _, command := range []string{"publish", "restart"} {
-		got := completionCandidates(t, a, out, "swarm", command, "--platforms", "linux/")
+	for _, command := range []string{"publish"} {
+		got := completionCandidates(t, a, out, "image", command, "--platforms", "linux/")
 		if len(got) != 4 || !strings.Contains(strings.Join(got, "\n"), "linux/amd64,linux/arm64") {
 			t.Fatalf("%s platform candidates: %q", command, got)
 		}
@@ -81,24 +82,87 @@ func TestCompletionPlatformsAndNodeSelection(t *testing.T) {
 	if len(runner.calls) != 0 {
 		t.Fatal("static completion contacted Docker")
 	}
-	for _, command := range []string{"deploy", "restart", "add-node", "remove-node"} {
-		got := completionCandidates(t, a, out, "swarm", command, "worker-a", "--")
+	for _, command := range [][]string{{"swarm", "deploy"}, {"swarm", "restart"}, {"swarm", "node", "add"}, {"swarm", "node", "remove"}} {
+		got := completionCandidates(t, a, out, append(append([]string{}, command...), "worker-a", "--")...)
 		for _, candidate := range got {
 			if candidate == "--all" || candidate == "--workers" || candidate == "--all-excluding-self" || candidate == "--platforms" {
-				t.Fatalf("%s offered an invalid option after an explicit node: %q", command, got)
+				t.Fatalf("%q offered an invalid option after an explicit node: %q", command, got)
 			}
 		}
-		got = completionCandidates(t, a, out, "swarm", command, "worker-a", "")
+		got = completionCandidates(t, a, out, append(append([]string{}, command...), "worker-a", "")...)
 		if !reflect.DeepEqual(got, []string{"node2", "worker-b"}) {
-			t.Fatalf("%s failed to exclude both forms of an already-selected node: %q", command, got)
+			t.Fatalf("%q failed to exclude both forms of an already-selected node: %q", command, got)
 		}
-		if got := completionCandidates(t, a, out, "swarm", command, "--workers", ""); len(got) != 0 {
-			t.Fatalf("%s offered nodes/options after a selector: %q", command, got)
+		if got := completionCandidates(t, a, out, append(append([]string{}, command...), "--workers", "")...); len(got) != 0 {
+			t.Fatalf("%q offered nodes/options after a selector: %q", command, got)
 		}
 	}
-	got := completionCandidates(t, a, out, "swarm", "restart", "--platforms", "linux/amd64", "--")
+	got := completionCandidates(t, a, out, "swarm", "restart", "--image", "sha256:"+strings.Repeat("a", 64), "--")
 	if !strings.Contains(strings.Join(got, "\n"), "--workers") {
-		t.Fatalf("platform value counted as a node: %q", got)
+		t.Fatalf("image value counted as a node: %q", got)
+	}
+}
+
+func TestCompletionModernTreeAndImageOptionBoundaries(t *testing.T) {
+	a, runner, out := completionFixture(t)
+	for _, test := range []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"dev", ""}, []string{"build", "check", "test", "vet"}},
+		{[]string{"config", ""}, []string{"credentials", "init", "set", "show", "version"}},
+		{[]string{"image", ""}, []string{"inspect", "login", "publish"}},
+		{[]string{"scenario", ""}, []string{"show", "validate"}},
+		{[]string{"swarm", "node", ""}, []string{"add", "list", "remove"}},
+		{[]string{"swarm", "network", ""}, []string{"reset"}},
+		{[]string{"dev", "test", ""}, []string{"go", "linux", "race", "swarm", "ui"}},
+		{[]string{"config", "version", "--j"}, []string{"--json"}},
+		{[]string{"version", "--j"}, []string{"--json"}},
+		{[]string{"help", "config", "s"}, []string{"set", "show"}},
+		{[]string{"image", "publish", "--platforms", "linux/"}, completionPlatforms},
+	} {
+		want := append([]string(nil), test.want...)
+		sort.Strings(want)
+		if got := completionCandidates(t, a, out, test.args...); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%q => %q; want %q", test.args, got, want)
+		}
+	}
+	for _, args := range [][]string{
+		{"swarm", "deploy", "--image", "sha256:"},
+		{"swarm", "restart", "--image", "--repo="},
+		{"swarm", "deploy", "--image=sha256:"},
+		{"run", "peer", "--repo", "/tmp/"},
+		{"--repo", "/missing-checkout", "run", "peer", "--env-file", "/tmp/"},
+	} {
+		if got := completionCandidates(t, a, out, args...); len(got) != 0 {
+			t.Fatalf("image value became an option or node query: %q => %q", args, got)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatal("static modern completion contacted Docker")
+	}
+	if got := completionCandidates(t, a, out, "swarm", "node", "add", "worker-a", ""); !reflect.DeepEqual(got, []string{"node2", "worker-b"}) {
+		t.Fatalf("modern node selection lost exclusion: %q", got)
+	}
+	if got := completionCandidates(t, a, out, "swarm", "restart", "--image", "sha256:"+strings.Repeat("a", 64), "--"); strings.Contains(strings.Join(got, "\n"), "--platforms") || !strings.Contains(strings.Join(got, "\n"), "--workers") {
+		t.Fatalf("image value counted as a node or allowed rebuild: %q", got)
+	}
+}
+
+func TestCompletionExcludesRemovedEntrypoints(t *testing.T) {
+	a, runner, out := completionFixture(t)
+	for _, args := range [][]string{
+		{"build", ""}, {"validate", ""}, {"test-race", ""}, {"swarm-restart", ""},
+		{"controller", ""}, {"config-version", ""}, {"swarm", "configure", "KPL_"},
+		{"swarm", "add-node", "worker"}, {"swarm", "publish", "--platforms", "linux/"},
+		{"swarm", "restart", "--platforms", "linux/"},
+	} {
+		if got := completionCandidates(t, a, out, args...); len(got) != 0 {
+			t.Fatalf("removed entrypoint or build option remained in completion: %q => %q", args, got)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatal("removed entrypoint completion contacted Docker")
 	}
 }
 
@@ -107,7 +171,7 @@ func TestCompletionDynamicQueriesPreserveContextAndNeverReadConfig(t *testing.T)
 	if got := completionCandidates(t, a, out, "swarm", "logs", "auth", "--context", "control"); !reflect.DeepEqual(got, []string{"control-node"}) {
 		t.Fatalf("context candidates: %q", got)
 	}
-	if got := completionCandidates(t, a, out, "swarm", "configure", "KPL_CONTROL_NODE_ID=node"); !reflect.DeepEqual(got, []string{"KPL_CONTROL_NODE_ID=node1", "KPL_CONTROL_NODE_ID=node2"}) {
+	if got := completionCandidates(t, a, out, "config", "set", "KPL_CONTROL_NODE_ID=node"); !reflect.DeepEqual(got, []string{"KPL_CONTROL_NODE_ID=node1", "KPL_CONTROL_NODE_ID=node2"}) {
 		t.Fatalf("node ID setting candidates: %q", got)
 	}
 	for _, call := range runner.calls {
@@ -116,7 +180,7 @@ func TestCompletionDynamicQueriesPreserveContextAndNeverReadConfig(t *testing.T)
 		}
 	}
 	before := len(runner.calls)
-	if got := completionCandidates(t, a, out, "swarm", "configure", "KPL_PASSWORD="); len(got) != 0 || len(runner.calls) != before {
+	if got := completionCandidates(t, a, out, "config", "set", "KPL_PASSWORD="); len(got) != 0 || len(runner.calls) != before {
 		t.Fatalf("completion tried to suggest secret values: %q", got)
 	}
 	runner.failure = true
@@ -138,8 +202,8 @@ func TestCompletionPreservesLiteralFilePaths(t *testing.T) {
 	}
 	prefix := filepath.Join(dir, "scenario with space\t")
 	for _, args := range [][]string{
-		{"swarm", "scenario", prefix},
-		{"validate", "--scenario", prefix},
+		{"scenario", "show", prefix},
+		{"scenario", "validate", "--scenario", prefix},
 		{"--env-file", prefix},
 	} {
 		if got := completionCandidates(t, a, out, args...); !reflect.DeepEqual(got, []string{path}) {
@@ -210,32 +274,32 @@ _kpl_complete
 func TestCompletionBashPreservesSpacesTabsAndEquals(t *testing.T) {
 	path := "some directory/scenario\twith spaces.yaml"
 	calls, count := runCompletionBash(t, `
-COMP_WORDS=("$KPL_COMPLETION_CLIENT" swarm scenario $'some directory/scenario\t')
+COMP_WORDS=("$KPL_COMPLETION_CLIENT" scenario show $'some directory/scenario\t')
 COMP_CWORD=3
 _kpl_complete
 [[ ${#COMPREPLY[@]} == 1 && ${COMPREPLY[0]} == "$KPL_COMPLETION_CANDIDATE" ]]
 `, "KPL_COMPLETION_CANDIDATE="+path)
-	want := "__complete\x00swarm\x00scenario\x00some directory/scenario\t\x00"
+	want := "__complete\x00scenario\x00show\x00some directory/scenario\t\x00"
 	if calls != want || count != "x" {
 		t.Fatalf("Bash split literal file input: %q, calls %q", calls, count)
 	}
 	calls, count = runCompletionBash(t, `
-COMP_WORDS=("$KPL_COMPLETION_CLIENT" swarm configure KPL_CONTROL_NODE_ID = node)
+COMP_WORDS=("$KPL_COMPLETION_CLIENT" config set KPL_CONTROL_NODE_ID = node)
 COMP_CWORD=5
 _kpl_complete
 [[ ${#COMPREPLY[@]} == 1 && ${COMPREPLY[0]} == node1 ]]
-COMP_WORDS=("$KPL_COMPLETION_CLIENT" swarm configure KPL_CONTROL_NODE_ID =)
+COMP_WORDS=("$KPL_COMPLETION_CLIENT" config set KPL_CONTROL_NODE_ID =)
 COMP_CWORD=4
 _kpl_complete
 [[ ${#COMPREPLY[@]} == 1 && ${COMPREPLY[0]} == node1 ]]
 `, "KPL_COMPLETION_CANDIDATE=KPL_CONTROL_NODE_ID=node1")
-	want = "__complete\x00swarm\x00configure\x00KPL_CONTROL_NODE_ID=node\x00__complete\x00swarm\x00configure\x00KPL_CONTROL_NODE_ID=\x00"
+	want = "__complete\x00config\x00set\x00KPL_CONTROL_NODE_ID=node\x00__complete\x00config\x00set\x00KPL_CONTROL_NODE_ID=\x00"
 	if calls != want || count != "xx" {
 		t.Fatalf("Bash did not reconstruct the setting value: %q, calls %q", calls, count)
 	}
 }
 
-func TestCompletionUsesAliasesAndLiteralArgumentBoundaries(t *testing.T) {
+func TestCompletionUsesCanonicalPathsAndLiteralArgumentBoundaries(t *testing.T) {
 	a, runner, out := completionFixture(t)
 	cwd := t.TempDir()
 	t.Chdir(cwd)
@@ -245,33 +309,32 @@ func TestCompletionUsesAliasesAndLiteralArgumentBoundaries(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{
-		{"validate", "--", "--h"},
-		{"validate", "--scenario", "--h"},
-		{"validate", "--scenario", "--", "--h"},
-		{"swarm", "scenario", "--", "--h"},
-		{"swarm-scenario", "--", "--h"},
+		{"scenario", "validate", "--", "--h"},
+		{"scenario", "validate", "--scenario", "--h"},
+		{"scenario", "validate", "--scenario", "--", "--h"},
+		{"scenario", "show", "--", "--h"},
 	} {
 		if got := completionCandidates(t, a, out, args...); !reflect.DeepEqual(got, []string{"--help.yaml"}) {
 			t.Fatalf("literal path boundary produced option candidates: %q => %q", args, got)
 		}
 	}
-	if got := completionCandidates(t, a, out, "swarm-scenario", "--", "--repo="); !reflect.DeepEqual(got, []string{"--repo=fixture.yaml"}) {
+	if got := completionCandidates(t, a, out, "scenario", "show", "--", "--repo="); !reflect.DeepEqual(got, []string{"--repo=fixture.yaml"}) {
 		t.Fatalf("literal equals-form filename became a global option: %q", got)
 	}
 	for _, args := range [][]string{
+		{"swarm", "node", "add", "--", "--"},
 		{"swarm", "deploy", "--", "--"},
-		{"swarm-deploy", "--", "--"},
-		{"swarm-publish", "--platforms", "--"},
-		{"swarm", "publish", "--", "--"},
-		{"swarm-logs", "auth", "--", "--"},
+		{"image", "publish", "--platforms", "--"},
+		{"image", "publish", "--", "--"},
+		{"swarm", "logs", "auth", "--", "--"},
 	} {
 		if got := completionCandidates(t, a, out, args...); len(got) != 0 {
 			t.Fatalf("opaque or option value position offered options: %q => %q", args, got)
 		}
 	}
-	for _, command := range []string{"swarm-publish", "swarm-restart"} {
-		if got := completionCandidates(t, a, out, command, "--platforms", "linux/"); len(got) != 4 {
-			t.Fatalf("alias lost platform completion: %q", got)
+	for _, command := range []string{"publish"} {
+		if got := completionCandidates(t, a, out, "image", command, "--platforms", "linux/"); len(got) != 4 {
+			t.Fatalf("publish lost platform completion: %q", got)
 		}
 	}
 	if got := completionCandidates(t, a, out, "test-", ""); len(got) != 0 {
@@ -280,7 +343,7 @@ func TestCompletionUsesAliasesAndLiteralArgumentBoundaries(t *testing.T) {
 	if len(runner.calls) != 0 {
 		t.Fatal("static literal completion queried Docker")
 	}
-	if got := completionCandidates(t, a, out, "swarm-deploy", "worker-a", ""); !reflect.DeepEqual(got, []string{"node2", "worker-b"}) {
-		t.Fatalf("alias lost explicit node exclusion: %q", got)
+	if got := completionCandidates(t, a, out, "swarm", "deploy", "worker-a", ""); !reflect.DeepEqual(got, []string{"node2", "worker-b"}) {
+		t.Fatalf("node selection lost explicit exclusion: %q", got)
 	}
 }

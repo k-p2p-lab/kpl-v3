@@ -152,7 +152,7 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	if config.NodeConfig.Network.Enabled() || config.NetworkMutable {
 		args = append(args, "--cap-add", "NET_ADMIN")
 	}
-	args = append(args, d.image, "peer", "--config", peerContainerConfig)
+	args = append(args, d.image, "run", "peer", "--config", peerContainerConfig)
 	// A unique attempt suffix lets cleanup find a container even if the CLI is
 	// interrupted after daemon creation but before it returns the container ID.
 	cleanupTarget := name

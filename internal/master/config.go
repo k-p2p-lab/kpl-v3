@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/controller"
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 // Config is a literal deployment configuration. It is never interpreted by a shell.
@@ -510,7 +511,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 			}
 		}
 		if c["KPL_IMAGE"] == "" {
-			c["KPL_IMAGE"] = "registry.example.com/kpl-v3:v3"
+			c["KPL_IMAGE"] = "registry.example.com/kpl-v3:latest"
 		}
 	}
 	if (name == "init" || name == "configure") && c["KPL_PASSWORD"] == "" {
@@ -523,6 +524,8 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 		return err
 	}
 	if name == "config" {
+		build := model.BuildDetails()
+		fmt.Fprintf(a.Stdout, "# kpl version: %s\n# Source revision: %s (modified: %s)\n# Executable SHA256: %s\n", build.Version, build.Revision, sourceModifiedField(build), knownVersionField(build.BinaryHash))
 		fmt.Fprintf(a.Stdout, "Effective configuration (environment overrides %s):\n", path)
 		for _, key := range ConfigKeys {
 			value, ok := c[key]
@@ -556,7 +559,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 		return err
 	}
 	if name == "init" {
-		fmt.Fprintf(a.Stdout, "Created %s (mode 0600). Review it with: kpl swarm config\n", path)
+		fmt.Fprintf(a.Stdout, "Created %s (mode 0600). Review it with: kpl config show\n", path)
 	} else {
 		fmt.Fprintf(a.Stdout, "Updated %s (mode 0600); existing credentials are preserved unless explicitly changed.\n", path)
 		if legacy {

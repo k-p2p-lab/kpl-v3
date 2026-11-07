@@ -27,6 +27,7 @@ import (
 )
 
 type ServerConfig struct {
+	RuntimeImage        string // Deployment-selected image reference, not a Docker Engine observation.
 	NetworkManagerURL   string
 	AgentDiscoveryDNS   string
 	PrometheusURL       string

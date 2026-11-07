@@ -155,6 +155,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	})
 	mux.Handle("/metrics", promhttp.HandlerFor(s.state.metrics.registry, promhttp.HandlerOpts{MaxRequestsInFlight: 2}))
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/version", s.handleVersion)
 	mux.HandleFunc("/api/v1/ui-config", s.handleUIConfig)
 	mux.HandleFunc("/api/v1/prometheus/agent-targets", s.handlePrometheusAgentTargets)
 	mux.HandleFunc("/api/v1/prometheus/controller-targets", s.handlePrometheusControllerTargets)

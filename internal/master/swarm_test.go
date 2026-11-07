@@ -188,7 +188,10 @@ func TestSwarmImageResolutionRejectsAmbiguousDigestsAndDoesNotSaveTag(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.handle = func(context.Context, Command) (string, error) {
+	r.handle = func(_ context.Context, command Command) (string, error) {
+		if len(command.Args) > 1 && command.Args[0] == "image" && command.Args[1] == "inspect" {
+			return cliImageLayout, nil
+		}
 		return "Status: up to date\nDigest: " + digest + "\n", nil
 	}
 	if err := s.resolveImage(t.Context()); err != nil {
@@ -310,9 +313,9 @@ func TestSwarmTaskEvidenceRejectsFailuresAndKeepsHistoricalFailures(t *testing.T
 // Simulates task transitions only when the native program changes placement.
 // This verifies ordering rather than duplicating the implementation's branches.
 type swarmLifecycleModel struct {
-	paused              map[string]bool
-	removed             bool
-	failStop, failBuild bool
+	paused             map[string]bool
+	removed            bool
+	failStop, failPull bool
 }
 
 func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, error) {
@@ -320,16 +323,19 @@ func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, erro
 	joined := strings.Join(a, " ")
 	last := a[len(a)-1]
 	if a[0] == "build" {
-		if m.failBuild {
-			return "", errors.New("build failed")
-		}
-		return "", nil
+		return "", errors.New("restart must not build source")
 	}
 	if a[0] == "push" {
 		return "", nil
 	}
 	if a[0] == "pull" {
+		if m.failPull {
+			return "", errors.New("registry unavailable")
+		}
 		return "Digest: sha256:" + strings.Repeat("b", 64), nil
+	}
+	if a[0] == "image" && a[1] == "inspect" && a[3] == cliImageLayoutFormat {
+		return cliImageLayout, nil
 	}
 	if a[0] == "info" {
 		if strings.Contains(joined, "NodeID") {
@@ -410,33 +416,43 @@ func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, erro
 	return "", fmt.Errorf("unhandled fake Docker command: %v", a)
 }
 
-func TestSwarmRestartBuildsBeforeControllerThenAgentCleanup(t *testing.T) {
+func TestSwarmRestartPullsBeforeControllerThenAgentCleanup(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		build, stop bool
-	}{{"success", false, false}, {"build-failure", true, false}, {"stop-failure", false, true}} {
+		name                string
+		pull, missing, stop bool
+	}{{"success", false, false, false}, {"pull-failure", true, false, false}, {"missing-digest", false, true, false}, {"stop-failure", false, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, r, _ := newSwarmFixture(t, "restart")
-			model := &swarmLifecycleModel{paused: map[string]bool{}, failBuild: tc.build, failStop: tc.stop}
-			r.handle = model.handle
+			model := &swarmLifecycleModel{paused: map[string]bool{}, failPull: tc.pull, failStop: tc.stop}
+			r.handle = func(ctx context.Context, c Command) (string, error) {
+				if tc.missing && c.Args[0] == "pull" {
+					return "Image is up to date", nil
+				}
+				return model.handle(ctx, c)
+			}
 			err := s.a.RunSwarm(t.Context(), "restart", nil)
-			if (err != nil) != (tc.build || tc.stop) {
+			if (err != nil) != (tc.pull || tc.missing || tc.stop) {
 				t.Fatalf("unexpected result: %v", err)
 			}
-			build := swarmCallIndex(r.calls, "build")
+			pull := swarmCallIndex(r.calls, "pull", s.config["KPL_IMAGE"])
 			pause := swarmCallIndex(r.calls, "service", "update")
 			deploy := swarmCallIndex(r.calls, "stack", "deploy")
-			if build < 0 {
-				t.Fatal("restart did not build")
+			if pull < 0 {
+				t.Fatal("restart did not pull the configured tag")
 			}
-			if tc.build {
+			for _, command := range []string{"build", "buildx", "push"} {
+				if swarmCallIndex(r.calls, command) >= 0 {
+					t.Fatalf("restart unexpectedly invoked %s", command)
+				}
+			}
+			if tc.pull || tc.missing {
 				if pause >= 0 || deploy >= 0 {
-					t.Fatal("failed build stopped or deployed services")
+					t.Fatal("failed pull or missing digest stopped or deployed services")
 				}
 				return
 			}
-			if pause < build {
-				t.Fatal("service stopped before image build")
+			if pause < pull {
+				t.Fatal("service stopped before image pull")
 			}
 			var order []string
 			for _, call := range r.calls {
@@ -608,23 +624,23 @@ func TestSwarmLoginUsesInteractiveDockerContext(t *testing.T) {
 	}
 }
 
-func TestSwarmRestartRechecksOwnershipAfterPublish(t *testing.T) {
+func TestSwarmRestartRechecksOwnershipAfterPull(t *testing.T) {
 	s, r, _ := newSwarmFixture(t, "restart")
 	model := &swarmLifecycleModel{paused: map[string]bool{}}
-	published := false
+	pulled := false
 	r.handle = func(ctx context.Context, c Command) (string, error) {
-		if c.Args[0] == "push" {
-			published = true
+		if c.Args[0] == "pull" {
+			pulled = true
 		}
-		if published && len(c.Args) > 1 && c.Args[0] == "service" && c.Args[1] == "inspect" {
+		if pulled && len(c.Args) > 1 && c.Args[0] == "service" && c.Args[1] == "inspect" {
 			return "kpl_controller|foreign-application", nil
 		}
 		return model.handle(ctx, c)
 	}
 	if err := s.a.RunSwarm(t.Context(), "restart", nil); err == nil {
-		t.Fatal("foreign replacement service accepted after publish")
+		t.Fatal("foreign replacement service accepted after pull")
 	}
-	if !published || swarmCallIndex(r.calls, "service", "update") >= 0 || swarmCallIndex(r.calls, "stack", "deploy") >= 0 {
+	if !pulled || swarmCallIndex(r.calls, "service", "update") >= 0 || swarmCallIndex(r.calls, "stack", "deploy") >= 0 {
 		t.Fatal("ownership change was not detected before stopping")
 	}
 }

@@ -5,7 +5,11 @@ COPY go.mod go.sum* ./
 COPY third_party/go-libp2p-pubsub ./third_party/go-libp2p-pubsub
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/kpl ./cmd/kpl-master
+ARG KPL_VERSION=dev
+ARG KPL_SOURCE_REVISION=unknown
+ARG KPL_SOURCE_MODIFIED=false
+ARG KPL_BUILD_TIME
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/k-p2p-lab/kpl-v3/internal/model.ReleaseVersion=${KPL_VERSION} -X github.com/k-p2p-lab/kpl-v3/internal/model.SourceRevision=${KPL_SOURCE_REVISION} -X github.com/k-p2p-lab/kpl-v3/internal/model.SourceModified=${KPL_SOURCE_MODIFIED} -X github.com/k-p2p-lab/kpl-v3/internal/model.BuildTime=${KPL_BUILD_TIME}" -o /out/kpl ./cmd/kpl-master
 
 FROM builder AS test
 RUN apk add --no-cache bash coreutils
@@ -13,6 +17,7 @@ RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 120s \
     && CGO_ENABLED=0 go test -buildvcs=false github.com/libp2p/go-libp2p-pubsub -run '^Test(KPL|Score)' -timeout 120s
 
 FROM alpine:3.22 AS runtime
+LABEL io.kpl.cli.layout="grouped-v1"
 RUN apk add --no-cache ca-certificates tzdata docker-cli iproute2 iproute2-tc util-linux-misc \
     && test -x /usr/bin/nsenter \
     && addgroup -S -g 101 kpl \

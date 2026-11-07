@@ -14,7 +14,7 @@ func (a *App) RunDevelopment(ctx context.Context, name string, args []string) er
 		return a.validateScenario(args)
 	case "test":
 		if len(args) > 1 {
-			return usageError("usage: kpl test [go|swarm|ui|race|linux]")
+			return usageError("usage: kpl dev test [go|swarm|ui|race|linux]")
 		}
 		scope := "go"
 		if len(args) == 1 {

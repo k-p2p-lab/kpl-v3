@@ -58,6 +58,9 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 	}
 	prefix := args[len(args)-1]
 	words := args[:len(args)-1]
+	if IsRuntimeInvocation(words) {
+		return printCandidates(a.Stdout, []string{"--help"}, prefix)
+	}
 	var filtered []string
 	separated, valueExpected := false, false
 	for i := 0; i < len(words); i++ {
@@ -72,7 +75,7 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				return printCandidates(a.Stdout, fileCandidates(prefix, words[i] != "--env-file"), prefix)
 			}
 			i++
-		case "--scenario", "--platforms", "--tail", "--context":
+		case "--scenario", "--platforms", "--image", "--tail", "--context":
 			filtered = append(filtered, words[i])
 			if i == len(words)-1 {
 				valueExpected = true
@@ -87,6 +90,12 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		}
 	}
 	words = filtered
+	if len(words) > 0 && words[0] == "help" {
+		words = words[1:]
+	}
+	if validateCLIPath(words) != nil {
+		return nil
+	}
 	if len(words) > 0 {
 		command, arguments := canonicalCLICommand(words[0], words[1:])
 		words = append([]string{command}, arguments...)
@@ -110,13 +119,34 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		candidates = append(candidates, "--repo", "--env-file", "--help")
 	}
 	if len(words) == 0 {
-		candidates = append(candidates, "build", "check", "test", "vet", "validate", "swarm", "completion", "version", "help")
-		candidates = append(candidates, roleCommands...)
+		candidates = append(candidates, "config", "image", "swarm", "scenario", "dev", "run", "completion", "version", "help")
 		return printCandidates(a.Stdout, candidates, prefix)
 	}
 	switch words[0] {
-	case "help":
-		candidates = append(candidates, "swarm", "build", "check", "test", "validate")
+	case "dev":
+		if len(words) == 1 {
+			candidates = append(candidates, "build", "check", "vet", "test")
+		}
+	case "config":
+		if len(words) == 1 {
+			candidates = append(candidates, "init", "set", "show", "credentials", "version")
+		}
+	case "image":
+		if len(words) == 1 {
+			candidates = append(candidates, "login", "publish", "inspect")
+		}
+	case "scenario":
+		if len(words) == 1 {
+			candidates = append(candidates, "validate", "show")
+		}
+	case "run":
+		if len(words) == 1 {
+			candidates = append(candidates, roleCommands...)
+		}
+	case "version", "config-version":
+		if !separated && len(words) == 1 {
+			candidates = append(candidates, "--json")
+		}
 	case "completion":
 		candidates = append(candidates, "bash")
 	case "test":
@@ -132,10 +162,17 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 	case "swarm":
 		if len(words) == 1 {
 			candidates = append(candidates, swarmCommands...)
-			candidates = append(candidates, "help")
 			break
 		}
 		switch words[1] {
+		case "node":
+			if len(words) == 2 {
+				candidates = append(candidates, "list", "add", "remove")
+			}
+		case "network":
+			if len(words) == 2 {
+				candidates = append(candidates, "reset")
+			}
 		case "scenario":
 			candidates = append(candidates, fileCandidates(prefix, false)...)
 		case "init", "configure":
@@ -157,10 +194,13 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				candidates = append(candidates, "--platforms")
 			}
 		case "deploy", "restart", "add-node", "remove-node":
-			if words[1] == "restart" && words[len(words)-1] == "--platforms" {
-				return printCandidates(a.Stdout, completionPlatforms, prefix)
+			if words[len(words)-1] == "--image" || strings.HasPrefix(prefix, "--image=") {
+				return printCandidates(a.Stdout, nil, prefix)
 			}
-			selected, platforms := false, false
+			if words[len(words)-1] == "--platforms" || strings.HasPrefix(prefix, "--platforms=") {
+				return printCandidates(a.Stdout, nil, prefix)
+			}
+			selected, platforms, image := false, false, false
 			var nodes []string
 			for i := 2; i < len(words); i++ {
 				switch words[i] {
@@ -169,8 +209,17 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				case "--platforms":
 					platforms = true
 					i++
+				case "--image":
+					image = true
+					i++
 				default:
-					nodes = append(nodes, words[i])
+					if strings.HasPrefix(words[i], "--image=") {
+						image = true
+					} else if strings.HasPrefix(words[i], "--platforms=") {
+						platforms = true
+					} else {
+						nodes = append(nodes, words[i])
+					}
 				}
 			}
 			if !selected {
@@ -181,8 +230,8 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 					candidates = append(candidates, a.completionNodes(ctx, nodes)...)
 				}
 			}
-			if !separated && words[1] == "restart" && !platforms && !selected && len(nodes) == 0 {
-				candidates = append(candidates, "--platforms")
+			if !separated && (words[1] == "deploy" || words[1] == "restart") && !platforms && !image && !selected && len(nodes) == 0 {
+				candidates = append(candidates, "--image")
 			}
 		case "logs":
 			if len(words) == 2 {

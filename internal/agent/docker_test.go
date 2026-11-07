@@ -265,7 +265,7 @@ func TestDockerCreateIsolatesPeerAndCopiesConfiguration(t *testing.T) {
 			}
 			args := calls[0].Args
 			joined := strings.Join(args, " ")
-			for _, expected := range []string{"--network kpl-v3-peers", "--cap-drop ALL", "--security-opt no-new-privileges", "--label io.kpl.agent=agent-a", "--label io.kpl.run=run-a", "--label io.kpl.generation=3", "registry.example:5000/kpl-v3:test peer --config /etc/kpl-peer.json"} {
+			for _, expected := range []string{"--network kpl-v3-peers", "--cap-drop ALL", "--security-opt no-new-privileges", "--label io.kpl.agent=agent-a", "--label io.kpl.run=run-a", "--label io.kpl.generation=3", "registry.example:5000/kpl-v3:test run peer --config /etc/kpl-peer.json"} {
 				if !strings.Contains(joined, expected) {
 					t.Errorf("missing %q in %s", expected, joined)
 				}

@@ -630,6 +630,18 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 #dashboardMain:focus { outline: none; }
 .panel[id] { scroll-margin-top: 6.5rem; }
 .workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 1.5rem; padding: .2rem 0 1rem; }
+.workspace-heading > div { min-width: 0; }
+.runtime-version { flex: 0 1 30rem; min-width: 0; max-width: 100%; align-self: start; font-size: .8rem; color: var(--muted); }
+.runtime-version summary { cursor: pointer; padding: .4rem .65rem; border: 1px solid var(--line-soft); border-radius: .5rem; overflow-wrap: anywhere; }
+.runtime-version summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.runtime-version-details { margin-top: .45rem; padding: .65rem; border: 1px solid var(--line-soft); border-radius: .5rem; background: var(--surface); max-height: min(32rem, 65dvh); overflow-y: auto; }
+.runtime-version dl { margin: 0; display: grid; grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); gap: .4rem .7rem; }
+.runtime-version dt { color: var(--muted); }
+.runtime-version dd { margin: 0; min-width: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.runtime-version-details > p { margin: .65rem 0 0; overflow-wrap: anywhere; }
+.runtime-version-details > p:empty { display: none; }
+@media (max-width: 1100px) { .runtime-version { flex-basis: auto; width: 100%; } }
+@media (max-width: 520px) { .runtime-version dl { grid-template-columns: minmax(0, 1fr); gap: .2rem; } .runtime-version dd { margin-bottom: .4rem; } }
 .workspace-heading h2 { margin: .45rem 0; font-size: clamp(1.45rem, 2.4vw, 1.9rem); letter-spacing: -.04em; font-weight: 700; }
 .workspace-intro { color: var(--muted); font-size: .875rem; }
 .results-toolbar { display: grid; grid-template-columns: minmax(14rem, 1fr) auto; align-items: end; gap: 1rem; padding: 1.2rem 1.2rem .6rem; }

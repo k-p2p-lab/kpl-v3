@@ -255,6 +255,9 @@ func TestManagerFreshNetworkEachAttemptAndIdempotentAcknowledgment(t *testing.T)
 		t.Fatal("IPAM changed")
 	}
 	for _, call := range fake.calls {
+		if strings.HasPrefix(call, "create ") && !strings.HasSuffix(call, "sha256:test-image run network-gateway --config /etc/kpl-network-gateway.json") {
+			t.Fatalf("gateway does not use the canonical runtime command: %s", call)
+		}
 		if strings.Contains(call, "network rm --force") || strings.HasPrefix(call, "service update") || strings.Contains(call, "docker.sock") {
 			t.Fatalf("unapproved mutation: %s", call)
 		}

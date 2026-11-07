@@ -46,6 +46,22 @@
         <h2>Network experiments</h2>
         <p class="workspace-intro">Monitor your cluster, follow active runs, and explore results.</p>
       </div>
+      <details class="runtime-version" id="runtimeVersion">
+        <summary id="runtimeVersionSummary">Version · Loading…</summary>
+        <div class="runtime-version-details">
+          <dl>
+            <dt>Controller version</dt><dd id="runtimeVersionBuild">Unknown</dd>
+            <dt>Source revision</dt><dd id="runtimeVersionRevision">Unknown</dd>
+            <dt>Build time</dt><dd id="runtimeVersionTime">Unknown</dd>
+            <dt>Go version</dt><dd id="runtimeVersionGo">Unknown</dd>
+            <dt>Binary SHA-256</dt><dd id="runtimeVersionBinary">Unknown</dd>
+            <dt>Deployment image</dt><dd id="runtimeVersionImage">Unknown</dd>
+            <dt>Image digest</dt><dd id="runtimeVersionDigest">Unknown</dd>
+          </dl>
+          <p>Image identity comes from the deployment configuration.</p>
+          <p id="runtimeVersionStatus" role="status"></p>
+        </div>
+      </details>
     </header>
     <section class="metrics-section" aria-labelledby="metricsHeading">
       <header class="metrics-header">
@@ -752,6 +768,7 @@
   <script src="/library-groups.js" defer></script>
   <script src="/scenario-run-queue.js" defer></script>
   <script src="/work-queue.js" defer></script>
+  <script src="/runtime-version.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/action-menus.js" defer></script>
 </body>

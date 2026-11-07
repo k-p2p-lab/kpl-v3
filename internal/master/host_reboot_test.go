@@ -91,10 +91,10 @@ func TestSwarmAgentBootstrapRejectsInvalidHostRebootBeforeDocker(t *testing.T) {
 
 func TestHostRebootCompletionIsStaticAndOffersBooleanValues(t *testing.T) {
 	a, runner, out := completionFixture(t)
-	if got := completionCandidates(t, a, out, "swarm", "configure", "KPL_AGENT_HOST"); !reflect.DeepEqual(got, []string{"KPL_AGENT_HOST_REBOOT_ENABLED="}) {
+	if got := completionCandidates(t, a, out, "config", "set", "KPL_AGENT_HOST"); !reflect.DeepEqual(got, []string{"KPL_AGENT_HOST_REBOOT_ENABLED="}) {
 		t.Fatalf("host reboot setting completion: %q", got)
 	}
-	if got := completionCandidates(t, a, out, "swarm", "configure", "KPL_AGENT_HOST_REBOOT_ENABLED="); !reflect.DeepEqual(got, []string{"KPL_AGENT_HOST_REBOOT_ENABLED=false", "KPL_AGENT_HOST_REBOOT_ENABLED=true"}) {
+	if got := completionCandidates(t, a, out, "config", "set", "KPL_AGENT_HOST_REBOOT_ENABLED="); !reflect.DeepEqual(got, []string{"KPL_AGENT_HOST_REBOOT_ENABLED=false", "KPL_AGENT_HOST_REBOOT_ENABLED=true"}) {
 		t.Fatalf("host reboot values completion: %q", got)
 	}
 	if len(runner.calls) != 0 {

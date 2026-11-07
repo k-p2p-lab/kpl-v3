@@ -478,7 +478,7 @@ func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNet
 		"--label", "com.docker.stack.namespace="+m.config.Stack, "--label", "io.kpl.resource-monitor=true",
 		"--user", "0:0", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--init",
 		"--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=2",
-		imageID, "network-gateway", "--config", "/etc/kpl-network-gateway.json")
+		imageID, "run", "network-gateway", "--config", "/etc/kpl-network-gateway.json")
 	if err != nil {
 		return result, err
 	}

@@ -499,6 +499,7 @@ function connectStream() {
       }
       scheduleSnapshotRender(state.streamSnapshot);
       markLive();
+      if (!delta) globalThis.KPLRuntimeVersion?.refresh();
     } catch { void reconnect(); }
   };
   stream.addEventListener("snapshot", event => receive(event, false));
@@ -2961,6 +2962,7 @@ globalThis.KPLResultImages?.init({ api, onJob: job => {
   if (!state.resultsRefreshTimer && !state.resultsLoading) state.resultsRefreshTimer = setTimeout(refreshSavedResults, 3000);
 } });
 setupTopologyControls();
+globalThis.KPLRuntimeVersion?.init({api});
 globalThis.KPLAgentHosts?.init({api});
 globalThis.KPLWorkQueue?.init({api, onOpen: item => item.kind === "host-reboot"
   ? globalThis.KPLAgentHosts?.openJob(item.operationId) : item.kind === "batch-analysis"

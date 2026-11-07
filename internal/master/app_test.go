@@ -49,7 +49,7 @@ func appFixture(t *testing.T) (*App, *appRecorder, *bytes.Buffer) {
 }
 
 func TestHelpVersionAndCompletionDoNotNeedCheckoutOrCredentials(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"swarm"}, {"swarm", "help"}, {"swarm", "restart", "--help"}, {"version"}, {"completion", "bash"}} {
+	for _, args := range [][]string{nil, {"help"}, {"swarm"}, {"help", "swarm"}, {"swarm", "restart", "--help"}, {"version"}, {"completion", "bash"}} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			a, r, _ := appFixture(t)
 			a.EnvFile = filepath.Join(t.TempDir(), "missing")
@@ -177,7 +177,7 @@ func TestCLIExplicitPathsUseInvocationDirectory(t *testing.T) {
 	if err := os.WriteFile("scenario.yaml", []byte(validScenarioFixture), 0600); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"--repo", a.Repo, "--env-file", "nested/config with spaces", "--", "validate", "--scenario", "scenario.yaml"}
+	args := []string{"--repo", a.Repo, "--env-file", "nested/config with spaces", "--", "scenario", "validate", "--scenario", "scenario.yaml"}
 	if err := a.Execute(t.Context(), args, "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestCLIExplicitPathsUseInvocationDirectory(t *testing.T) {
 }
 
 func TestUnknownArgumentsNeverInvokeDocker(t *testing.T) {
-	for _, tail := range [][]string{{"swarm", "deploy", "--workers", "node1"}, {"swarm", "restart", "--unknown"}, {"test", "unknown"}, {"build", "extra"}, {"swarm", "remove", "extra"}, {"swarm", "logs", "controller", "--context", "remote"}} {
+	for _, tail := range [][]string{{"swarm", "deploy", "--workers", "node1"}, {"swarm", "restart", "--unknown"}, {"dev", "test", "unknown"}, {"dev", "build", "extra"}, {"swarm", "remove", "extra"}, {"swarm", "logs", "controller", "--context", "remote"}} {
 		a, r, _ := appFixture(t)
 		args := append([]string{"--repo", a.Repo}, tail...)
 		if err := a.Execute(t.Context(), args, "test"); err == nil {

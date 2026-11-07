@@ -61,7 +61,7 @@ func (a *App) executeRuntime(ctx context.Context, args []string) error {
 }
 
 func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("resource-monitor", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run resource-monitor", flag.ContinueOnError)
 	socket := flags.String("docker-socket", "/var/run/docker.sock", "local Docker Engine socket")
 	controllerURL := flags.String("controller", os.Getenv("KPL_CONTROLLER_URL"), "Controller base URL")
 	stack := flags.String("stack", os.Getenv("KPL_STACK_NAME"), "Swarm stack to monitor")
@@ -80,7 +80,7 @@ func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) 
 }
 
 func runController(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("controller", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run controller", flag.ContinueOnError)
 	listen := flags.String("listen", ":8080", "HTTP listen address")
 	networkManager := flags.String("network-manager", os.Getenv("KPL_NETWORK_MANAGER_URL"), "experiment network manager URL; reset the Peer overlay before every run")
 	agentDiscoveryDNS := flags.String("agent-discovery-dns", os.Getenv("KPL_AGENT_DISCOVERY_DNS"), "optional Swarm Agent task DNS name for Dashboard discovery (port 8090)")
@@ -120,6 +120,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
+		RuntimeImage:        strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")),
 		NetworkManagerURL:   strings.TrimSpace(*networkManager),
 		AgentDiscoveryDNS:   strings.TrimSpace(*agentDiscoveryDNS),
 		Listen:              *listen,
@@ -148,7 +149,7 @@ func parsePort(raw string, fallback int, name string) (int, error) {
 }
 
 func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run agent", flag.ContinueOnError)
 	hostRebootDefault, err := parseHostRebootEnabled(os.Getenv("KPL_AGENT_HOST_REBOOT_ENABLED"))
 	if err != nil {
 		return err
@@ -215,7 +216,7 @@ func parseHostRebootEnabled(raw string) (bool, error) {
 }
 
 func runNetworkManager(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("network-manager", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run network-manager", flag.ContinueOnError)
 	dataDir := flags.String("data-dir", "/var/lib/kpl/network", "network recovery state directory")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -230,7 +231,7 @@ func runNetworkManager(ctx context.Context, args []string) error {
 }
 
 func runNetworkGateway(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("network-gateway", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run network-gateway", flag.ContinueOnError)
 	configPath := flags.String("config", "", "gateway configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -247,7 +248,7 @@ func runNetworkGateway(ctx context.Context, args []string) error {
 }
 
 func runPeer(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("peer", flag.ContinueOnError)
+	flags := flag.NewFlagSet("kpl run peer", flag.ContinueOnError)
 	configPath := flags.String("config", "", "peer container JSON config")
 	if err := flags.Parse(args); err != nil {
 		return err

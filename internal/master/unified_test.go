@@ -15,15 +15,15 @@ func TestContainerRolesNeedNoCheckoutOrOperatorConfiguration(t *testing.T) {
 	t.Setenv("KPL_ARCHIVE_MIB_PER_SECOND", "")
 	for _, role := range roleCommands {
 		t.Run(role, func(t *testing.T) {
-			if command, _ := canonicalCLICommand(role, nil); command != role {
-				t.Fatal("runtime role was interpreted as an operator alias")
+			if command, _ := canonicalCLICommand("run", []string{role}); command != role {
+				t.Fatal("runtime role did not resolve to the native role handler")
 			}
 			a, recorder, _ := appFixture(t)
 			a.Repo = ""
 			a.EnvFile = filepath.Join(t.TempDir(), "missing.env")
 			a.EnvFileExplicit = true
 			a.Environ = []string{"KPL_REPO=/missing-source"}
-			if err := a.Execute(t.Context(), []string{role, "--help"}, "fixture"); err != nil {
+			if err := a.Execute(t.Context(), []string{"run", role, "--help"}, "fixture"); err != nil {
 				t.Fatal(err)
 			}
 			if a.Repo != "" || len(recorder.commands) != 0 {
@@ -41,7 +41,7 @@ func TestValidationUsesSameExecutableWithoutGoOrCheckout(t *testing.T) {
 	if err := os.WriteFile("input.yaml", []byte(validScenarioFixture), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Execute(t.Context(), []string{"validate", "--scenario=input.yaml"}, "fixture"); err != nil {
+	if err := a.Execute(t.Context(), []string{"scenario", "validate", "--scenario=input.yaml"}, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	if len(recorder.commands) != 0 || a.Repo != "" || !strings.Contains(out.String(), "valid scenario: literal-path-fixture") {
@@ -50,13 +50,13 @@ func TestValidationUsesSameExecutableWithoutGoOrCheckout(t *testing.T) {
 	if err := os.WriteFile("invalid.yaml", []byte("version: 99\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Execute(t.Context(), []string{"validate", "--scenario", "invalid.yaml"}, "fixture"); err == nil {
+	if err := a.Execute(t.Context(), []string{"scenario", "validate", "--scenario", "invalid.yaml"}, "fixture"); err == nil {
 		t.Fatal("invalid scenario was accepted")
 	}
 	if err := syscall.Mkfifo("input.pipe", 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Execute(t.Context(), []string{"validate", "--scenario", "input.pipe"}, "fixture"); err == nil {
+	if err := a.Execute(t.Context(), []string{"scenario", "validate", "--scenario", "input.pipe"}, "fixture"); err == nil {
 		t.Fatal("FIFO accepted as scenario input")
 	}
 }

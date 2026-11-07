@@ -268,9 +268,6 @@ func (s *swarm) deploy(ctx context.Context) error {
 		if _, err := s.prepareRestart(ctx, nodes); err != nil {
 			return err
 		}
-		if err := s.publish(ctx); err != nil {
-			return err
-		}
 	}
 	if err := s.resolveImage(ctx); err != nil {
 		return err
@@ -313,7 +310,7 @@ func (s *swarm) deploy(ctx context.Context) error {
 		}
 	}
 	if s.options.name == "restart" {
-		// A publish can take minutes. Confirm ownership again before any stop;
+		// An image pull can take minutes. Confirm ownership again before any stop;
 		// a service with the same name may have been replaced in that interval.
 		if err := s.loadServices(ctx); err != nil {
 			return err

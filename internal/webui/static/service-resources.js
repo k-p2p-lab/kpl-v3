@@ -55,12 +55,12 @@
     if (a.cpuMeasured !== a.measured) messages.push(`CPU coverage: ${number(a.cpuMeasured)} / ${number(a.total)} services measured`);
     const footer = partial ? root.KPLAgentResources.noticeRow(messages.join(" · "), {columns:6, total:true}) : "";
     const total = `<tr class="resource-total-row${footer ? " resource-has-notice" : ""}" data-resource-total="services">
-      <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(a.total)} services</span></th>
-      <td>${number(a.running)} / ${number(a.total)} running</td>
-      <td>${number(a.hosts)} hosts</td>
-      <td title="CPU uses each measured host's capacity once; services with an unknown host or CPU capacity are excluded."><span class="agent-resource-value">${a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`}</span></td>
-      <td title="Measured working set; memory including cache: ${a.measured ? bytes(a.memoryUsageBytes) : "N/A"}."><span class="agent-resource-value">${a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A"}</span></td>
-      <td>${a.measured ? `${number(a.measuredContainers)}/${number(a.containers)} containers` : "—"}</td>
+      <th scope="row" data-label="Service"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(a.total)} services</span></th>
+      <td data-label="State">${number(a.running)} / ${number(a.total)} running</td>
+      <td data-label="Host">${number(a.hosts)} hosts</td>
+      <td data-label="CPU" title="CPU uses each measured host's capacity once; services with an unknown host or CPU capacity are excluded."><span class="agent-resource-value">${a.cpuPercent === null ? "N/A" : `${number(a.cpuPercent)}%`}</span></td>
+      <td data-label="Memory" title="Measured working set; memory including cache: ${a.measured ? bytes(a.memoryUsageBytes) : "N/A"}."><span class="agent-resource-value">${a.measured ? bytes(a.memoryWorkingSetBytes) : "N/A"}</span></td>
+      <td data-label="Coverage">${a.measured ? `${number(a.measuredContainers)}/${number(a.containers)} containers` : "—"}</td>
     </tr>${footer}`;
     return total + (rows.length ? rows.map(row => {
       const d = describe(row, now), messages = [];
@@ -70,21 +70,19 @@
         if (!Number.isFinite(d.cpuPercent)) messages.push("Host CPU count unavailable");
       }
       const footer = root.KPLAgentResources.noticeRow(messages.join(" · "), {columns:6});
-      return `<tr${footer ? ' class="resource-has-notice"' : ""} data-service="${escape(row.service)}"><th scope="row" class="service-resource-name">${escape(d.name)}</th><td><span class="service-resource-state" data-state="${escape(d.state)}">${escape(d.status)}</span></td><td class="service-resource-host" title="${escape(row.nodeId)}">${escape(row.nodeName || row.nodeId || "Host not reported")}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.cpu)}</td><td class="agent-resource-value" title="${escape(d.title)}">${escape(d.memory)}</td><td>${d.available ? `${number(row.resources.measuredContainers)}/${number(row.resources.containers)} containers` : "—"}</td></tr>${footer}`;
+      return `<tr${footer ? ' class="resource-has-notice"' : ""} data-service="${escape(row.service)}"><th scope="row" data-label="Service" class="service-resource-name">${escape(d.name)}</th><td data-label="State"><span class="service-resource-state" data-state="${escape(d.state)}">${escape(d.status)}</span></td><td data-label="Host" class="service-resource-host" title="${escape(row.nodeId)}">${escape(row.nodeName || row.nodeId || "Host not reported")}</td><td data-label="CPU" class="agent-resource-value" title="${escape(d.title)}">${escape(d.cpu)}</td><td data-label="Memory" class="agent-resource-value" title="${escape(d.title)}">${escape(d.memory)}</td><td data-label="Coverage">${d.available ? `${number(row.resources.measuredContainers)}/${number(row.resources.containers)} containers` : "—"}</td></tr>${footer}`;
     }).join("") : '<tr><td colspan="6" class="empty-cell">No service resources reported.</td></tr>');
   }
   function init({api}) {
     const $ = id => root.document.querySelector(id);
-    const container = $("#serviceResourceRows"), table = $("#serviceResourceTable"), note = $("#serviceResourceStatus");
+    const container = $("#serviceResourceRows"), note = $("#serviceResourceStatus"), button = $("#refreshServices");
     if (!container || !note) return;
     let pending = false, next = 0, data = null, receivedAt = 0, lastHTML = "", failure = "";
-    const visible = () => !root.document.hidden && !$("#agents")?.hidden;
+    const visible = () => !root.document.hidden && !$("#services")?.hidden;
     function render() {
       if (!data) { if (failure) note.textContent = failure; return; }
       const html = tableRows(data.services, Date.now());
       if (html !== lastHTML) { container.innerHTML = html; lastHTML = html; }
-      const hint = $("#serviceResourceScrollHint");
-      if (hint && table) hint.hidden = !(table.scrollHeight > table.clientHeight || table.scrollWidth > table.clientWidth);
       const age = Math.max(0, Math.floor((Date.now()-receivedAt)/1000));
       const uptime = Math.max(0, Math.floor((data.controllerUptimeSeconds+age)/60));
       note.textContent = failure || `Controller uptime ${number(uptime)} min · Updated ${age}s ago · Included in interval measurements and CSV downloads.`;
@@ -92,17 +90,32 @@
     async function refresh() {
       if (pending || !visible()) return;
       pending = true;
+      if (button) { button.disabled = true; button.setAttribute?.("aria-busy", "true"); }
       const controller = new AbortController(), timer = root.setTimeout(() => controller.abort(), 8000);
       try {
         const response = await api("/api/v1/services/resources", {signal:controller.signal});
         if (!Array.isArray(response.services)) throw Error("Invalid service resource response.");
         data = response; receivedAt = Date.now(); failure = "";
       } catch (error) { failure = `Service status refresh failed. ${error.name === "AbortError" ? "Request timed out." : error.message}`; }
-      finally { root.clearTimeout(timer); pending = false; next = Date.now()+10000; render(); }
+      finally {
+        root.clearTimeout(timer); pending = false; next = Date.now()+10000;
+        if (button) { button.disabled = false; button.setAttribute?.("aria-busy", "false"); }
+        render();
+      }
     }
     root.document.addEventListener("visibilitychange", () => { if (visible()) {render(); if (Date.now() >= next) refresh();} });
-    $("#tab-agents")?.addEventListener("click", () => {root.setTimeout(() => {render(); if (Date.now() >= next) refresh();}, 0);});
-    $("#refreshAgents")?.addEventListener("click", refresh);
+    root.document.addEventListener("dashboard:tab-change", event => {
+      if (event.detail?.id === "services") { render(); if (Date.now() >= next) refresh(); }
+    });
+    button?.addEventListener("click", refresh);
+    $("#openResourceTools")?.addEventListener("click", event => {
+      if (!root.KPLDashboardTabs) return;
+      event.preventDefault();
+      const tools = $("#resourceTools");
+      if (tools) tools.open = true;
+      root.KPLDashboardTabs.show("agents");
+      tools?.querySelector("summary")?.focus();
+    });
     root.setInterval(() => { if (!visible()) return; render(); if (Date.now() >= next) refresh(); }, 1000);
     refresh();
   }

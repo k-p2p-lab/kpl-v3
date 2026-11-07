@@ -5,11 +5,11 @@ const turn=()=>new Promise(setImmediate);
 const item=(id,kind='analysis',position=0)=>({id,kind,name:'Task '+id,runId:'run-'+id,batchId:'batch-'+id,state:position?'queued':'running',position});
 function fixture(api=async()=>({})){
   let click,opens=[];
-  const elements=new Map(['#workQueue','#workQueueList','#workQueueCount','#workQueueStatus'].map(key=>[key,{innerHTML:'',textContent:'',hidden:false,contains:()=>false,setAttribute(name,value){this[name]=value;}}]));
+  const elements=new Map(['#workQueue','#workQueueList','#workQueueCount','#workQueueStatus','#workQueueEmpty','#workQueuePrevious','#workQueueNext'].map(key=>[key,{innerHTML:'',textContent:'',hidden:false,scrollLeft:0,clientWidth:0,scrollWidth:0,events:{},addEventListener(type,handler){this.events[type]=handler;},scrollBy(options){this.scrollLeft=Math.max(0,Math.min(this.scrollWidth-this.clientWidth,this.scrollLeft+options.left));this.events.scroll?.();},contains:()=>false,setAttribute(name,value){this[name]=value;}}]));
   const document={querySelector:key=>elements.get(key),addEventListener(type,handler){if(type==='click')click=handler;}};
   const view=createWorkQueue({document});view.init({api,onOpen:value=>opens.push(value)});
   function action(id,open=false){click({target:{closest:()=>({dataset:open?{workOpen:id}:{workCancel:id}})},preventDefault(){}});}
-  return {view,elements,action,opens};
+  return {view,elements,action,opens,document};
 }
 
 test('one queue preserves experiment and analysis order and escapes names and identifiers',()=>{
@@ -24,14 +24,14 @@ test('one queue preserves experiment and analysis order and escapes names and id
   assert.equal((html.match(/data-work-open=/g)||[]).length,2);
 });
 
-test('queue view hides when empty and does not rebuild unchanged or timestamp-only updates',()=>{
+test('queue view keeps the empty state and Saved Results entry point visible and does not rebuild unchanged or timestamp-only updates',()=>{
   const h=fixture(),list=h.elements.get('#workQueueList');let writes=0,value='';
   Object.defineProperty(list,'innerHTML',{get:()=>value,set:next=>{writes++;value=next;}});
-  h.view.update([]);assert.equal(h.elements.get('#workQueue').hidden,true);
+  h.view.update([]);assert.equal(h.elements.get('#workQueue').hidden,false);assert.equal(h.elements.get('#workQueueEmpty').hidden,false);
   h.view.update([item('one')]);const before=writes;
   h.view.update([{...item('one'),updatedAt:'later'}]);assert.equal(writes,before);
-  assert.equal(h.elements.get('#workQueueCount').textContent,'1');
-  h.view.update([]);assert.equal(h.elements.get('#workQueue').hidden,true);assert.equal(value,'');
+  assert.equal(h.elements.get('#workQueueCount').textContent,'1');assert.equal(h.elements.get('#workQueueEmpty').hidden,true);
+  h.view.update([]);assert.equal(h.elements.get('#workQueue').hidden,false);assert.equal(h.elements.get('#workQueueEmpty').hidden,false);assert.equal(value,'');
 });
 
 test('analysis progress is shown only when known and queued work never claims calculation progress',()=>{
@@ -76,4 +76,38 @@ test('host reboot work has a distinct status view and cancel never claims to und
  assert.match(html,/Host reboot/);assert.match(html,/Waiting for hosts to return/);assert.match(html,/Open host reboot status/);assert.doesNotMatch(html,/75%/);
  h.action('maintenance',true);assert.equal(h.opens[0].operationId,'host-reboot-operation');
  h.action('maintenance');await turn();assert.match(h.elements.get('#workQueueStatus').textContent,/already requested on a host cannot be canceled/);
+});
+
+
+test('slider navigation reflects the visible range and does not consume action button arrow keys',()=>{
+  const h=fixture(),list=h.elements.get('#workQueueList'),previous=h.elements.get('#workQueuePrevious'),next=h.elements.get('#workQueueNext');
+  list.clientWidth=400;list.scrollWidth=1200;h.view.update([item('one'),item('two','analysis',1)]);
+  assert.equal(previous.disabled,true);assert.equal(next.disabled,false);
+  next.events.click();assert.equal(list.scrollLeft,340);assert.equal(previous.disabled,false);
+  let prevented=0;list.events.keydown({target:list,key:'ArrowRight',preventDefault(){prevented++;}});
+  assert.equal(list.scrollLeft,680);assert.equal(prevented,1);
+  list.events.keydown({target:{dataset:{workCancel:'two'}},key:'ArrowLeft',preventDefault(){prevented++;}});
+  assert.equal(list.scrollLeft,680);assert.equal(prevented,1);
+  next.events.click();assert.equal(list.scrollLeft,800);assert.equal(next.disabled,true);
+  previous.events.click();assert.equal(list.scrollLeft,460);
+  h.view.update([]);assert.equal(previous.disabled,true);assert.equal(next.disabled,true);
+});
+
+test('experiment detail renderers enrich the immutable slot without adding an unrelated View action',()=>{
+ const h=fixture();
+ h.view.update([item('batch-work','experiment')],()=>({repeated:true,bodyHTML:'<span>Run 2 of 3</span>',actionsHTML:'<a data-result-download="actual-current">Download snapshot</a>'}));
+ const html=h.elements.get('#workQueueList').innerHTML;
+ assert.match(html,/Run 2 of 3/);assert.match(html,/data-result-download="actual-current"/);assert.match(html,/>Stop batch<\/button>/);
+ assert.match(html,/data-work-cancel="batch-work"/);assert.doesNotMatch(html,/data-work-open/);
+ h.view.update([item('batch-work','experiment')],()=>({stopping:true}));
+ assert.match(h.elements.get('#workQueueList').innerHTML,/disabled>Stopping…/);
+});
+
+
+test('removing the final focused task restores focus to the visible Refresh control',()=>{
+ const h=fixture();h.view.update([item('one')]);
+ let focused=false;h.elements.set('#refreshExperiments',{focus(options){focused=options.preventScroll;}});
+ h.document.activeElement={dataset:{workDetails:'one'}};
+ const list=h.elements.get('#workQueueList');list.contains=()=>true;list.querySelectorAll=()=>[];
+ h.view.update([]);assert.equal(focused,true);
 });

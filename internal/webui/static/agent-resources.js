@@ -128,15 +128,15 @@
     if (cpuUnavailable.length) messages.push(`CPU coverage · ${groupedNotes(cpuUnavailable, scopes.length)}`);
     const footer = noticeRow(messages.join(". "), {total:true});
     return `<tr class="resource-total-row${footer ? " resource-has-notice" : ""}" data-resource-total="agents">
-      <td class="agent-number">—</td>
-      <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(enabled.length)} enabled${agents.length > enabled.length ? ` · ${number(agents.length - enabled.length)} disabled` : ""}</span></th>
-      <td>${number(online.length)} / ${number(enabled.length)} online</td>
-      <td title="Distinct reported hosts of enabled, online Agents; hostname fallback for older Agents.">${hosts.size ? `${number(hosts.size)} hosts` : "—"}</td>
-      <td>${number(peers)} / ${number(capacity)}<span class="agent-capacity-note">Online Agents</span></td>
-      <td>${usage === null ? "N/A" : `<div class="usage"><div class="usage-track"><i style="width:${Math.min(100, usage)}%"></i></div><span>${number(usage)}%</span></div>`}</td>
-      <td class="agent-resource-cell">${totalCell("cpu")}</td>
-      <td class="agent-resource-cell">${totalCell("memory")}</td>
-      <td>—</td><td>—</td><td class="agent-settings-cell">—</td>
+      <td data-label="No." class="agent-number">—</td>
+      <th scope="row" data-label="Agent"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(enabled.length)} enabled${agents.length > enabled.length ? ` · ${number(agents.length - enabled.length)} disabled` : ""}</span></th>
+      <td data-label="State">${number(online.length)} / ${number(enabled.length)} online</td>
+      <td data-label="Host" title="Distinct reported hosts of enabled, online Agents; hostname fallback for older Agents.">${hosts.size ? `${number(hosts.size)} hosts` : "—"}</td>
+      <td data-label="Peers">${number(peers)} / ${number(capacity)}<span class="agent-capacity-note">Online Agents</span></td>
+      <td data-label="Capacity used">${usage === null ? "N/A" : `<div class="usage"><div class="usage-track"><i style="width:${Math.min(100, usage)}%"></i></div><span>${number(usage)}%</span></div>`}</td>
+      <td data-label="KPL CPU" class="agent-resource-cell">${totalCell("cpu")}</td>
+      <td data-label="KPL Memory" class="agent-resource-cell">${totalCell("memory")}</td>
+      <td data-label="Last seen">—</td><td data-label="Metrics">—</td><td data-label="Settings" class="agent-settings-cell">—</td>
     </tr>${footer}`;
   }
   function update(agents, now = Date.now()) {

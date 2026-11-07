@@ -50,17 +50,35 @@ test('service totals retain partial memory while excluding stale and unidentifia
 });
 test('service polling is bounded, pauses when hidden, and avoids overlapping requests',async()=>{
  const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,innerHTML:'',textContent:'',listeners:{},addEventListener(k,fn){this.listeners[k]=fn}});return elements.get(id)};
- const timers=[],doc={hidden:false,querySelector:element,addEventListener(){}};
+ const timers=[],listeners={},doc={hidden:false,querySelector:element,addEventListener(type,fn){listeners[type]=fn}};
  const sandbox={document:doc,KPLAgentResources:resources,setInterval:fn=>timers.push(fn),setTimeout,clearTimeout,AbortController,Date,console};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'static/service-resources.js'),'utf8'),sandbox);
  let calls=0,resolve;
- element('#agents').hidden=true;
+ element('#services').hidden=true;
  sandbox.KPLServiceResources.init({api:async()=>{calls++;return new Promise(r=>resolve=r)}});
  assert.equal(calls,0);
- element('#agents').hidden=false;timers[0]();timers[0]();assert.equal(calls,1);
+ element('#agents').hidden=true;element('#services').hidden=false;
+ listeners['dashboard:tab-change']({detail:{id:'services'}});timers[0]();assert.equal(calls,1);
+ assert.equal(element('#refreshServices').disabled,true);
  resolve({generatedAt:new Date(now).toISOString(),controllerUptimeSeconds:60,services:[row()]});await new Promise(r=>setImmediate(r));
  assert.match(element('#serviceResourceRows').innerHTML,/25%/);assert.match(element('#serviceResourceStatus').textContent,/Included in interval/);
+ assert.equal(element('#refreshServices').disabled,false);
  doc.hidden=true;timers[0]();assert.equal(calls,1);
+ doc.hidden=false;element('#services').hidden=true;timers[0]();assert.equal(calls,1);
+ element('#services').hidden=false;const refresh=element('#refreshServices').listeners.click();assert.equal(calls,2);
+ resolve({controllerUptimeSeconds:90,services:[]});await refresh;
+ assert.match(element('#serviceResourceRows').innerHTML,/No service resources/);
+});
+
+test('service measurement link opens the single shared controls and returns to Agent Status',()=>{
+ const elements=new Map(),focused=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{hidden:true,addEventListener(type,fn){this[type]=fn},querySelector(){return {focus(){focused.push('summary')}}}});return elements.get(id)};
+ const shown=[],sandbox={document:{querySelector:element,hidden:false,addEventListener(){}},KPLAgentResources:resources,KPLDashboardTabs:{show:id=>shown.push(id)},setInterval(){},setTimeout,clearTimeout,AbortController,Date};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'static/service-resources.js'),'utf8'),sandbox);
+ sandbox.KPLServiceResources.init({api:async()=>assert.fail('Hidden service panel must not fetch')});
+ let prevented=false;element('#openResourceTools').click({preventDefault(){prevented=true}});
+ assert.equal(prevented,true);assert.equal(element('#resourceTools').open,true);
+ assert.deepEqual(shown,['agents']);assert.deepEqual(focused,['summary']);
 });
 test('Swarm isolates service monitoring from Agent participation and Grafana uses service labels',()=>{
  const root=path.join(__dirname,'../..'),stack=fs.readFileSync(path.join(root,'stack.swarm.yaml'),'utf8');

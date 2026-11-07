@@ -237,6 +237,7 @@
       <button class="dashboard-tab" id="tab-network" type="button" role="tab" aria-selected="true" aria-controls="network" tabindex="0" data-dashboard-tab="network">Network Overview</button>
       <button class="dashboard-tab" id="tab-experiments" type="button" role="tab" aria-selected="false" aria-controls="experiments" tabindex="-1" data-dashboard-tab="experiments">Exp Progress</button>
       <button class="dashboard-tab" id="tab-agents" type="button" role="tab" aria-selected="false" aria-controls="agents" tabindex="-1" data-dashboard-tab="agents">Agent Status</button>
+      <button class="dashboard-tab" id="tab-services" type="button" role="tab" aria-selected="false" aria-controls="services" tabindex="-1" data-dashboard-tab="services">Controller &amp; Services</button>
       <button class="dashboard-tab" id="tab-events" type="button" role="tab" aria-selected="false" aria-controls="events" tabindex="-1" data-dashboard-tab="events">Recent Network Events</button>
       <button class="dashboard-tab" id="tab-results" type="button" role="tab" aria-selected="false" aria-controls="results" tabindex="-1" data-dashboard-tab="results">Saved Results</button>
     </div>
@@ -299,19 +300,17 @@
             <p class="eyebrow">EXPERIMENTS</p>
             <h2>Experiment progress</h2>
           </div>
-          <div class="run-header-actions"><span class="count-badge" id="runCount">0</span><button class="secondary-button" id="refreshExperiments" type="button" aria-controls="runList">Refresh</button></div>
+          <div class="run-header-actions"><span class="count-badge" id="runCount">0</span><button class="secondary-button" id="refreshExperiments" type="button" aria-controls="workQueueList">Refresh</button></div>
         </header>
         <div class="panel-body" id="panel-experiments-body">
-          <section class="work-queue" id="workQueue" aria-labelledby="workQueueHeading" hidden>
-            <header><h3 id="workQueueHeading">Execution queue</h3><span class="count-badge" id="workQueueCount">0</span></header>
-            <p>Experiments, analysis, and host reboot work run one at a time. Each experiment batch keeps its runs together.</p>
-            <ol class="work-queue-list" id="workQueueList" aria-label="Execution queue tasks" tabindex="-1"></ol>
+          <section class="work-queue" id="workQueue" aria-labelledby="workQueueHeading">
+            <header><div class="work-queue-heading"><h3 id="workQueueHeading">Execution queue</h3><span class="count-badge" id="workQueueCount">0</span></div><nav class="work-queue-navigation" aria-label="Browse execution queue"><button class="secondary-button" id="workQueuePrevious" type="button" aria-label="Previous queue tasks" aria-controls="workQueueList" disabled>←</button><button class="secondary-button" id="workQueueNext" type="button" aria-label="Next queue tasks" aria-controls="workQueueList" disabled>→</button></nav></header>
+            <p>Tasks run one at a time. Swipe or scroll to browse; each experiment batch keeps its runs together.</p>
+            <ol class="work-queue-list" id="workQueueList" aria-label="Execution queue tasks" tabindex="0"></ol>
+            <p class="work-queue-empty" id="workQueueEmpty">No tasks queued.</p>
+            <p class="work-queue-history">Completed experiments and analysis are available in <a href="#results">Saved Results</a>.</p>
             <p class="work-queue-status" id="workQueueStatus" role="status" aria-live="polite" hidden></p>
           </section>
-          <div class="run-batch-estimates" id="runBatchEstimates" aria-label="Group finish estimates" hidden></div>
-          <div class="run-list" id="runList">
-            <div class="empty-copy">No experiments yet.</div>
-          </div>
         </div>
       </article>
 
@@ -358,31 +357,15 @@
               <summary>How resource usage is measured</summary>
               <p class="panel-note">CPU and memory show the combined total, the Agent container alone, and its running Peer containers separately. CPU: 100% = all logical CPUs on the Agent host; the fleet value is weighted by host CPU capacity. Memory: working set (inactive file cache excluded). Each scope includes measured containers only; no running Peers is a measured zero. Total excludes disabled Agents; Peer counts and capacity include online Agents only.</p>
             </details>
-            <p class="table-scroll-hint">Swipe or scroll to see all Agent details.</p>
-            <div class="table-wrap fleet-resource-table" tabindex="0" role="region" aria-label="Agent status table">
+            <div class="table-wrap fleet-resource-table" role="region" aria-label="Agent status table">
               <table>
                 <thead><tr><th>No.</th><th>Agent</th><th>State</th><th>Host</th><th>Peers</th><th>Capacity used</th><th>KPL CPU</th><th>KPL Memory</th><th>Last seen</th><th>Metrics</th><th class="agent-settings-cell" scope="col">Settings</th></tr></thead>
                 <tbody id="agentRows"><tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr></tbody>
               </table>
             </div>
           </section>
-          <section class="service-resource-section" aria-labelledby="serviceResourceHeading">
-            <div><h3 id="serviceResourceHeading">Controller &amp; Services</h3><p class="panel-note">Controller, Prometheus, Grafana, and resource collectors.</p></div>
-            <details class="resource-notes">
-              <summary>How service usage is measured</summary>
-              <p class="panel-note">CPU: 100% = all logical CPUs on each service host; Total counts each measured host's capacity once. Memory: working set. Totals include available samples only.</p>
-            </details>
-            <div class="table-wrap service-resource-table" id="serviceResourceTable" role="region" aria-label="Controller and service resources" tabindex="0">
-              <table>
-                <thead><tr><th scope="col">Service</th><th scope="col">State</th><th scope="col">Host</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Coverage</th></tr></thead>
-                <tbody id="serviceResourceRows"><tr><td colspan="6" class="empty-cell">Loading service resources…</td></tr></tbody>
-              </table>
-            </div>
-            <p class="panel-note" id="serviceResourceScrollHint" hidden>Swipe or scroll within the table to see all service details.</p>
-            <p class="panel-note" id="serviceResourceStatus" role="status">Service samples refresh about every 10 seconds.</p>
-          </section>
           <p class="agent-refresh-status" id="resourceMeasurementError" role="status" aria-live="polite" hidden></p>
-          <details class="resource-tools">
+          <details class="resource-tools" id="resourceTools">
             <summary><span>Measurement &amp; exports</span><span class="resource-measurement-status" id="resourceMeasurementStatus">Loading measurement status…</span></summary>
             <div class="resource-tools-body">
               <section class="resource-measurement" aria-labelledby="resourceMeasurementHeading">
@@ -425,6 +408,33 @@
               <p class="panel-note resource-export-note">Interval downloads include Controller and service resources alongside Total, Agent, and Peers scopes. Availability depends on Prometheus retention; very short intervals may have no samples.</p>
             </div>
           </details>
+        </div>
+      </article>
+
+      <article class="panel services-panel" id="services" role="tabpanel" aria-labelledby="tab-services" tabindex="0" hidden>
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">INFRASTRUCTURE</p>
+            <h2 id="serviceResourceHeading">Controller &amp; Services</h2>
+            <p class="panel-note">Controller, Prometheus, Grafana, and resource collectors.</p>
+          </div>
+          <button class="secondary-button" id="refreshServices" type="button" title="Refresh Controller and service resources">Refresh</button>
+        </header>
+        <div class="panel-body" id="panel-services-body">
+          <section class="service-resource-section" aria-labelledby="serviceResourceHeading">
+            <details class="resource-notes">
+              <summary>How service usage is measured</summary>
+              <p class="panel-note">CPU: 100% = all logical CPUs on each service host; Total counts each measured host's capacity once. Memory: working set. Totals include available samples only.</p>
+            </details>
+            <div class="table-wrap service-resource-table" id="serviceResourceTable" role="region" aria-label="Controller and service resources">
+              <table>
+                <thead><tr><th scope="col">Service</th><th scope="col">State</th><th scope="col">Host</th><th scope="col">CPU</th><th scope="col">Memory</th><th scope="col">Coverage</th></tr></thead>
+                <tbody id="serviceResourceRows"><tr><td colspan="6" class="empty-cell">Loading service resources…</td></tr></tbody>
+              </table>
+            </div>
+            <p class="panel-note" id="serviceResourceStatus" role="status">Service samples refresh about every 10 seconds.</p>
+            <p class="panel-note">Service resources are included in shared interval measurements and CSV downloads. <a href="#agents" id="openResourceTools">Open measurement &amp; exports</a> in Agent Status.</p>
+          </section>
         </div>
       </article>
 

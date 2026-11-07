@@ -209,17 +209,20 @@ test('result refresh displays source bytes immediately without ZIP requests or e
     return elements.get(id);
   };
   const run = {id:'done',name:'Completed run',state:'completed',phase:1,totalPhases:1,seed:7};
+  const queueViews=[];
   const state = {savedResults:null,resultsLoading:false,resultsError:'',resultsRefreshTimer:null,resultsRefreshPending:false,
-    deletedResultIDs:new Set(),snapshot:{experiments:[run]},runStates:null,pendingStops:new Set(),deletingResultId:null};
+    deletedResultIDs:new Set(),snapshot:{experiments:[run],workQueue:[{id:'retiring-slot',kind:'experiment',runId:run.id,state:'running'}]},runStates:null,pendingStops:new Set(),deletingResultId:null};
   const api = context({state,$:element,document:{activeElement:null},AbortController,
+    KPLWorkQueue:{update(items,details){queueViews.push(items.map(item=>details(item).actionsHTML).join(''));}},
     setTimeout:(fn,delay)=>{const id=++nextTimer;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),
     fetch:()=>{heads++;throw new Error('unexpected ZIP request');}});
   api.api = async path => {assert.equal(path,'/api/v1/results');requests++;return [{...run,sourceBytes:requests*1536}];};
   await api.refreshSavedResults();
-  assert.match(element('#runList').innerHTML, />Source 1.5 KiB<\/span>/);
+  assert.match(queueViews.at(-1), />Source 1.5 KiB<\/span>/);
   assert.match(element('#savedResultsRows').innerHTML, />Source 1.5 KiB<\/span>/);
   await api.refreshSavedResults();
   assert.match(element('#savedResultsRows').innerHTML, />Source 3 KiB<\/span>/);
+  assert.match(queueViews.at(-1), />Source 3 KiB<\/span>/);
   assert.equal(requests,2);
   assert.equal(heads,0);
   assert.equal(timers.size,0,'idle results scheduled size polling');

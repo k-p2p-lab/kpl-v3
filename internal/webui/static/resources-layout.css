@@ -1,6 +1,6 @@
 /* Keep live fleet status ahead of optional measurement and export controls. */
 #agents .agent-resource-overview,
-#agents .service-resource-section {
+#services .service-resource-section {
   min-width: 0;
   margin: 0;
   padding: 1rem 1.1rem;
@@ -15,7 +15,7 @@
   margin-bottom: .75rem;
 }
 #agents .agent-resource-heading h3,
-#agents .service-resource-section h3 { font-size: .95rem; }
+#services .service-resource-section h3 { font-size: .95rem; }
 #agents .agent-resource-summaries {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -35,30 +35,66 @@
   font-variant-numeric: tabular-nums;
 }
 #agents .agent-resource-summary:first-child { border-color: var(--line); }
-#agents .resource-notes { margin: .6rem 0; }
-#agents .resource-notes > summary {
+:is(#agents, #services) .resource-notes { margin: .6rem 0; }
+:is(#agents, #services) .resource-notes > summary {
   width: fit-content;
   max-width: 100%;
   color: var(--muted);
   font-size: .75rem;
   cursor: pointer;
 }
-#agents .resource-notes[open] > summary { margin-bottom: .4rem; }
-#agents .resource-notes .panel-note { margin-bottom: 0; }
-#agents .table-scroll-hint { margin: .5rem 0; padding: 0; }
-#agents .fleet-resource-table {
+:is(#agents, #services) .resource-notes[open] > summary { margin-bottom: .4rem; }
+:is(#agents, #services) .resource-notes .panel-note { margin-bottom: 0; }
+#agents .fleet-resource-table,
+#services .service-resource-table {
   min-width: 0;
-  max-height: min(55vh, 32rem);
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   border: 1px solid var(--line);
   border-radius: .65rem;
 }
-#agents .fleet-resource-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+#agents .fleet-resource-table table,
+#services .service-resource-table table { table-layout: fixed; }
+#agents .fleet-resource-table :is(th, td),
+#services .service-resource-table :is(th, td) {
+  min-width: 0;
+  max-width: none;
+  padding: .7rem .55rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#agents .fleet-resource-table thead th,
+#services .service-resource-table thead th {
+  position: static;
   background: var(--surface);
 }
+#agents .fleet-resource-table .agent-resource-value,
+#services .service-resource-table .agent-resource-value { white-space: normal; }
+#agents .fleet-resource-table .usage { grid-template-columns: minmax(0, 1fr) auto; gap: .35rem; }
+#agents .fleet-resource-table .agent-resource-scope { grid-template-columns: auto minmax(0, 1fr); gap: 0 .4rem; }
+#agents .fleet-resource-table .state-dot { max-width: 100%; }
+#agents .fleet-resource-table .state-dot::before { flex-shrink: 0; }
+#agents .fleet-resource-table thead th:nth-child(1) { width: 5%; }
+#agents .fleet-resource-table thead th:nth-child(2) { width: 14%; }
+#agents .fleet-resource-table thead th:nth-child(3) { width: 8%; }
+#agents .fleet-resource-table thead th:nth-child(4) { width: 12%; }
+#agents .fleet-resource-table thead th:nth-child(5),
+#agents .fleet-resource-table thead th:nth-child(6) { width: 9%; }
+#agents .fleet-resource-table thead th:nth-child(7),
+#agents .fleet-resource-table thead th:nth-child(8) { width: 12%; }
+#agents .fleet-resource-table thead th:nth-child(9) { width: 7%; }
+#agents .fleet-resource-table thead th:nth-child(10) { width: 6%; }
+#agents .fleet-resource-table thead th:nth-child(11) { width: 6%; }
+:is(#agents, #services) .resource-row-notice {
+  position: static;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+}
+#services .panel-header { flex-wrap: wrap; }
+#services .panel-header > div { min-width: 0; }
+#services .service-resource-section > .panel-note { overflow-wrap: anywhere; }
+#services #openResourceTools { color: var(--cyan); text-underline-offset: .2em; }
 #agents .resource-tools {
   min-width: 0;
   margin: 1rem 1.1rem;
@@ -144,6 +180,24 @@
   outline-offset: 3px;
   border-radius: .3rem;
 }
+/* Status lists grow with their contents; compact screens use labelled records. */
+@media (max-width: 1279px) {
+  #agents .fleet-resource-table { border: 0; }
+  #agents .fleet-resource-table table,
+  #agents .fleet-resource-table tbody { display: block; }
+  #agents .fleet-resource-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  #agents .fleet-resource-table tbody { display: grid; gap: .75rem; }
+  #agents .fleet-resource-table tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: dense; gap: .7rem 1rem; padding: .85rem; border: 1px solid var(--line); border-radius: .6rem; }
+  #agents .fleet-resource-table :is(th, td) { display: block; width: auto; padding: 0; border: 0; text-align: left; }
+  #agents .fleet-resource-table [data-label]::before { content: attr(data-label); display: block; margin-bottom: .3rem; color: var(--muted); font-size: .7rem; font-weight: 500; }
+  #agents .fleet-resource-table [data-label="Agent"],
+  #agents .fleet-resource-table [data-label="Host"],
+  #agents .fleet-resource-table .agent-resource-cell { grid-column: span 2; }
+  #agents .fleet-resource-table .resource-total-row { background: var(--surface-raised); }
+  #agents .fleet-resource-table .resource-has-notice { border-bottom: 0; border-radius: .6rem .6rem 0 0; }
+  #agents .fleet-resource-table .resource-notice-row { display: block; margin-top: -.75rem; padding-top: .15rem; border-top: 0; border-radius: 0 0 .6rem .6rem; }
+  #agents .fleet-resource-table .empty-cell { grid-column: 1 / -1; padding: .6rem; text-align: center; }
+}
 @media (max-width: 760px) {
   #agents .agent-resource-summaries { grid-template-columns: 1fr; gap: .45rem; }
   #agents .agent-resource-summary { padding: .6rem .75rem; }
@@ -151,10 +205,29 @@
   #agents .resource-tools > summary { grid-template-columns: minmax(0, 1fr) auto; }
   #agents .resource-tools > summary::after { grid-column: 2; grid-row: 1; }
   #agents .resource-tools > summary .resource-measurement-status { grid-column: 1 / -1; text-align: left; }
+  #services .service-resource-table { border: 0; }
+  #services .service-resource-table table,
+  #services .service-resource-table tbody { display: block; }
+  #services .service-resource-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+  #services .service-resource-table tbody { display: grid; gap: .75rem; }
+  #services .service-resource-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem 1rem; padding: .85rem; border: 1px solid var(--line); border-radius: .6rem; }
+  #services .service-resource-table :is(th, td) { display: block; width: auto; padding: 0; border: 0; text-align: left; }
+  #services .service-resource-table [data-label]::before { content: attr(data-label); display: block; margin-bottom: .3rem; color: var(--muted); font-size: .7rem; font-weight: 500; }
+  #services .service-resource-table :is([data-label="Service"], [data-label="Host"]) { grid-column: 1 / -1; }
+  #services .service-resource-table .resource-total-row { background: var(--surface-raised); }
+  #services .service-resource-table .resource-has-notice { border-bottom: 0; border-radius: .6rem .6rem 0 0; }
+  #services .service-resource-table .resource-notice-row { display: block; margin-top: -.75rem; padding-top: .15rem; border-top: 0; border-radius: 0 0 .6rem .6rem; }
+  #services .service-resource-table .empty-cell { grid-column: 1 / -1; padding: .6rem; text-align: center; }
+}
+@media (max-width: 600px) {
+  #agents .fleet-resource-table tr { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem .8rem; }
+  #agents .fleet-resource-table [data-label="Agent"],
+  #agents .fleet-resource-table [data-label="Host"] { grid-column: 1 / -1; }
+  #agents .fleet-resource-table .agent-resource-cell { grid-column: auto; }
 }
 @media (max-width: 480px) {
   #agents .agent-resource-overview,
-  #agents .service-resource-section { padding-inline: .8rem; }
+  #services .service-resource-section { padding-inline: .8rem; }
   #agents .resource-tools { margin-inline: .8rem; }
   #agents .resource-tools > summary,
   #agents .resource-tools-body { padding: .8rem; }

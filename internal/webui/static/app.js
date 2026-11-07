@@ -600,7 +600,6 @@ function render(snapshot) {
   setText($("#duplicateTotalMetric"), `All duplicate events: ${formatNumber(metrics.duplicates)}`);
   renderBandwidthMetrics(metrics.bandwidth);
   setText($("#updatedAt"), new Date(snapshot.generatedAt).toLocaleTimeString("en-US"));
-  globalThis.KPLWorkQueue?.update(snapshot.workQueue || []);
   renderRuns(snapshot.experiments || []);
   renderAgents(agents);
   renderEvents(snapshot.events || []);
@@ -640,74 +639,55 @@ function runTimingMarkup(run, stopping) {
 
 function runStopKey(run) { const id=run.batchId || run.id; return run.executionId ? `${id}:${run.executionId}` : id; }
 
-function renderBatchEstimates(runs) {
-  const groups = new Map();
-  for (const run of runs) {
-    if (!run.batchId || !(run.repetitions > 1)) continue;
-    if (!groups.has(run.batchId)) groups.set(run.batchId, []);
-    groups.get(run.batchId).push(run);
-  }
-  const summaries = [];
-  for (const [id, members] of groups) {
-    const pending = members.filter(isPendingRun);
-    if (!pending.length) continue;
-    const run = pending.find(member => member.state === "running") || pending[0];
-    const timing = pending.find(member => member.timing?.batchEstimatedFinishAt)?.timing;
-    const stopping = Boolean(run.stopRequested || state.pendingStops.has(runStopKey(run)));
-    // After a Controller restart, completed iterations exist only in Saved
-    // results. Merge by ID so live updates win without double-counting them.
-    const known = new Map((state.savedResults || []).filter(member => member.batchId === id && !state.deletedResultIDs?.has(member.id)).map(member => [member.id, member]));
-    for (const member of members) known.set(member.id, member);
-    const completed = currentBatchRuns([...known.values()]).filter(member => member.state === "completed").length;
-    const remaining = stopping ? "Stopping…" : timing?.batchOverdue ? "Delayed run · estimate may extend" : formatEstimateRemaining(timing?.batchRemainingSeconds);
-    summaries.push(`<article class="run-batch-estimate${timing?.batchOverdue ? " overdue" : ""}" data-batch-estimate="${escapeHTML(id)}">
-      <div class="run-batch-estimate-heading"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span>${formatNumber(completed)} / ${formatNumber(run.repetitions)} completed</span></div>
-      <div class="run-timing"><div><span>Group est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.batchEstimatedFinishAt)}</strong></div>
-      <small>${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small></div>
-    </article>`);
-  }
-  setHTML($("#runBatchEstimates"), summaries.join(""));
-  $("#runBatchEstimates").hidden = summaries.length === 0;
+// Queue IDs are immutable FIFO slots. A batch's first run is an anchor, not
+// necessarily the active iteration; append/retry slots can share a batch ID.
+function queueExperimentDetails(item, canceling = false, runs = state.snapshot?.experiments || []) {
+  const live = runs.filter(run => !state.deletedResultIDs?.has(run.id));
+  const known = new Map((state.savedResults || []).filter(run => !state.deletedResultIDs?.has(run.id)).map(run => [run.id, run]));
+  for (const run of live) known.set(run.id, run);
+  const anchor = known.get(item.runId);
+  if (!anchor) return {bodyHTML: '<p class="work-queue-detail-note">Experiment details will appear in the next update.</p>'};
+  const sameExecution = run => anchor.batchId
+    ? run.batchId === anchor.batchId && (run.executionId || "") === (anchor.executionId || "")
+    : run.id === anchor.id;
+  const members = currentBatchRuns(live.filter(sameExecution)).sort(batchIterationOrder);
+  // A stop cancels later iterations before they ever start. Keep the final
+  // running iteration's snapshot and diagnostics while its slot is retiring.
+  const started = members.filter(member => member.startedAt && !String(member.startedAt).startsWith("0001-") && Number.isFinite(Date.parse(member.startedAt)));
+  const run = members.find(member => member.state === "running") || members.find(isPendingRun) || started.at(-1) || members.at(-1) || anchor;
+  const stopping = Boolean(canceling || run.stopRequested || state.pendingStops.has(runStopKey(run)));
+  const progress = Math.max(0, Math.min(100, run.totalPhases ? Math.round((run.phase || 0) / run.totalPhases * 100) : 0));
+  const phase = run.phaseName || (run.state === "queued" ? "Waiting to start" : run.seed != null ? `seed ${run.seed}` : "");
+  const batchMembers = currentBatchRuns([...known.values()].filter(member => anchor.batchId && member.batchId === anchor.batchId));
+  const completed = batchMembers.filter(member => member.state === "completed").length;
+  const timing = run.timing?.batchEstimatedFinishAt ? run.timing : batchMembers.find(member => isPendingRun(member) && member.timing?.batchEstimatedFinishAt)?.timing;
+  const remaining = stopping ? "Stopping…" : timing?.batchOverdue ? "Delayed run · estimate may extend" : formatEstimateRemaining(timing?.batchRemainingSeconds);
+  const repeated = run.repetitions > 1;
+  const batchEstimate = repeated ? `<div class="run-timing${timing?.batchOverdue ? " overdue" : ""}" data-batch-estimate="${escapeHTML(anchor.batchId)}"><div><span>Group est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.batchEstimatedFinishAt)}</strong></div><small>${formatNumber(completed)} / ${formatNumber(run.repetitions)} completed · ${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small></div>` : "";
+  return {repeated, stopping, bodyHTML: `
+    <div class="run-meta"><span>${repeated ? `Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)} · ` : ""}${escapeHTML(run.state)}${phase ? ` · ${escapeHTML(phase)}` : ""}</span></div>
+    <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
+    <div class="progress-track" role="progressbar" aria-label="Experiment phases" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><i style="width:${progress}%"></i></div>
+    ${runTimingMarkup(run, stopping)}${batchEstimate}${resultIntegrityMarkup(run)}
+    ${run.error ? `<div class="run-meta run-error" role="alert"><span>${escapeHTML(run.error)}</span></div>` : ""}`,
+    actionsHTML: resultDownloadLink(run) + runSourceSize(run)};
 }
 
 function renderRuns(runs) {
-  runs = currentBatchRuns(runs.filter((run) => !state.deletedResultIDs?.has(run.id)));
-  const priority = run => run.state === "running" ? 0 : run.state === "queued" ? 1 : 2;
-  // Preserve the server's order within each status group, including queued iterations.
-  runs.sort((a, b) => priority(a) - priority(b));
+  runs = currentBatchRuns(runs.filter(run => !state.deletedResultIDs?.has(run.id)));
   const activeGroups = new Set(runs.filter(isPendingRun).map(runStopKey));
   for (const key of state.pendingStops) {
     if (!activeGroups.has(key)) state.pendingStops.delete(key);
   }
-  const runStates = JSON.stringify(runs.map((run) => [run.id, run.state]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  const runStates = JSON.stringify(runs.map(run => [run.id, run.state]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
   if (state.runStates !== null && state.runStates !== runStates) {
     clearTimeout(state.resultsRefreshTimer);
     state.resultsRefreshTimer = setTimeout(refreshSavedResults, 250);
   }
   state.runStates = runStates;
-  setText($("#runCount"), runs.length);
-  renderBatchEstimates(runs);
-  if (!runs.length) {
-    setHTML($("#runList"), '<div class="empty-copy">No experiments yet.</div>');
-    return;
-  }
-  setHTML($("#runList"), runs.map((run) => {
-    const progress = run.totalPhases ? Math.round((run.phase / run.totalPhases) * 100) : 0;
-    const stopping = Boolean(run.stopRequested || state.pendingStops.has(runStopKey(run)));
-    const stop = isPendingRun(run) ? `<button class="stop-button" data-stop-run="${escapeHTML(run.id)}" type="button" title="Stop this run and cancel the remaining queued runs in its batch." ${stopping ? "disabled" : ""}>${stopping ? "Stopping…" : run.repetitions > 1 ? "Stop batch" : "Stop"}</button>` : "";
-    const sourceSize = runSourceSize(run);
-    return `<article class="run-item">
-      <div class="run-title"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span class="status-pill ${escapeHTML(run.state)}">${escapeHTML(run.state)}</span></div>
-    <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? run.phaseName || (run.queuePosition > 0 ? `Queued · ${run.queuePosition} task${run.queuePosition === 1 ? "" : "s"} ahead` : "Waiting to start") : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
-      ${run.repetitions > 1 ? `<div class="run-meta"><span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span></div>` : ""}
-      <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
-      ${runTimingMarkup(run, stopping)}
-      <div class="progress-track" aria-label="${progress}% complete"><i style="width:${Math.min(100, progress)}%"></i></div>
-      ${resultIntegrityMarkup(run)}
-      ${run.error ? `<div class="run-meta run-error" role="alert"><span>${escapeHTML(run.error)}</span></div>` : ""}
-      <div class="run-actions">${resultDownloadLink(run)}${sourceSize}</div>
-    </article>`;
-  }).join(""));
+  const queue = state.snapshot?.workQueue || [];
+  setText($("#runCount"), queue.length);
+  globalThis.KPLWorkQueue?.update(queue, (item, canceling) => queueExperimentDetails(item, canceling, runs));
 }
 
 function isPendingRun(run) {
@@ -2155,19 +2135,19 @@ function renderAgents(agents) {
     const usage = agent.capacity ? Math.min(100, Math.round((agent.activeNodes / agent.capacity) * 100)) : 0;
     const resourceNotice = globalThis.KPLAgentResources?.notice(agent, resourceNow) || "";
     return `<tr${resourceNotice ? ' class="resource-has-notice"' : ""}>
-      <td class="agent-number"><span class="agent-host-number">${globalThis.KPLAgentHosts?.checkbox(agent) || ""}<span>${agentNumber(agent.id)}</span></span></td>
-      <td><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
-      <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
-      <td>${escapeHTML(agent.host?.hostname || agent.hostname || "—")}${agent.host?.nodeId ? `<span class="agent-id" title="Docker Swarm node ID">${escapeHTML(agent.host.nodeId)}</span>` : ""}</td>
-      <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
+      <td data-label="No." class="agent-number"><span class="agent-host-number">${globalThis.KPLAgentHosts?.checkbox(agent) || ""}<span>${agentNumber(agent.id)}</span></span></td>
+      <td data-label="Agent"><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
+      <td data-label="State"><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
+      <td data-label="Host">${escapeHTML(agent.host?.hostname || agent.hostname || "—")}${agent.host?.nodeId ? `<span class="agent-id" title="Docker Swarm node ID">${escapeHTML(agent.host.nodeId)}</span>` : ""}</td>
+      <td data-label="Peers">${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
       </td>
-      <td><div class="usage"><div class="usage-track"><i style="width:${usage}%"></i></div><span>${usage}%</span></div></td>
-      <td class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "cpu", resourceNow) || "N/A"}</td>
-      <td class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "memory", resourceNow) || "N/A"}</td>
-      <td>${escapeHTML(relativeTime(agent.lastSeen))}</td>
-      <td>${agentMetricsLink(agent)}</td>
-      <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
+      <td data-label="Capacity used"><div class="usage"><div class="usage-track"><i style="width:${usage}%"></i></div><span>${usage}%</span></div></td>
+      <td data-label="KPL CPU" class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "cpu", resourceNow) || "N/A"}</td>
+      <td data-label="KPL Memory" class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "memory", resourceNow) || "N/A"}</td>
+      <td data-label="Last seen">${escapeHTML(relativeTime(agent.lastSeen))}</td>
+      <td data-label="Metrics">${agentMetricsLink(agent)}</td>
+      <td data-label="Settings" class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
     </tr>${resourceNotice}`;
   }).join(""));
   globalThis.KPLAgentHosts?.afterRender();

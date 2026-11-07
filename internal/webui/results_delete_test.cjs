@@ -54,7 +54,7 @@ test('deletion finishes without waiting for a slow list refresh', async () => {
     assert.equal(state.deletedResultIDs.has('saved-run'),true);
     assert.equal(element('#confirmDeleteResult').disabled,false);
     api.renderRuns([{id:'saved-run',state:'completed'}]);
-    assert.match(element('#runList').innerHTML,/No experiments yet/);
+    assert.equal(api.queueExperimentDetails({runId:'saved-run'},false,[{id:'saved-run',state:'completed'}]).actionsHTML,undefined,'a stale deleted anchor retained its download action');
   }
 });
 
@@ -151,7 +151,7 @@ test('one group request removes returned members but preserves same-name groups'
     assert.equal(element('#deleteResultDialog').open,false);
     assert.equal(state.deletingResultId,null);
     api.renderRuns([{id:'run-1',state:'completed'},{id:'run-2',state:'failed'}]);
-    if (status===200) assert.match(element('#runList').innerHTML,/No experiments yet/);
+    if (status===200) for(const id of ['run-1','run-2']) assert.equal(api.queueExperimentDetails({runId:id},false,[{id,state:'completed'}]).actionsHTML,undefined,'a stale deleted batch member retained its download action');
   }
 });
 

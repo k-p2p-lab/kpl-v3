@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {queueMarkup} = require('./static/work-queue.js');
 const source = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 
 function fixture(runs) {
@@ -12,6 +13,7 @@ function fixture(runs) {
     return elements.get(selector);
   };
   const sandbox = {
+    KPLWorkQueue:{update(items,details){element('#workQueueList').innerHTML=queueMarkup(items,new Set(),details);}},
     Date, Intl, Headers, document:{querySelector:element}, localStorage:{getItem:()=>null},
     setTimeout:()=>0, clearTimeout(){},
     fetch:(url, options)=>new Promise(resolve=>requests.push({url, options, resolve})),
@@ -21,7 +23,12 @@ function fixture(runs) {
     source.slice(source.indexOf('function escapeHTML('), source.indexOf('$("#scenarioText").value = defaultScenario;')), sandbox);
   const state = vm.runInContext('state', sandbox);
   sandbox.showToast = message => toasts.push(message);
-  const render = next => { state.snapshot = {experiments:next}; sandbox.renderRuns(next); };
+  const render = next => {
+    const groups=new Map();
+    for(const run of next){const key=sandbox.runStopKey(run);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(run);}
+    const workQueue=[...groups].filter(([,members])=>members.some(sandbox.isPendingRun)).map(([id,members],position)=>({id,kind:'experiment',name:members[0].name,runId:members[0].id,state:members.some(run=>run.state==='running')?'running':'queued',position}));
+    state.snapshot={experiments:next,workQueue};sandbox.renderRuns(next);
+  };
   const respond = (index, status=202, body={runId:runs[0].id,status:'stopping'}) => {
     requests[index].resolve(new Response(JSON.stringify(body), {status, headers:{'Content-Type':'application/json'}}));
   };
@@ -43,7 +50,7 @@ test('one batch stop sends one request and stays disabled after acceptance until
   assert.equal(f.requests[0].url,'/api/v1/experiments/two/stop');
   assert.equal(f.requests[0].options.method,'POST');
   assert.equal(f.requests[0].options.headers.get('X-KPL-Request'),'dashboard');
-  assert.equal((f.element('#runList').innerHTML.match(/disabled>Stopping…/g)||[]).length,3);
+  assert.equal((f.element('#workQueueList').innerHTML.match(/disabled>Stopping…/g)||[]).length,1);
   await f.api.requestRunStop('one');
   assert.equal(f.requests.length,1,'another batch member sent a duplicate request');
   f.respond(0,202,{runId:'two',status:'stopping'});
@@ -53,12 +60,12 @@ test('one batch stop sends one request and stays disabled after acceptance until
   f.render(runs.map(run=>({...run})));
   await f.api.requestRunStop('three');
   assert.equal(f.requests.length,1,'cleanup in progress allowed another request');
-  assert.equal((f.element('#runList').innerHTML.match(/disabled>Stopping…/g)||[]).length,3);
+  assert.equal((f.element('#workQueueList').innerHTML.match(/disabled>Stopping…/g)||[]).length,1);
   f.render(runs.map(run=>({...run,state:run.id==='one'?'canceled':run.state})));
   assert.equal(f.state.pendingStops.has('series'),true,'ended current run unlocked its queued siblings');
   f.render(runs.map(run=>({...run,state:'canceled'})));
   assert.equal(f.state.pendingStops.size,0);
-  assert.doesNotMatch(f.element('#runList').innerHTML,/data-stop-run=/);
+  assert.doesNotMatch(f.element('#workQueueList').innerHTML,/data-work-cancel=/);
 });
 
 test('a single experiment stop waits for the final snapshot and does not affect other runs',async()=>{
@@ -68,8 +75,8 @@ test('a single experiment stop waits for the final snapshot and does not affect 
   f.respond(0);
   await stop;
   assert.equal(f.state.pendingStops.has('single'),true);
-  assert.match(f.element('#runList').innerHTML,/data-stop-run="single"[^>]*disabled>Stopping…/);
-  assert.match(f.element('#runList').innerHTML,/data-stop-run="other"[^>]*>Stop<\/button>/);
+  assert.match(f.element('#workQueueList').innerHTML,/data-work-cancel="single"[^>]*disabled>Stopping…/);
+  assert.match(f.element('#workQueueList').innerHTML,/data-work-cancel="other"[^>]*>Stop<\/button>/);
   assert.deepEqual(f.toasts,['Stop requested. Cleaning up Peers…']);
   f.render([{...runs[0],state:'canceled'},runs[1]]);
   assert.equal(f.state.pendingStops.size,0);
@@ -82,7 +89,7 @@ test('a genuine stop rejection reports the error and permits retry',async()=>{
   await first;
   assert.deepEqual(f.toasts,['Controller temporarily unavailable']);
   assert.equal(f.state.pendingStops.size,0);
-  assert.doesNotMatch(f.element('#runList').innerHTML,/disabled>Stopping…/);
+  assert.doesNotMatch(f.element('#workQueueList').innerHTML,/disabled>Stopping…/);
   const retry=f.api.requestRunStop('one');
   assert.equal(f.requests.length,2);
   f.respond(1);
@@ -120,8 +127,8 @@ test('stopping state and request token belong to the execution, including a reus
  f.respond(0);await pending;
  const next=old.map(run=>({...run,executionId:'execution-new'}));f.render(next);
  assert.equal(f.state.pendingStops.size,0,'old stopping state leaked into new execution');
- assert.doesNotMatch(f.element('#runList').innerHTML,/disabled>Stopping/);
+ assert.doesNotMatch(f.element('#workQueueList').innerHTML,/disabled>Stopping/);
  const stop=f.api.requestRunStop('two');assert.equal(f.requests[1].options.headers.get('X-KPL-Execution'),'execution-new');f.respond(1);await stop;
  f.state.pendingStops.clear();f.render(next.map(run=>({...run,stopRequested:true})));
- assert.match(f.element('#runList').innerHTML,/disabled>Stopping/,'refresh forgot the server cancellation');
+ assert.match(f.element('#workQueueList').innerHTML,/disabled>Stopping/,'refresh forgot the server cancellation');
 });

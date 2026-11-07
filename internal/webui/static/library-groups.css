@@ -67,6 +67,17 @@
 .library-group-dialog-status { font-size: .8rem; line-height: 1.5; margin: 0; color: var(--muted); overflow-wrap: anywhere; }
 .library-group-dialog-status[data-error="true"] { color: var(--red); }
 .library-group-dialog footer { margin-top: 0; padding-top: .85rem; border-top: 1px solid var(--line-soft); }
+
+.library-delete-shell { grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+.library-delete-shell > header h2 { margin: 0; }
+.library-delete-body { display: grid; align-content: start; gap: 1rem; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.library-delete-body > p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.library-delete-body .dialog-help { color: var(--muted); font-size: .875rem; line-height: 1.65; }
+.library-delete-names { padding: .875rem; border: 1px solid var(--line-soft); border-radius: .6rem; background: var(--bg-soft); font-size: .8125rem; line-height: 1.65; overscroll-behavior: contain; }
+.library-delete-names:focus-visible { outline: 3px solid rgba(57, 214, 208, .32); outline-offset: -3px; }
+.library-delete-body .dialog-error { padding: .75rem .875rem; border: 1px solid rgba(255, 123, 114, .25); border-radius: .6rem; background: rgba(255, 123, 114, .05); font-size: .8125rem; line-height: 1.6; }
+#libraryDeleteError:empty, #deleteResultDialog .dialog-error:empty { display: none; }
+.library-delete-shell > footer { margin: 0; padding-top: 1rem; border-top: 1px solid var(--line-soft); }
 @media (max-width: 860px) {
   .scenario-library { grid-template-rows: auto auto auto auto auto minmax(0, 1fr); }
   #scenarioGroupTools { grid-column: 1 / -1; grid-row: 2; padding-inline: .65rem; }
@@ -94,6 +105,8 @@
   #resultGroupTools { padding: .85rem 1rem; }
 }
 @media (max-width: 520px) {
+  .library-delete-shell > footer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .library-delete-shell > footer > button { min-width: 0; padding-inline: .55rem; font-size: .8125rem; }
   .library-group-actions > button { font-size: .78rem; }
   .library-group-dialog-shell { padding: .85rem; gap: .85rem; }
   .library-group-dialog input, .library-group-toolbar select, .library-group-selection select { font-size: 1rem; }

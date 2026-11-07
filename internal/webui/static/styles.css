@@ -228,6 +228,8 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.5rem var(--page-gutt
 .legend-dot.starting { background: var(--amber); }
 .legend-dot.issue { background: var(--red); }
 .topology-panel > .panel-header { flex-wrap: wrap; }
+#panel-topology-body { display: flow-root; }
+#topologyNotice { margin: var(--panel-inset); padding: clamp(1.5rem, 3vw, 2.5rem) var(--panel-inset); line-height: 1.6; overflow-wrap: anywhere; }
 .topology-header-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: .6rem 1rem; min-width: 0; }
 .topology-switch { display: inline-flex; align-items: center; gap: .5rem; min-height: var(--control-height); padding: .25rem .6rem; border: 1px solid var(--line); border-radius: .4rem; white-space: nowrap; cursor: pointer; font-size: .8rem; }
 .topology-switch input { margin: 0; accent-color: var(--cyan); }
@@ -252,9 +254,10 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 1.5rem var(--page-gutt
 .topology-stage { position: relative; overflow: hidden; border-block: 1px solid var(--line-soft); background-color: #07131c; background-image: radial-gradient(rgba(113, 159, 181, 0.15) 1px, transparent 1px); background-size: 1.4rem 1.4rem; }
 #topology { display: block; width: 100%; height: clamp(32rem, 64vh, 48rem); cursor: grab; touch-action: none; user-select: none; }
 #topology.is-panning { cursor: grabbing; }
-.empty-state { position: absolute; inset: 0; display: grid; place-content: center; gap: 0.4rem; padding: 2rem; text-align: center; color: var(--muted); }
+.empty-state { position: absolute; inset: 0; display: grid; place-content: center; gap: .5rem; padding: var(--panel-inset); text-align: center; color: var(--muted); }
 .empty-state strong { color: var(--text); font-size: 1rem; }
-.empty-state span, .empty-copy { color: var(--muted); font-size: 0.85rem;  padding: 1.6rem 1rem;  text-align: center; }
+.empty-state span { max-width: 40rem; font-size: .85rem; line-height: 1.6; overflow-wrap: anywhere; }
+.empty-copy { color: var(--muted); font-size: .85rem; padding: 1.6rem 1rem; text-align: center; }
 .topology-agent-background { fill: hsla(var(--sector-hue), 38%, 25%, 0.28); stroke: hsla(var(--sector-hue), 45%, 63%, 0.3); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .topology-agent-badge { fill: #102534; stroke: #365364; stroke-width: 1; }
 .topology-agent-count { fill: #b2c7d3; font-size: 12px; paint-order: stroke; stroke: #07131c; stroke-width: 3px; }
@@ -462,7 +465,6 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .delete-result-name { font-weight: 650; overflow-wrap: anywhere; }
 #deleteResultDialog { width: min(32rem, calc(100% - 2rem)); }
 #libraryDeleteDialog { width: min(34rem, calc(100% - 2rem)); }
-#libraryDeleteDialog > p { margin-inline: 1.25rem; overflow-wrap: anywhere; }
 #libraryDeleteDialog .library-delete-names, #libraryDeleteError { white-space: pre-line; }
 #libraryDeleteNames { max-height: 12rem; overflow-y: auto; }
 #libraryDeleteError { max-height: 8rem; overflow-y: auto; }

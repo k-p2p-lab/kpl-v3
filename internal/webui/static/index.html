@@ -747,14 +747,18 @@
   </dialog>
 
   <dialog id="libraryDeleteDialog" aria-labelledby="libraryDeleteHeading" aria-describedby="libraryDeleteDescription">
-    <header><h2 id="libraryDeleteHeading">Delete selected items?</h2></header>
-    <p id="libraryDeleteDescription"></p>
-    <p id="libraryDeleteNames" class="library-delete-names"></p>
-    <p id="libraryDeleteError" class="dialog-error" role="alert" tabindex="-1"></p>
-    <footer>
-      <button class="secondary-button" id="cancelLibraryDelete" type="button">Cancel</button>
-      <button class="danger-button" id="confirmLibraryDelete" type="button">Delete selected</button>
-    </footer>
+    <div class="dialog-shell library-delete-shell">
+      <header><h2 id="libraryDeleteHeading">Delete selected items?</h2></header>
+      <div class="library-delete-body">
+        <p id="libraryDeleteDescription" class="dialog-help"></p>
+        <p id="libraryDeleteNames" class="library-delete-names" tabindex="0" aria-label="Items selected for deletion"></p>
+        <p id="libraryDeleteError" class="dialog-error" role="alert" tabindex="-1"></p>
+      </div>
+      <footer>
+        <button class="secondary-button" id="cancelLibraryDelete" type="button">Cancel</button>
+        <button class="danger-button" id="confirmLibraryDelete" type="button">Delete selected</button>
+      </footer>
+    </div>
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

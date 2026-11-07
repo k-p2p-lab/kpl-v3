@@ -350,6 +350,7 @@ async function api(path, options = {}) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
     const failure = new Error(error.error || response.statusText);
     failure.status = response.status;
+    if (typeof error.accepted === "boolean") failure.accepted = error.accepted;
     throw failure;
   }
   if (response.status === 204) return null;
@@ -700,7 +701,7 @@ function renderRuns(runs) {
       ${runTimingMarkup(run, stopping)}
       <div class="progress-track" aria-label="${progress}% complete"><i style="width:${Math.min(100, progress)}%"></i></div>
       ${resultIntegrityMarkup(run)}
-      ${run.error ? `<div class="run-meta"><span>${escapeHTML(run.error)}</span></div>` : ""}
+      ${run.error ? `<div class="run-meta run-error" role="alert"><span>${escapeHTML(run.error)}</span></div>` : ""}
       <div class="run-actions">${resultDownloadLink(run)}${sourceSize}</div>
     </article>`;
   }).join(""));
@@ -2016,22 +2017,25 @@ async function refreshAgents(discover = false) {
 }
 
 function renderAgents(agents) {
+  globalThis.KPLAgentHosts?.beforeRender();
+  globalThis.KPLAgentHosts?.update(agents);
   const resourceNow = Date.parse(state.snapshot?.generatedAt) || Date.now();
   globalThis.KPLAgentResources?.update(agents, resourceNow);
   rememberAgents(agents.map((agent) => agent.id));
   const totalRow = globalThis.KPLAgentResources?.totalRow(agents, resourceNow) || "";
   if (!agents.length) {
     setHTML($("#agentRows"), totalRow + '<tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr>');
+    globalThis.KPLAgentHosts?.afterRender();
     return;
   }
   setHTML($("#agentRows"), totalRow + [...agents].sort((a, b) => agentNumber(a.id) - agentNumber(b.id)).map((agent) => {
     const usage = agent.capacity ? Math.min(100, Math.round((agent.activeNodes / agent.capacity) * 100)) : 0;
     const resourceNotice = globalThis.KPLAgentResources?.notice(agent, resourceNow) || "";
     return `<tr${resourceNotice ? ' class="resource-has-notice"' : ""}>
-      <td class="agent-number">${agentNumber(agent.id)}</td>
+      <td class="agent-number"><span class="agent-host-number">${globalThis.KPLAgentHosts?.checkbox(agent) || ""}<span>${agentNumber(agent.id)}</span></span></td>
       <td><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
       <td><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
-      <td>${escapeHTML(agent.hostname || "—")}</td>
+      <td>${escapeHTML(agent.host?.hostname || agent.hostname || "—")}${agent.host?.nodeId ? `<span class="agent-id" title="Docker Swarm node ID">${escapeHTML(agent.host.nodeId)}</span>` : ""}</td>
       <td>${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
       </td>
@@ -2043,6 +2047,7 @@ function renderAgents(agents) {
       <td class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
     </tr>${resourceNotice}`;
   }).join(""));
+  globalThis.KPLAgentHosts?.afterRender();
 }
 
 function openAgentCapacity(id) {
@@ -2956,8 +2961,10 @@ globalThis.KPLResultImages?.init({ api, onJob: job => {
   if (!state.resultsRefreshTimer && !state.resultsLoading) state.resultsRefreshTimer = setTimeout(refreshSavedResults, 3000);
 } });
 setupTopologyControls();
-globalThis.KPLWorkQueue?.init({api, onOpen: item => item.kind === "batch-analysis"
-  ? globalThis.KPLResultImages?.openBatch(item.batchId) : globalThis.KPLResultImages?.open(item.runId)});
+globalThis.KPLAgentHosts?.init({api});
+globalThis.KPLWorkQueue?.init({api, onOpen: item => item.kind === "host-reboot"
+  ? globalThis.KPLAgentHosts?.openJob(item.operationId) : item.kind === "batch-analysis"
+    ? globalThis.KPLResultImages?.openBatch(item.batchId) : globalThis.KPLResultImages?.open(item.runId)});
 setupDashboardTabHandling();
 renderSavedScenarios();
 window.addEventListener("resize", () => {

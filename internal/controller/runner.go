@@ -37,6 +37,7 @@ type ServerConfig struct {
 	Listen              string
 	DataDir             string
 	Token               string
+	HostRebootToken     string
 	MetricsURL          string
 	PrometheusPort      int
 	GrafanaPort         int
@@ -78,7 +79,10 @@ type Server struct {
 	workWorkers                sync.WaitGroup
 	workSlots                  map[string]*workSlot
 	recentWorkCancels          []string
-	queueCleanup               []string // run IDs whose cleanup must precede new work
+	hostRebootMu               sync.Mutex
+	hostReboots                map[string]*hostRebootJob
+	hostRebootActiveNodes      map[string]string // cancelMu; blocks manual enable during maintenance
+	queueCleanup               []string          // run IDs whose cleanup must precede new work
 	resultDownloads            map[string]int
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}
@@ -126,6 +130,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	model.BuildVersion()
 	if config.User != "" && config.Password != "" {
 		config.Token = auth.InternalToken(config.User, config.Password)
+		config.HostRebootToken = auth.HostRebootToken(config.User, config.Password)
 	}
 	if config.Listen == "" {
 		config.Listen = ":8080"

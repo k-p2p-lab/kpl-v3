@@ -3,6 +3,13 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const resources=require('./static/agent-resources.js');
 const now=Date.parse('2026-09-28T00:00:00Z');
 const agent=(id='one',cores=1.5)=>({id,state:'online',resources:{sampledAt:new Date(now).toISOString(),cpuCores:cores,cpuCapacityCores:8,memoryUsageBytes:4096,memoryWorkingSetBytes:3072,containers:4,measuredContainers:4,complete:true}});
+test('host counts deduplicate Docker node identity while preserving older hostname reports',()=>{
+ const first={...agent('one'),hostname:'container-one',host:{nodeId:'host-node'}};
+ const duplicate={...agent('two'),hostname:'container-two',labels:{swarmNodeId:'host-node'}};
+ const legacy={...agent('three'),hostname:'old-host'};
+ assert.match(resources.totalRow([first,duplicate,legacy],now),/2 hosts/);
+ assert.doesNotMatch(resources.totalRow([first,duplicate,legacy],now),/3 hosts/);
+});
 test('KPL CPU uses the whole host as 100% and shows memory working set',()=>{
  const a=agent();const d=resources.describe(a,now);
  assert.equal(d.cpu,'18.8%');assert.equal(d.memory,'3 KiB');assert.match(d.detail,/4\/4 containers/);assert.match(d.title,/4 KiB/);

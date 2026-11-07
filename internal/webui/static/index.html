@@ -287,7 +287,7 @@
         <div class="panel-body" id="panel-experiments-body">
           <section class="work-queue" id="workQueue" aria-labelledby="workQueueHeading" hidden>
             <header><h3 id="workQueueHeading">Execution queue</h3><span class="count-badge" id="workQueueCount">0</span></header>
-            <p>Experiments and analysis run one at a time. Each experiment batch keeps its runs together.</p>
+            <p>Experiments, analysis, and host reboot work run one at a time. Each experiment batch keeps its runs together.</p>
             <ol class="work-queue-list" id="workQueueList" aria-label="Execution queue tasks" tabindex="-1"></ol>
             <p class="work-queue-status" id="workQueueStatus" role="status" aria-live="polite" hidden></p>
           </section>
@@ -319,6 +319,16 @@
         <div class="panel-body" id="panel-agents-body">
           <p class="agent-refresh-status" id="agentRefreshStatus" role="status" aria-live="polite" hidden></p>
           <p class="agent-refresh-status" id="agentResourceExportStatus" role="status" aria-live="polite" hidden></p>
+          <div class="agent-host-toolbar" aria-label="Linux host selection">
+            <label class="agent-host-master"><input id="selectAgentHosts" type="checkbox" aria-label="Select available Linux hosts" disabled><span>Select hosts</span></label>
+            <span class="panel-note" id="agentHostSelection" aria-live="polite">0 hosts selected</span>
+            <div class="agent-host-actions">
+              <button class="secondary-button" id="clearAgentHosts" type="button" disabled>Clear</button>
+              <button class="danger-button" id="rebootAgentHosts" type="button" disabled>Reboot selected…</button>
+              <button class="secondary-button" id="viewHostReboot" type="button" hidden>Reboot status</button>
+            </div>
+          </div>
+          <p class="agent-refresh-status" id="agentHostStatus" role="status" aria-live="polite" hidden></p>
           <section class="agent-resource-overview" aria-labelledby="agentResourceHeading">
             <div class="agent-resource-heading"><h3 id="agentResourceHeading">Agents &amp; Peers</h3><span class="panel-note">Refreshes about every 10 seconds</span></div>
             <div class="agent-resource-summaries">
@@ -530,6 +540,23 @@
     </div>
   </dialog>
 
+  <dialog id="agentHostDialog" aria-labelledby="agentHostDialogHeading" aria-describedby="agentHostDialogHelp">
+    <div class="dialog-shell">
+      <header><h2 id="agentHostDialogHeading">Reboot Linux hosts</h2></header>
+      <p id="agentHostDialogSummary" class="dialog-help"></p>
+      <p id="agentHostDialogHelp" class="dialog-help">This reboots the selected host servers. Work queues behind experiments and analysis. Target hosts are excluded from new Peer placement and remain excluded until you enable them after reboot.</p>
+      <ul id="agentHostTargets" class="agent-host-targets" aria-label="Selected host outcomes"></ul>
+      <p class="dialog-help" id="agentHostDialogStatus" role="status" aria-live="polite"></p>
+      <p class="dialog-help">Canceling queue work stops unsent requests and waiting only. A reboot already requested on a host cannot be canceled here.</p>
+      <p class="dialog-error" id="agentHostDialogError" role="alert"></p>
+      <footer>
+        <button class="secondary-button" id="refreshHostReboot" type="button" hidden>Refresh status</button>
+        <button class="secondary-button" id="closeAgentHostDialog" type="button">Cancel</button>
+        <button class="danger-button" id="confirmAgentHostReboot" type="button">Queue reboot</button>
+      </footer>
+    </div>
+  </dialog>
+
   <dialog id="agentCapacityDialog" aria-labelledby="agentCapacityHeading" aria-describedby="agentCapacityHelp">
     <form class="dialog-shell" id="agentCapacityForm">
       <header>
@@ -717,6 +744,7 @@
   <script src="/dashboard-tabs.js" defer></script>
   <script src="/metrics-carousel.js" defer></script>
   <script src="/agent-resources.js" defer></script>
+  <script src="/agent-hosts.js" defer></script>
   <script src="/service-resources.js" defer></script>
   <script src="/library-downloads.js" defer></script>
   <script src="/library-deletions.js" defer></script>

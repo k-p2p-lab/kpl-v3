@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -68,6 +69,7 @@ func TestContainerLifecycleStopsAndReportsCleanupFailures(t *testing.T) {
 				settings["FAIL"] = "rm"
 			}
 			server, path := newContainerTestServer(t, settings)
+			server.config.HostRebootToken = "fake-host-control-secret-not-for-peers"
 			request := model.CreateNodeRequest{ID: "peer", RunID: "run", Group: "workers", Generation: 2}
 			node, err := server.createNode(context.Background(), request)
 			if err != nil {
@@ -91,6 +93,9 @@ func TestContainerLifecycleStopsAndReportsCleanupFailures(t *testing.T) {
 			var config model.PeerProcessConfig
 			if err := json.Unmarshal(data, &config); err != nil {
 				t.Fatal(err)
+			}
+			if bytes.Contains(data, []byte(server.config.HostRebootToken)) || config.Token != server.config.Token {
+				t.Fatal("Peer configuration contains or substitutes a host-control credential")
 			}
 			if config.APListen != "0.0.0.0:18000" || config.P2PListen != "/ip4/0.0.0.0/tcp/20000" || config.AgentURL != "http://agent:8090" {
 				t.Fatalf("container configuration = %+v", config)

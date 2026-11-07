@@ -149,6 +149,12 @@ func parsePort(raw string, fallback int, name string) (int, error) {
 
 func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
+	hostRebootDefault, err := parseHostRebootEnabled(os.Getenv("KPL_AGENT_HOST_REBOOT_ENABLED"))
+	if err != nil {
+		return err
+	}
+	hostRebootEnabled := flags.Bool("host-reboot-enabled", hostRebootDefault, "allow confirmed Linux worker host reboot through the Dashboard")
+	controlNodeID := flags.String("control-node-id", os.Getenv("KPL_CONTROL_NODE_ID"), "Swarm node hosting the Controller; host reboot refuses this node")
 	id := flags.String("id", "", "stable unique agent id")
 	name := flags.String("name", "", "human-readable agent name")
 	listen := flags.String("listen", ":8090", "HTTP listen address")
@@ -174,19 +180,38 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err := auth.Validate(user, password); err != nil {
 		return err
 	}
-	server, err := agent.New(agent.Config{
+	server, err := agent.New(authenticatedAgentConfig(user, password, agent.Config{
+		HostRebootEnabled: *hostRebootEnabled, ControlNodeID: *controlNodeID,
 		AutoResetNetwork: *autoResetNetwork, ControlNetwork: *controlNetwork,
 		ID: *id, Name: *name, Listen: *listen, AdvertiseURL: *advertiseURL,
 		MetricsListen: *metricsListen, MetricsURL: *metricsURL, SelfURL: *selfURL,
-		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir, Token: auth.InternalToken(user, password),
+		ControllerURL: *controllerURL, Capacity: *capacity, DataDir: *dataDir,
 		Labels:       parseLabels(*labels),
 		DockerSocket: *dockerSocket, SelfContainer: *selfContainer,
 		DockerBinary: *dockerBinary, DockerImage: *dockerImage, DockerNetwork: *dockerNetwork,
-	}, logger)
+	}), logger)
 	if err != nil {
 		return err
 	}
 	return server.Run(ctx)
+}
+
+// Host management credentials stay separate from the key distributed to Peers.
+// Both are derived from the configured account without another operator input.
+func authenticatedAgentConfig(user, password string, config agent.Config) agent.Config {
+	config.Token = auth.InternalToken(user, password)
+	config.HostRebootToken = auth.HostRebootToken(user, password)
+	return config
+}
+
+func parseHostRebootEnabled(raw string) (bool, error) {
+	if raw == "" {
+		return false, nil
+	}
+	if err := ValidateSetting("KPL_AGENT_HOST_REBOOT_ENABLED", raw); err != nil {
+		return false, err
+	}
+	return raw == "true", nil
 }
 
 func runNetworkManager(ctx context.Context, args []string) error {

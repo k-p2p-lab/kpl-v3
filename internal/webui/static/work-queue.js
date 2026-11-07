@@ -1,19 +1,19 @@
 (function (root) {
   "use strict";
   const escape = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
-  const kinds = {experiment:"Experiment", analysis:"Run analysis", "batch-analysis":"Batch mean analysis"};
+  const kinds = {experiment:"Experiment", analysis:"Run analysis", "batch-analysis":"Batch mean analysis", "host-reboot":"Host reboot"};
 
   function phaseLabel(item) {
-    const labels = {"waiting-for-cleanup":"Waiting for Peer cleanup", "checking-sources":"Checking sources", starting:"Preparing analysis", reading:"Reading results", aggregating:"Calculating", saving:"Saving analysis"};
+    const labels = {"waiting-for-cleanup":"Waiting for Peer cleanup", "checking-sources":"Checking sources", starting:"Preparing analysis", reading:"Reading results", aggregating:"Calculating", saving:"Saving analysis", "checking-hosts":"Checking hosts", "requesting-reboot":"Requesting host reboot", "waiting-for-hosts":"Waiting for hosts to return"};
     if (item.state === "queued") return item.position > 0 ? item.position + " task" + (item.position === 1 ? "" : "s") + " ahead" : "Waiting to start";
-    return labels[item.phase] || item.phase || (item.kind === "experiment" ? "Running experiment" : "Analyzing results");
+    return labels[item.phase] || item.phase || (item.kind === "experiment" ? "Running experiment" : item.kind === "host-reboot" ? "Preparing host reboot" : "Analyzing results");
   }
 
   function queueMarkup(items, pending = new Set()) {
     return items.map((item, index) => {
-      const canceling = pending.has(item.id), analysis = item.kind !== "experiment";
+      const canceling = pending.has(item.id), analysis = ["analysis","batch-analysis"].includes(item.kind), viewable = item.kind !== "experiment";
       const progress = analysis && item.state === "running" && Number.isFinite(item.progress) ? Math.min(100, Math.max(0, item.progress)) : null;
-      return '<li class="work-queue-item" data-work-item="' + escape(item.id) + '"><span class="work-queue-order" aria-label="Queue position ' + (index + 1) + '">' + (index + 1) + '</span><div class="work-queue-copy"><div class="work-queue-item-heading"><span class="work-queue-kind">' + kinds[item.kind] + '</span><span class="status-pill ' + item.state + '">' + (canceling ? "canceling" : item.state) + '</span></div><strong title="' + escape(item.name) + '">' + escape(item.name || item.runId || item.batchId || item.id) + '</strong><span class="work-queue-phase">' + escape(canceling ? "Cancellation requested · waiting for cleanup" : phaseLabel(item)) + (progress == null ? "" : ' · ' + Math.floor(progress) + '%') + '</span></div><div class="work-queue-actions">' + (analysis ? '<button class="secondary-button" type="button" data-work-open="' + escape(item.id) + '" aria-label="Open analysis for ' + escape(item.name) + '">View</button>' : '') + '<button class="secondary-button" type="button" data-work-cancel="' + escape(item.id) + '" aria-label="Cancel ' + escape(kinds[item.kind].toLowerCase() + ': ' + item.name) + '"' + (canceling ? ' disabled' : '') + '>Cancel</button></div></li>';
+      return '<li class="work-queue-item" data-work-item="' + escape(item.id) + '"><span class="work-queue-order" aria-label="Queue position ' + (index + 1) + '">' + (index + 1) + '</span><div class="work-queue-copy"><div class="work-queue-item-heading"><span class="work-queue-kind">' + kinds[item.kind] + '</span><span class="status-pill ' + item.state + '">' + (canceling ? "canceling" : item.state) + '</span></div><strong title="' + escape(item.name) + '">' + escape(item.name || item.runId || item.batchId || item.id) + '</strong><span class="work-queue-phase">' + escape(canceling ? (item.kind === "host-reboot" ? "Stopping unsent requests and waiting" : "Cancellation requested · waiting for cleanup") : phaseLabel(item)) + (progress == null ? "" : ' · ' + Math.floor(progress) + '%') + '</span></div><div class="work-queue-actions">' + (viewable ? '<button class="secondary-button" type="button" data-work-open="' + escape(item.id) + '" aria-label="Open ' + (item.kind === "host-reboot" ? 'host reboot status for ' : 'analysis for ') + escape(item.name) + '">View</button>' : '') + '<button class="secondary-button" type="button" data-work-cancel="' + escape(item.id) + '" aria-label="Cancel ' + escape(kinds[item.kind].toLowerCase() + ': ' + item.name) + '"' + (canceling ? ' disabled' : '') + '>Cancel</button></div></li>';
     }).join("");
   }
 
@@ -64,6 +64,7 @@
 
     async function cancel(id) {
       if (pending.has(id) || !items.some(item => item.id === id)) return;
+      const hostReboot = items.find(item => item.id === id)?.kind === "host-reboot";
       pending.add(id);
       notice("");
       render();
@@ -71,7 +72,8 @@
       const timeout = timer(() => controller.abort(), 30000);
       try {
         await options.api("/api/v1/work-queue/" + encodeURIComponent(id) + "/cancel", {method:"POST", signal:controller.signal});
-        notice("Cancellation requested. The next task waits for cleanup to finish.");
+        notice(hostReboot ? "Cancellation requested. Reboots already requested on a host cannot be canceled."
+          : "Cancellation requested. The next task waits for cleanup to finish.");
       } catch (error) {
         pending.delete(id);
         notice(error.status === 404 ? "That task has already finished."

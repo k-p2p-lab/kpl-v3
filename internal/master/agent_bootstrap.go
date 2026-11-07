@@ -41,6 +41,14 @@ func (a *App) swarmAgentArguments(ctx context.Context, pause func(context.Contex
 	if !nodeIDPattern.MatchString(a.Env("KPL_SWARM_NODE_ID")) {
 		return nil, errors.New("invalid Swarm node ID")
 	}
+	hostRebootEnabled, err := parseHostRebootEnabled(a.Env("KPL_AGENT_HOST_REBOOT_ENABLED"))
+	if err != nil {
+		return nil, err
+	}
+	controlNodeID := a.Env("KPL_CONTROL_NODE_ID")
+	if hostRebootEnabled && !nodeIDPattern.MatchString(controlNodeID) {
+		return nil, errors.New("KPL_CONTROL_NODE_ID must be an exact node ID when host reboot is enabled")
+	}
 	peerNetwork := a.Env("KPL_PEER_NETWORK")
 	control := a.Env("KPL_CONTROL_NETWORK")
 	autoReset := control != ""
@@ -157,6 +165,9 @@ func (a *App) swarmAgentArguments(ctx context.Context, pause func(context.Contex
 	var args []string
 	if autoReset {
 		args = append(args, "--auto-reset-network", "--control-network", control)
+	}
+	if hostRebootEnabled {
+		args = append(args, "--host-reboot-enabled", "--control-node-id", controlNodeID)
 	}
 	args = append(args, "--id", a.Env("KPL_SWARM_SERVICE_NAME")+"-"+a.Env("KPL_SWARM_NODE_ID"), "--name", name,
 		"--labels", "swarmNodeId="+a.Env("KPL_SWARM_NODE_ID"), "--listen", ":8090", "--advertise-url", "http://"+address+":8090", "--self-url", "http://"+address+":8090",

@@ -78,7 +78,7 @@ func (s *Server) fenceExperimentNetwork(ctx context.Context, request model.Exper
 		return errors.New("experiment network identity is required")
 	}
 	s.mu.Lock()
-	if !s.startupReconciled || s.shuttingDown {
+	if !s.startupReconciled || s.shuttingDown || s.host != nil && s.host.RebootPending {
 		s.mu.Unlock()
 		return errors.New("Agent is not ready for network reset")
 	}
@@ -141,7 +141,7 @@ func (s *Server) activateExperimentNetwork(ctx context.Context, network model.Ex
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.shuttingDown || s.networkRequest.Epoch != network.Epoch || s.networkRequest.RunID != network.RunID {
+	if s.shuttingDown || s.host != nil && s.host.RebootPending || s.networkRequest.Epoch != network.Epoch || s.networkRequest.RunID != network.RunID {
 		return errors.New("experiment network preparation was superseded")
 	}
 	s.experimentNetwork = &network

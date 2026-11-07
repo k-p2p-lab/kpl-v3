@@ -73,3 +73,14 @@ test('an explicit successful logout goes to the login form instead of the error 
   assert.deepEqual(redirects,['/login']);
   assert.equal(button.disabled,false);
 });
+
+test('host reboot admission metadata is preserved without treating a generic failure as a safe rejection',async()=>{
+ let accepted=false;
+ const context={Headers,state:{},fetch:async()=>({ok:false,status:409,json:async()=>({error:'Host changed',accepted})})};
+ vm.createContext(context);vm.runInContext(functions,context);
+ await assert.rejects(context.api('/api/v1/agent-hosts/reboot',{method:'POST'}),error=>error.status===409&&error.accepted===false);
+ accepted=true;
+ await assert.rejects(context.api('/api/v1/agent-hosts/reboot',{method:'POST'}),error=>error.accepted===true);
+ accepted=undefined;
+ await assert.rejects(context.api('/api/v1/agent-hosts/reboot',{method:'POST'}),error=>error.accepted===undefined);
+});

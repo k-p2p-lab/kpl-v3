@@ -103,7 +103,8 @@
   }
   function totalRow(agents, now = Date.now()) {
     const enabled = agents.filter(a => !a.disabled), online = enabled.filter(a => a.state === "online");
-    const hosts = new Set(online.map(a => a.hostname).filter(Boolean));
+    const hosts = new Set(online.map(a => a.host?.nodeId || a.labels?.swarmNodeId
+      ? `node:${a.host?.nodeId || a.labels.swarmNodeId}` : a.hostname ? `hostname:${a.hostname}` : "").filter(Boolean));
     const sum = key => online.reduce((value, a) => value + (Number.isFinite(a[key]) && a[key] > 0 ? a[key] : 0), 0);
     const peers = sum("activeNodes"), capacity = sum("capacity"), usage = capacity > 0 ? peers / capacity * 100 : null;
     const scopes = [["agent_and_peers", "Total"], ["agent", "Agent"], ["peers", "Peers"]].map(([scope, label]) => ({scope, label, value:aggregate(agents, now, scope)}));
@@ -130,7 +131,7 @@
       <td class="agent-number">—</td>
       <th scope="row"><span class="resource-total-label">Total</span><span class="agent-capacity-note">${number(enabled.length)} enabled${agents.length > enabled.length ? ` · ${number(agents.length - enabled.length)} disabled` : ""}</span></th>
       <td>${number(online.length)} / ${number(enabled.length)} online</td>
-      <td title="Reported hostnames of enabled, online Agents.">${hosts.size ? `${number(hosts.size)} hosts` : "—"}</td>
+      <td title="Distinct reported hosts of enabled, online Agents; hostname fallback for older Agents.">${hosts.size ? `${number(hosts.size)} hosts` : "—"}</td>
       <td>${number(peers)} / ${number(capacity)}<span class="agent-capacity-note">Online Agents</span></td>
       <td>${usage === null ? "N/A" : `<div class="usage"><div class="usage-track"><i style="width:${Math.min(100, usage)}%"></i></div><span>${number(usage)}%</span></div>`}</td>
       <td class="agent-resource-cell">${totalCell("cpu")}</td>

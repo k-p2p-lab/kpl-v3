@@ -54,7 +54,7 @@ func (s *state) observeAgentCapacityLocked(agent *model.Agent) {
 
 func (s *state) applyAgentCapacityLocked(agent *model.Agent) {
 	// Availability is Controller-owned and cannot be undone by an Agent report.
-	agent.Disabled = s.agentDisabled[agent.ID] || s.agentAvailabilityErr != nil
+	agent.Disabled = s.agentDisabled[agent.ID] || s.hostDisabled[agentHostNodeID(*agent)] || s.agentAvailabilityErr != nil
 	reported := s.agentReportedCapacities[agent.ID]
 	agent.CapacityOverride = s.agentCapacityOverrides[agent.ID]
 	desired := agent.DefaultCapacity

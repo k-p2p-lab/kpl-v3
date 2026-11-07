@@ -31,25 +31,28 @@ import (
 var errCapacityReached = errors.New("agent capacity reached")
 
 type Config struct {
-	AutoResetNetwork bool
-	ControlNetwork   string
-	DockerSocket     string
-	SelfContainer    string
-	DockerBinary     string
-	DockerImage      string
-	DockerNetwork    string
-	ID               string
-	Name             string
-	Listen           string
-	AdvertiseURL     string
-	MetricsListen    string
-	MetricsURL       string
-	SelfURL          string
-	ControllerURL    string
-	Token            string
-	Capacity         int
-	DataDir          string
-	Labels           map[string]string
+	HostRebootEnabled bool
+	HostRebootToken   string
+	ControlNodeID     string
+	AutoResetNetwork  bool
+	ControlNetwork    string
+	DockerSocket      string
+	SelfContainer     string
+	DockerBinary      string
+	DockerImage       string
+	DockerNetwork     string
+	ID                string
+	Name              string
+	Listen            string
+	AdvertiseURL      string
+	MetricsListen     string
+	MetricsURL        string
+	SelfURL           string
+	ControllerURL     string
+	Token             string
+	Capacity          int
+	DataDir           string
+	Labels            map[string]string
 }
 
 type process struct {
@@ -71,6 +74,11 @@ type process struct {
 }
 
 type Server struct {
+	hostRebootMu         sync.Mutex
+	host                 *model.AgentHost   // mu; copied before publishing
+	hostRebootReceipt    *hostRebootReceipt // hostRebootMu
+	hostBootIDReader     func() (string, error)
+	hostDockerCommand    func(context.Context, ...string) ([]byte, error)
 	closeOnce            sync.Once
 	closeErr             error
 	dataLock             *os.File
@@ -117,6 +125,7 @@ type Server struct {
 	inFlightRuns              map[string]int
 	terminations              map[string]model.TraceEvent
 	telemetryClosed           bool
+	telemetryHostRebootClosed bool // eventsMu; independent of permanent shutdown
 	flushNow                  chan struct{}
 }
 
@@ -194,6 +203,9 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	if spoolErr != nil {
 		return nil, errors.Join(spoolErr, s.Close())
 	}
+	if err := s.initializeHostReboot(); err != nil {
+		return nil, errors.Join(err, s.Close())
+	}
 	return s, nil
 }
 
@@ -264,6 +276,9 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	cleanupCancel()
 	if err != nil {
 		return fmt.Errorf("clean up previous peer containers: %w", err)
+	}
+	if s.config.HostRebootEnabled {
+		s.refreshHostRebootCapability(ctx)
 	}
 	s.startupReconciled = true
 	s.logger.Info("agent startup cleanup complete", "id", s.config.ID, "elapsed", time.Since(cleanupStarted))
@@ -451,6 +466,7 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 		image = s.docker.image
 	}
 	return model.Agent{
+		Host:         s.hostStatusLocked(),
 		CreateReplay: true,
 		Resources:    s.resources,
 		ID:           s.config.ID,
@@ -1003,7 +1019,7 @@ func (s *Server) enqueueEvents(batch model.EventBatch) bool {
 	s.eventsMu.Lock()
 	// Reserve space for batches already being sent. A failed Controller request
 	// must be requeued without discarding events the Agent has acknowledged.
-	if s.telemetryClosed || s.pendingEventsLocked()+len(batch.Events) > telemetryBacklogEvents {
+	if s.telemetryClosed || s.telemetryHostRebootClosed || s.pendingEventsLocked()+len(batch.Events) > telemetryBacklogEvents {
 		s.eventsMu.Unlock()
 		return false
 	}

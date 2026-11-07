@@ -30,6 +30,40 @@ func InternalToken(user, password string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// HostRebootToken is independent of the base credential available to Peers.
+// Only Controller and Agent processes derive it from the login credentials.
+func HostRebootToken(user, password string) string {
+	mac := hmac.New(sha256.New, []byte(password))
+	_, _ = mac.Write([]byte("kpl/host-reboot-auth/v1\x00" + user))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// HostRebootSignature authenticates one canonical host reboot request without
+// sending the long-lived host-control credential to a reported Agent URL.
+func HostRebootSignature(key string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("kpl/host-reboot-request/v1\x00"))
+	_, _ = mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// HostRebootAckSignature binds an acknowledgment to its exact canonical request.
+func HostRebootAckSignature(key string, request, result []byte) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("kpl/host-reboot-response/v1\x00"))
+	_, _ = mac.Write(request)
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write(result)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func HostRebootStatusSignature(key string, proof []byte) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	_, _ = mac.Write([]byte("kpl/host-reboot-status/v1\x00"))
+	_, _ = mac.Write(proof)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func Equal(a, b string) bool {
 	left, right := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
 	return subtle.ConstantTimeCompare(left[:], right[:]) == 1

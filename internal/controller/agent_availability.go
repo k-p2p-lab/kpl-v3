@@ -50,7 +50,7 @@ func (s *state) setAgentEnabled(id string, enabled bool) (model.Agent, int, erro
 	if !exists {
 		return model.Agent{}, http.StatusNotFound, errors.New("Agent not found")
 	}
-	if agent.Disabled == !enabled {
+	if disabled[id] == !enabled {
 		return agent, http.StatusOK, nil
 	}
 	if disabled == nil {
@@ -74,7 +74,7 @@ func (s *state) setAgentEnabled(id string, enabled bool) (model.Agent, int, erro
 	s.mu.Lock()
 	s.agentDisabled = disabled
 	agent = s.agents[id]
-	agent.Disabled = !enabled
+	agent.Disabled = !enabled || s.hostDisabled[agentHostNodeID(agent)]
 	s.agents[id] = agent
 	s.mu.Unlock()
 	s.notify()
@@ -93,10 +93,51 @@ func (s *Server) handleAgentEnabled(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "enabled must be true or false")
 		return
 	}
+	// A reboot worker owns its host until finalization. An explicit Enable
+	// afterward releases the host hold without changing other per-Agent settings.
+	var verifiedAgent model.Agent
+	var hostProof *verifiedHostRebootProof
+	if *input.Enabled {
+		// A fresh network challenge must not hold scheduler or stop locks.
+		s.state.mu.RLock()
+		candidate := cloneAgentHost(s.state.agents[r.PathValue("agentID")])
+		_, needsProof := s.state.hostRebootFences[agentHostNodeID(candidate)]
+		s.state.mu.RUnlock()
+		if needsProof {
+			hostProof, _ = s.requestHostRebootProof(r.Context(), candidate)
+		}
+		s.cancelMu.Lock()
+		defer s.cancelMu.Unlock()
+		s.state.mu.RLock()
+		agent := s.state.agents[r.PathValue("agentID")]
+		verifiedAgent = cloneAgentHost(agent)
+		s.state.mu.RUnlock()
+		if s.hostRebootActiveNodes[agentHostNodeID(agent)] != "" || agent.Host != nil && agent.Host.RebootPending {
+			writeError(w, http.StatusConflict, "Host reboot is still pending; verify the host before enabling its Agent")
+			return
+		}
+		if err := s.releaseConfirmedHostRebootFence(agent, hostProof); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
 	agent, status, err := s.state.setAgentEnabled(r.PathValue("agentID"), *input.Enabled)
 	if err != nil {
 		writeError(w, status, err.Error())
 		return
+	}
+	if *input.Enabled && agentHostNodeID(verifiedAgent) != "" {
+		if err := s.completeHostEnable(verifiedAgent, agent); err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errHostEnableIdentityChanged) {
+				status = http.StatusConflict
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+		s.state.mu.RLock()
+		agent = s.state.agents[agent.ID]
+		s.state.mu.RUnlock()
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, status, agent)

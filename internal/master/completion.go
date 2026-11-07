@@ -139,7 +139,9 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		case "scenario":
 			candidates = append(candidates, fileCandidates(prefix, false)...)
 		case "init", "configure":
-			if strings.HasPrefix(prefix, "KPL_CONTROL_NODE_ID=") {
+			if strings.HasPrefix(prefix, "KPL_AGENT_HOST_REBOOT_ENABLED=") {
+				candidates = append(candidates, "KPL_AGENT_HOST_REBOOT_ENABLED=false", "KPL_AGENT_HOST_REBOOT_ENABLED=true")
+			} else if strings.HasPrefix(prefix, "KPL_CONTROL_NODE_ID=") {
 				for _, id := range a.completionDocker(ctx, "node", "ls", "--format", "{{.ID}}") {
 					candidates = append(candidates, "KPL_CONTROL_NODE_ID="+id)
 				}

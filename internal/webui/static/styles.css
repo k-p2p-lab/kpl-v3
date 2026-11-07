@@ -343,6 +343,23 @@ th { color: var(--muted); font-weight: 600; }
 tbody:last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
 .agent-name { display: block; color: var(--text); font-weight: 650; }
 .agent-number { color: var(--cyan); font-weight: 750; font-variant-numeric: tabular-nums; }
+.agent-host-number { display: inline-flex; gap: .55rem; align-items: center; }
+.agent-host-checkbox, #selectAgentHosts { width: 1rem; height: 1rem; flex: 0 0 1rem; margin: 0; accent-color: var(--cyan); cursor: pointer; }
+.agent-host-checkbox:disabled { cursor: not-allowed; opacity: .45; }
+.agent-host-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; padding: .85rem 1.1rem .4rem; margin: 0 0 .75rem; }
+.agent-host-master { display: inline-flex; align-items: center; gap: .5rem; font-size: .82rem; white-space: nowrap; }
+.agent-host-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-left: auto; }
+.agent-host-toolbar button { white-space: nowrap; }
+.agent-host-targets { display: grid; gap: .55rem; margin: 0; padding: 0; list-style: none; max-height: 40dvh; overflow-y: auto; }
+.agent-host-targets li { display: grid; gap: .3rem; padding: .7rem; background: var(--surface); border: 1px solid var(--line); border-radius: .65rem; min-width: 0; overflow-wrap: anywhere; }
+.agent-host-targets code { font-size: .72rem; color: var(--muted); white-space: normal; }
+#agentHostDialog p { overflow-wrap: anywhere; }
+.host-reboot-state { font-size: .8rem; color: var(--cyan); }
+.host-reboot-state[data-state="unknown"], .host-reboot-state[data-state="requested"] { color: var(--amber); }
+.host-reboot-state[data-state="rebooted"] { color: var(--green); }
+.host-reboot-state[data-state="rejected"] { color: var(--red); }
+.host-reboot-error { font-size: .8rem; color: var(--red); }
+@media (max-width: 520px) { .agent-host-actions { margin-left: 0; flex: 1 1 100%; } .agent-host-actions button { flex: 1 1 auto; } }
 .agent-id { display: block; margin-top: 0.18rem; color: var(--muted); font-size: 0.7rem; }
 .agent-metrics-link { position: relative; color: var(--cyan); font-size: 0.78rem; font-weight: 650; text-decoration: none; text-underline-offset: 0.2em; }
 .agent-metrics-link:hover { color: #62e4df; text-decoration: underline; }
@@ -973,6 +990,42 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .work-queue-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .work-queue-actions > button { min-height: 2rem; padding: .3rem .55rem; font-size: .75rem; }
 .work-queue-status[role="alert"] { color: var(--red); }
+
+/* Diagnostic text must shrink inside flex/grid layouts, including table cells
+   that otherwise keep ordinary values on one line. Preserve the full message. */
+:where([role="alert"], [role="status"], .dialog-error, .login-error, .toast,
+  .results-status, .scenario-library-status, .scenario-list-error,
+  .library-group-status, .library-group-dialog-status, .result-integrity,
+  .result-activity, .resource-row-notice, .topology-report-status,
+  .work-queue-phase, .host-reboot-error, .scenario-import-row > p,
+  .scenario-delete-confirmation > p, .dialog-help) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+:where(p[role="alert"], p[role="status"], span[role="alert"], span[role="status"],
+  .dialog-error, .login-error, .toast, .run-error, .result-integrity,
+  .result-activity, .resource-row-notice, .work-queue-phase, .host-reboot-error,
+  .scenario-import-row > p, .scenario-delete-confirmation > p) {
+  white-space: pre-wrap;
+}
+:where(p[role="alert"], span[role="alert"], .dialog-error, .login-error,
+  .run-error, .scenario-library-status.error, .library-group-status[role="alert"],
+  .library-group-dialog-status[data-error="true"]) {
+  max-height: min(16rem, 40dvh);
+  overflow-y: auto;
+}
+.dialog-shell { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.dialog-shell > * { min-width: 0; max-width: 100%; }
+.result-images-feedback { min-width: 0; }
+.result-images-feedback > p { flex: 1 1 0; }
+.result-images-feedback > button { flex: 0 0 auto; }
+.result-integrity, .result-activity { max-width: min(28rem, calc(100vw - 4rem)); max-height: min(16rem, 40dvh); overflow-y: auto; white-space: pre-wrap; }
+.run-meta > span { max-height: min(16rem, 40dvh); overflow-y: auto; white-space: pre-wrap; }
+.work-queue-phase { max-height: min(12rem, 30dvh); overflow-y: auto; }
+.toast { overflow-wrap: anywhere; white-space: pre-wrap; max-height: min(20rem, 45dvh); overflow-y: auto; }
+.toast.show { pointer-events: auto; }
 @media (max-width: 520px) {
   .work-queue { padding: .65rem; }
   .work-queue-item { grid-template-columns: 1.6rem minmax(0, 1fr); padding: .6rem; gap: .55rem; }

@@ -69,3 +69,11 @@ test('opening a queued analysis preserves its run or batch identity without chan
   h.action('two',true);assert.equal(h.opens.length,1);assert.equal(h.opens[0].batchId,'batch-two');
   assert.match(h.elements.get('#workQueueList').innerHTML,/1 task ahead/);
 });
+
+test('host reboot work has a distinct status view and cancel never claims to undo an accepted reboot',async()=>{
+ const h=fixture();h.view.update([{...item('maintenance','host-reboot'),operationId:'host-reboot-operation',phase:'waiting-for-hosts',progress:75}]);
+ const html=h.elements.get('#workQueueList').innerHTML;
+ assert.match(html,/Host reboot/);assert.match(html,/Waiting for hosts to return/);assert.match(html,/Open host reboot status/);assert.doesNotMatch(html,/75%/);
+ h.action('maintenance',true);assert.equal(h.opens[0].operationId,'host-reboot-operation');
+ h.action('maintenance');await turn();assert.match(h.elements.get('#workQueueStatus').textContent,/already requested on a host cannot be canceled/);
+});

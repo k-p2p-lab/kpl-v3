@@ -137,6 +137,10 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 			s.mu.Unlock()
 			return errors.New("agent is shutting down")
 		}
+		if s.host != nil && s.host.RebootPending {
+			s.mu.Unlock()
+			return errors.New("Agent host reboot is pending")
+		}
 		if s.config.AutoResetNetwork && (s.experimentNetwork == nil || s.experimentNetwork.RunID != request.RunID || s.experimentNetwork.NetworkID != request.PeerNetworkID) {
 			s.mu.Unlock()
 			return errors.New("Peer network has not been prepared for this experiment attempt")

@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -36,6 +37,8 @@ type state struct {
 	agentReportedCapacities map[string]int
 	agentSettingsErr        error
 	agentDisabled           map[string]bool
+	hostDisabled            map[string]bool
+	hostRebootFences        map[string]hostRebootFence
 	agentAvailabilityErr    error
 	agents                  map[string]model.Agent
 	nodes                   map[string]model.Node
@@ -75,6 +78,11 @@ func newState(dataDir string) *state {
 	s.agentCapacityRevisions = make(map[string]string)
 	s.agentCapacityOverrides, s.agentSettingsErr = loadAgentCapacities(dataDir)
 	s.agentDisabled, s.agentAvailabilityErr = loadDisabledAgents(dataDir)
+	var hostErr error
+	s.hostDisabled, hostErr = loadDisabledHosts(dataDir)
+	s.agentAvailabilityErr = errors.Join(s.agentAvailabilityErr, hostErr)
+	s.hostRebootFences, hostErr = loadHostRebootFences(dataDir)
+	s.agentAvailabilityErr = errors.Join(s.agentAvailabilityErr, hostErr)
 	s.metrics = newControllerMetrics(s)
 	return s
 }
@@ -124,6 +132,7 @@ func (s *state) activeNodesLocked() iter.Seq[model.Node] {
 }
 
 func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
+	agent = cloneAgentHost(agent)
 	if s.agentSettingsErr != nil {
 		return model.Agent{}, s.agentSettingsErr
 	}
@@ -186,10 +195,11 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 	s.agents[agent.ID] = agent
 	s.mu.Unlock()
 	s.notify()
-	return agent, nil
+	return cloneAgentHost(agent), nil
 }
 
 func (s *state) heartbeat(h model.AgentHeartbeat) error {
+	h.Agent = cloneAgentHost(h.Agent)
 	if h.Agent.ID == "" {
 		return fmt.Errorf("agent id is required")
 	}
@@ -246,6 +256,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	h.Agent.PeerImage = firstNonEmpty(h.Agent.PeerImage, previous.PeerImage)
 	h.Agent.RunDrain = h.Agent.RunDrain || previous.RunDrain
 	h.Agent.CreateReplay = h.Agent.CreateReplay || previous.CreateReplay
+	if h.Agent.Host == nil {
+		h.Agent.Host = cloneAgentHost(previous).Host
+	}
 	h.Agent.StartupReconciled = h.Agent.StartupReconciled || previous.StartupReconciled
 	if h.Agent.Capacity == 0 {
 		h.Agent.Capacity = s.agentReportedCapacities[h.Agent.ID]
@@ -556,7 +569,7 @@ func (s *state) agentInventory() []model.Agent {
 	s.mu.RLock()
 	var agents []model.Agent
 	for _, agent := range s.agents {
-		agents = append(agents, agent)
+		agents = append(agents, cloneAgentHost(agent))
 	}
 	s.mu.RUnlock()
 	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
@@ -598,7 +611,7 @@ func (s *state) inventoryForViewLocked(dashboard bool) model.Snapshot {
 func (s *state) inventoryForTopologyLocked(dashboard, includeTopology bool) model.Snapshot {
 	result := model.Snapshot{GeneratedAt: time.Now().UTC(), WorkQueue: cloneWorkQueue(s.workQueue)}
 	for _, agent := range s.agents {
-		result.Agents = append(result.Agents, agent)
+		result.Agents = append(result.Agents, cloneAgentHost(agent))
 	}
 	if dashboard {
 		result.Topology = &model.TopologySummary{Included: includeTopology}

@@ -26,6 +26,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/runs/", s.handleRunAction)
 	mux.HandleFunc("/api/v1/telemetry", s.handleTelemetry)
 	mux.HandleFunc("/api/v1/network/", s.handleExperimentNetwork)
+	mux.HandleFunc("/api/v1/host/reboot", s.handleHostReboot)
+	mux.HandleFunc("/api/v1/host/reboot-status", s.handleHostRebootStatus)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if s.config.Token != "" && r.Method != http.MethodGet && r.Header.Get("Authorization") != "Bearer "+s.config.Token {

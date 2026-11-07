@@ -13,7 +13,8 @@ RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 120s \
     && CGO_ENABLED=0 go test -buildvcs=false github.com/libp2p/go-libp2p-pubsub -run '^Test(KPL|Score)' -timeout 120s
 
 FROM alpine:3.22 AS runtime
-RUN apk add --no-cache ca-certificates tzdata docker-cli iproute2 iproute2-tc \
+RUN apk add --no-cache ca-certificates tzdata docker-cli iproute2 iproute2-tc util-linux-misc \
+    && test -x /usr/bin/nsenter \
     && addgroup -S -g 101 kpl \
     && adduser -S -u 100 -G kpl kpl
 COPY --from=builder /out/kpl /usr/local/bin/kpl

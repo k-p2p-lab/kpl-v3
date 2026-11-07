@@ -27,7 +27,7 @@ type Config map[string]string
 
 var ConfigKeys = []string{
 	"KPL_STACK_NAME", "KPL_CONTROL_NODE_ID", "KPL_PEER_NETWORK", "KPL_PEER_SUBNET", "KPL_IMAGE",
-	"KPL_AGENT_CAPACITY", "KPL_RUN_MIN_FREE_BYTES", "KPL_ARCHIVE_MIB_PER_SECOND", "KPL_AGENT_METRICS_PORT", "KPL_USER", "KPL_PASSWORD",
+	"KPL_AGENT_CAPACITY", "KPL_AGENT_HOST_REBOOT_ENABLED", "KPL_RUN_MIN_FREE_BYTES", "KPL_ARCHIVE_MIB_PER_SECOND", "KPL_AGENT_METRICS_PORT", "KPL_USER", "KPL_PASSWORD",
 	"GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD", "KPL_HTTP_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT",
 	"KPL_MIN_AGENTS", "KPL_DOCKER_TIMEOUT", "KPL_IMAGE_BUILD_TIMEOUT", "KPL_IMAGE_PUSH_TIMEOUT",
 	"KPL_IMAGE_PULL_TIMEOUT", "KPL_CONTROLLER_STOP_TIMEOUT", "KPL_AGENT_STOP_TIMEOUT",
@@ -60,6 +60,10 @@ func ValidateSetting(key, value string) error {
 		return fmt.Errorf("%s must fit on one line without NUL bytes", key)
 	}
 	switch key {
+	case "KPL_AGENT_HOST_REBOOT_ENABLED":
+		if value != "true" && value != "false" {
+			return errors.New("KPL_AGENT_HOST_REBOOT_ENABLED must be true or false")
+		}
 	case "KPL_STACK_NAME":
 		if !stackNamePattern.MatchString(value) {
 			return errors.New("invalid KPL_STACK_NAME")
@@ -155,8 +159,9 @@ func ConfigDefaults(c Config) Config {
 		c = Config{}
 	}
 	defaults := map[string]string{
-		"KPL_ARCHIVE_MIB_PER_SECOND": strconv.FormatUint(controller.DefaultArchiveMiBPerSecond, 10),
-		"KPL_STACK_NAME":             "kpl", "KPL_RUN_MIN_FREE_BYTES": "1073741824", "KPL_AGENT_CAPACITY": "20", "KPL_MIN_AGENTS": "1",
+		"KPL_AGENT_HOST_REBOOT_ENABLED": "false",
+		"KPL_ARCHIVE_MIB_PER_SECOND":    strconv.FormatUint(controller.DefaultArchiveMiBPerSecond, 10),
+		"KPL_STACK_NAME":                "kpl", "KPL_RUN_MIN_FREE_BYTES": "1073741824", "KPL_AGENT_CAPACITY": "20", "KPL_MIN_AGENTS": "1",
 		"KPL_USER": "admin", "GRAFANA_ADMIN_USER": "admin", "KPL_HTTP_PORT": "8080", "KPL_AGENT_METRICS_PORT": "9091",
 		"PROMETHEUS_PORT": "9090", "GRAFANA_PORT": "3000", "KPL_DOCKER_TIMEOUT": "60", "KPL_IMAGE_BUILD_TIMEOUT": "1800",
 		"KPL_IMAGE_PUSH_TIMEOUT": "600", "KPL_IMAGE_PULL_TIMEOUT": "300", "KPL_CONTROLLER_STOP_TIMEOUT": "960", "KPL_AGENT_STOP_TIMEOUT": "240",

@@ -14,6 +14,7 @@ const (
 )
 
 type Agent struct {
+	Host              *AgentHost        `json:"host,omitempty"`
 	CreateReplay      bool              `json:"createReplay,omitempty"`
 	Disabled          bool              `json:"disabled,omitempty"`
 	Resources         *AgentResources   `json:"resources,omitempty"`

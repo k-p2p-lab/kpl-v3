@@ -79,11 +79,17 @@ func dockerCommand(ctx context.Context, input io.Reader, args ...string) ([]byte
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	configureDockerCommand(cmd)
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = input
 	var stdout, stderr limitedOutput
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	if err != nil {
+		reclaimDockerCommand(cmd)
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return nil, fmt.Errorf("Docker %s: %w: %.4096s", args[0], err, stderr.String())
 	}
 	if stdout.Len() >= 1<<20 {
@@ -116,7 +122,11 @@ func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
 	if len(fields) != 1 {
 		return nil, fmt.Errorf("ambiguous Peer network %q: IDs=%q", m.config.PeerNetwork, fields)
 	}
-	data, err := m.command(ctx, nil, "network", "inspect", fields[0])
+	return m.inspectID(ctx, fields[0])
+}
+
+func (m *Manager) inspectID(ctx context.Context, id string) (*networkInfo, error) {
+	data, err := m.command(ctx, nil, "network", "inspect", id)
 	if err != nil {
 		return nil, err
 	}
@@ -125,8 +135,8 @@ func (m *Manager) inspect(ctx context.Context) (*networkInfo, error) {
 		return nil, errors.New("invalid Peer network inspection")
 	}
 	n := &networks[0]
-	if n.ID != fields[0] || n.Name != m.config.PeerNetwork {
-		return nil, fmt.Errorf("Peer network identity mismatch: listed ID=%q, inspected ID=%q, name=%q (expected %q)", fields[0], n.ID, n.Name, m.config.PeerNetwork)
+	if n.ID != id || n.Name != m.config.PeerNetwork {
+		return nil, fmt.Errorf("Peer network identity mismatch: expected ID=%q, inspected ID=%q, name=%q (expected %q)", id, n.ID, n.Name, m.config.PeerNetwork)
 	}
 	if n.Driver != "overlay" || n.Scope != "swarm" || !n.Attachable || n.Internal || n.Ingress || n.ConfigOnly || n.EnableIPv6 || n.ConfigFrom.Network != "" {
 		return nil, fmt.Errorf("Peer network must be an attachable IPv4 Swarm overlay: driver=%q scope=%q attachable=%t internal=%t ingress=%t configOnly=%t ipv6=%t configFrom=%q", n.Driver, n.Scope, n.Attachable, n.Internal, n.Ingress, n.ConfigOnly, n.EnableIPv6, n.ConfigFrom.Network)

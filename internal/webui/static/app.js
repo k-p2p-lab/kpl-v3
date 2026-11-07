@@ -403,7 +403,7 @@ function scheduleSnapshotRender(snapshot) {
 function applySnapshotDelta(snapshot, patch) {
   if (!snapshot) throw new Error("Snapshot delta arrived before a full snapshot");
   const next = { ...snapshot };
-  for (const key of ["generatedAt", "edges", "events", "metrics", "topology"]) {
+  for (const key of ["generatedAt", "edges", "events", "metrics", "topology", "workQueue"]) {
     if (Object.hasOwn(patch, key)) next[key] = patch[key];
   }
   for (const key of ["agents", "nodes", "experiments"]) {
@@ -596,6 +596,7 @@ function render(snapshot) {
   setText($("#duplicateTotalMetric"), `All duplicate events: ${formatNumber(metrics.duplicates)}`);
   renderBandwidthMetrics(metrics.bandwidth);
   setText($("#updatedAt"), new Date(snapshot.generatedAt).toLocaleTimeString("en-US"));
+  globalThis.KPLWorkQueue?.update(snapshot.workQueue || []);
   renderRuns(snapshot.experiments || []);
   renderAgents(agents);
   renderEvents(snapshot.events || []);
@@ -627,7 +628,7 @@ function runTimingMarkup(run, stopping) {
   if (!isPendingRun(run)) return "";
   const timing = run.timing;
   const remaining = stopping ? "Stopping…" : timing?.overdue ? "Taking longer than estimated" : formatEstimateRemaining(timing?.remainingSeconds);
-  return `<div class="run-timing${timing?.overdue ? " overdue" : ""}" title="Estimates include earlier queued experiments and update as phases finish. Readiness timeouts are initial allowances; node startup, available capacity and cleanup can change the finish time.">
+  return `<div class="run-timing${timing?.overdue ? " overdue" : ""}" title="Estimates include earlier queued tasks and update as phases finish. Analysis ahead can leave the finish time unavailable. Node startup, capacity and cleanup can also change the estimate.">
     <div><span>Est. finish</span><strong>${stopping ? "Stopping…" : estimateFinishMarkup(timing?.estimatedFinishAt)}</strong></div>
     <small>${escapeHTML(remaining)}${timing && !stopping ? ` · ${escapeHTML(estimateBasisLabel(timing))}` : ""}</small>
   </div>`;
@@ -693,7 +694,7 @@ function renderRuns(runs) {
     const sourceSize = runSourceSize(run);
     return `<article class="run-item">
       <div class="run-title"><strong title="${escapeHTML(run.name)}">${escapeHTML(run.name)}</strong><span class="status-pill ${escapeHTML(run.state)}">${escapeHTML(run.state)}</span></div>
-      <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? run.phaseName || (run.queuePosition > 0 ? `Queued · ${run.queuePosition} submission${run.queuePosition === 1 ? "" : "s"} ahead` : "Waiting to start") : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
+    <div class="run-meta"><span>${escapeHTML(run.state === "queued" ? run.phaseName || (run.queuePosition > 0 ? `Queued · ${run.queuePosition} task${run.queuePosition === 1 ? "" : "s"} ahead` : "Waiting to start") : run.phaseName || `seed ${run.seed}`)}</span>${stop}</div>
       ${run.repetitions > 1 ? `<div class="run-meta"><span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span></div>` : ""}
       <div class="run-meta"><span>Jobs: ${formatNumber(run.activeJobs || 0)} active · ${formatNumber(run.completedJobs || 0)} completed · ${formatNumber(run.failedJobs || 0)} failed · ${formatNumber(run.canceledJobs || 0)} canceled</span></div>
       ${runTimingMarkup(run, stopping)}
@@ -740,7 +741,7 @@ function resultImagesButton(run) {
   const job = run.analysis;
   const label = job?.state === "queued" ? "Images · Queued" : job?.state === "running" ? (job.phase === "checking-sources" ? "Images · Checking" : job.phase === "aggregating" ? "Images · Calculating" : job.phase === "saving" ? "Images · Saving" : `Images · ${Math.floor(job.progress || 0)}% read`) : job?.stale ? "Images · Check" : job?.state === "completed" ? "Images · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Images · Retry" : "Images";
   const description = `View graph images: ${run.name || run.id}${label === "Images" ? "" : ` · ${label.slice("Images · ".length)}`}`;
-  return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" title="${escapeHTML(description)}" aria-label="${escapeHTML(description)}" ${run.state === "unreadable" || run.state === "queued" ? "disabled" : ""}><span class="action-label-full">${label}</span><span class="action-label-compact" aria-hidden="true">Images</span></button>`;
+  return `<button class="result-images-button" type="button" data-result-images="${escapeHTML(run.id)}" title="${escapeHTML(description)}" aria-label="${escapeHTML(description)}" ${run.state === "unreadable" ? "disabled" : ""}><span class="action-label-full">${label}</span><span class="action-label-compact" aria-hidden="true">Images</span></button>`;
 }
 
 function resultDownloadLink(run) {
@@ -1579,7 +1580,8 @@ function savedResultBatch(batch) {
     : job?.stale ? "Batch mean · Check" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
   const excluded = batch.runs.length - batch.completed;
   const missing = Math.max(0, batch.expected - batch.runs.length);
-  const hint = batch.active ? "Available after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
+  const canAnalyze = batch.completed >= 2 || batch.active && batch.expected >= 2;
+  const hint = batch.active ? "Queue analysis after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
   const resuming = state.pendingResumes?.has(batch.id);
   const remaining = remainingBatchRuns(batch);
   const analyzing = ["queued", "running"].includes(job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
@@ -1590,7 +1592,7 @@ function savedResultBatch(batch) {
       <span class="saved-batch-heading"><span class="result-item-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong></span>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
-        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${batch.active || resuming || batch.completed < 2 || state.deletingResultId ? "disabled" : ""}>${label}</button>
+        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${!canAnalyze || resuming || state.deletingResultId ? "disabled" : ""}>${label}</button>
         <span class="action-menu" data-action-menu="batch:${escapeHTML(batch.id)}">
           <button type="button" class="secondary-button" data-action-menu-toggle="batch:${escapeHTML(batch.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(batch.name)}</span></button>
           <span class="action-menu-items">
@@ -1879,8 +1881,8 @@ function renderLibraryDeletionPlan(plan) {
 
 function focusLibrarySelectionTools(scope) {
   const tools = scope === "scenarios" ? "#scenarioGroupTools" : "#resultGroupTools";
-  const targets = [document.querySelector(tools + " [data-action-menu-toggle]"),
-    document.querySelector(tools + ' [data-library-action="select"]'),
+  const targets = [document.querySelector(tools + ' [data-action-menu-toggle="library-download:' + scope + '"]'),
+    document.querySelector(tools + ' [data-library-select-visible]'),
     $(scope === "scenarios" ? "#newScenario" : "#resultSearch")];
   targets.find(target => target && !target.disabled)?.focus({preventScroll: true});
 }
@@ -2640,7 +2642,7 @@ async function submitScenarioRun() {
       globalThis.KPLDashboardTabs?.show("experiments");
     }
     showToast(run.state === "queued"
-      ? `Queued ${repetitions > 1 ? `${repetitions} runs` : "experiment"}: ${run.name}. ${run.queuePosition > 0 ? `${run.queuePosition} submission${run.queuePosition === 1 ? "" : "s"} ahead.` : "Waiting to start."}`
+      ? `Queued ${repetitions > 1 ? `${repetitions} runs` : "experiment"}: ${run.name}. ${run.queuePosition > 0 ? `${run.queuePosition} task${run.queuePosition === 1 ? "" : "s"} ahead.` : "Waiting to start."}`
       : repetitions > 1 ? `Queued ${repetitions} runs: ${run.name}.` : `Submitted experiment: ${run.name}.`);
     if (scenarioId) {
       // Submission already succeeded. Refresh the server-assigned membership
@@ -2954,6 +2956,8 @@ globalThis.KPLResultImages?.init({ api, onJob: job => {
   if (!state.resultsRefreshTimer && !state.resultsLoading) state.resultsRefreshTimer = setTimeout(refreshSavedResults, 3000);
 } });
 setupTopologyControls();
+globalThis.KPLWorkQueue?.init({api, onOpen: item => item.kind === "batch-analysis"
+  ? globalThis.KPLResultImages?.openBatch(item.batchId) : globalThis.KPLResultImages?.open(item.runId)});
 setupDashboardTabHandling();
 renderSavedScenarios();
 window.addEventListener("resize", () => {

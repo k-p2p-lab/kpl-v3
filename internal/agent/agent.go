@@ -63,6 +63,7 @@ type process struct {
 	containerID           string
 	done                  chan struct{}
 	cleanupErr            error
+	exitErr               error // mu; process failure survives container-removal retries.
 	heartbeatAcknowledged bool
 	// Peer source time is distinct from node.LastSeen, which is the Agent's
 	// receipt time. Only timestamps from this process are compared for order.
@@ -70,6 +71,9 @@ type process struct {
 }
 
 type Server struct {
+	closeOnce            sync.Once
+	closeErr             error
+	dataLock             *os.File
 	networkMu            sync.Mutex
 	networkRequest       model.ExperimentNetworkRequest // mu; admission remains closed until activation
 	experimentNetwork    *model.ExperimentNetwork       // mu
@@ -166,7 +170,12 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	dataLock, err := lockAgentDataDirectory(config.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("lock Agent data directory: %w", err)
+	}
 	s := &Server{
+		dataLock:  dataLock,
 		config:    config,
 		logger:    logger,
 		client:    &http.Client{Timeout: 10 * time.Second},
@@ -179,18 +188,26 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 	var spoolErr error
 	s.history, spoolErr = openAgentHistory(config.DataDir)
 	if spoolErr != nil {
-		return nil, spoolErr
+		return nil, errors.Join(spoolErr, s.Close())
 	}
 	s.spool, spoolErr = readTelemetrySpool(config.DataDir)
 	if spoolErr != nil {
-		return nil, spoolErr
+		return nil, errors.Join(spoolErr, s.Close())
 	}
 	return s, nil
 }
 
-// Close releases local history resources. Run calls it after shutdown; callers
-// using a Server without Run must close it after all operations finish.
-func (s *Server) Close() error { return s.history.close() }
+// Close releases local history and exclusive data ownership. Run closes the
+// Server after shutdown; other callers must close it after operations finish.
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.history.close()
+		if s.dataLock != nil {
+			s.closeErr = errors.Join(s.closeErr, s.dataLock.Close())
+		}
+	})
+	return s.closeErr
+}
 
 func (s *Server) Run(ctx context.Context) error {
 	defer s.Close()
@@ -713,8 +730,11 @@ func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr 
 	state, message := model.NodeStopped, ""
 	s.mu.Lock()
 	current, ok := s.processes[nodeID]
-	if cleanupErr != nil || runErr != nil && proc.node.State != model.NodeStopping {
-		state, message = model.NodeFailed, errors.Join(runErr, cleanupErr).Error()
+	if runErr != nil && proc.node.State != model.NodeStopping {
+		proc.exitErr = runErr
+	}
+	if cleanupErr != nil || proc.exitErr != nil {
+		state, message = model.NodeFailed, errors.Join(proc.exitErr, cleanupErr).Error()
 	}
 	var termination *model.TraceEvent
 	if ok && current == proc {
@@ -1056,7 +1076,7 @@ func (s *Server) flushEvents(ctx context.Context) {
 	}
 	s.events = append([]model.TraceEvent(nil), s.events[count:]...)
 	s.eventsMu.Unlock()
-	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	flushCtx, cancel := context.WithTimeout(ctx, telemetryDeliveryTimeout)
 	defer cancel()
 	err = s.postData(flushCtx, "/api/v1/events/batch", data, nil)
 	s.eventsMu.Lock()
@@ -1168,7 +1188,13 @@ func (s *Server) postData(ctx context.Context, path string, data []byte, output 
 	if s.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
-	resp, err := s.client.Do(req)
+	client := mutationHTTPClient(s.client)
+	if path == "/api/v1/events/batch" {
+		// A durable telemetry batch may wait for Controller storage longer than
+		// an ordinary heartbeat. Never change the shared client's timeout.
+		client.Timeout = telemetryDeliveryTimeout
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

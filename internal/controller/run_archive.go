@@ -231,7 +231,7 @@ func hashRunFileContext(ctx context.Context, file resultFile) (string, error) {
 func (s *Server) copyArchiveFile(ctx context.Context, root *os.Root, name string, source resultFile) (storedRunFile, error) {
 	s.setArchivePhase("copying")
 	stored := storedRunFile{Object: name, Size: source.size, ModifiedAt: source.info.ModTime().UnixNano()}
-	temp := ".incoming-" + rand.Text()
+	temp := archiveCopyTemporaryPrefix + rand.Text()
 	output, err := root.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return stored, err
@@ -326,7 +326,10 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		if s.resultActive(id) {
 			return errResultBusy
 		}
-		if job := s.analysisJobs[id]; job != nil && (job.status.State == "queued" || job.status.State == "running") {
+		// A queued analysis resolves the current layout only after its FIFO turn.
+		// Readers already resolving a source retain their opened local files and
+		// immutable archive objects across rotation; active artifact writes wait.
+		if job := s.analysisJobs[id]; job != nil && job.status.State == "running" {
 			return errResultBusy
 		}
 		s.state.mu.RLock()
@@ -539,6 +542,9 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	published, err := readRunArchive(remote, id)
 	if err != nil {
 		return err
+	}
+	if err := s.cleanAbandonedArchiveCopies(ctx, remote); err != nil {
+		return fmt.Errorf("clean abandoned archive copies: %w", err)
 	}
 	for name, parts := range published.Logs {
 		known := map[string]bool{}

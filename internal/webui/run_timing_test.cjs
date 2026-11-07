@@ -25,8 +25,8 @@ test('queued submissions show their place and cleanup waits without hiding cance
     {id:'last',name:'Last',state:'queued',queuePosition:2},
   ]);
   const cards=element('#runList').innerHTML;
-  assert.match(cards,/Queued · 1 submission ahead/);
-  assert.match(cards,/Queued · 2 submissions ahead/);
+  assert.match(cards,/Queued · 1 task ahead/);
+  assert.match(cards,/Queued · 2 tasks ahead/);
   assert.ok(cards.indexOf('title="Next"')<cards.indexOf('title="Last"'));
   api.renderRuns([{id:'next',name:'Next',state:'queued',phaseName:'Waiting for previous Peer cleanup: <offline>'}]);
   assert.match(element('#runList').innerHTML,/Waiting for previous Peer cleanup: &lt;offline&gt;/);
@@ -112,7 +112,7 @@ test('retry forecasts remain visible beside failed attempts and later queued sub
   assert.equal((cards.match(/<span>Est\. finish<\/span>/g)||[]).length,3);
   assert.match(cards,/datetime="2026-09-21T05:30:00Z"/);
   assert.match(cards,/About 5h remaining/);
-  assert.match(cards,/1 submission ahead/);
+  assert.match(cards,/1 task ahead/);
   assert.match(summary,/About 4h remaining/);
   assert.doesNotMatch(summary,/Estimating…/);
 });

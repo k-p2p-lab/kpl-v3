@@ -54,7 +54,7 @@ func newSwarmFixture(t *testing.T, name string) (*swarm, *swarmTestRunner, *byte
 	ConfigDefaults(cfg)
 	a := &App{Repo: repo, EnvFile: filepath.Join(repo, ".env.swarm"), Runner: runner, Stdout: buffer, Stderr: buffer, Stdin: strings.NewReader(""), Environ: []string{"DOCKER_CONTEXT=manager", "DOCKER_DEFAULT_PLATFORM=linux/arm64"}}
 	a = a.WithConfig(cfg)
-	s := &swarm{a: a, config: cfg, options: swarmOptions{name: name, component: "controller", tail: "100"}, stack: "kpl", network: "kpl-peers", label: "kpl.kpl.agent", timeout: time.Minute, pullTimeout: 5 * time.Minute, buildTimeout: 30 * time.Minute, pushTimeout: 10 * time.Minute, agentTimeout: 4 * time.Minute, controllerTimeout: 11 * time.Minute, present: map[string]bool{}}
+	s := &swarm{a: a, config: cfg, options: swarmOptions{name: name, component: "controller", tail: "100"}, stack: "kpl", network: "kpl-peers", label: "kpl.kpl.agent", timeout: time.Minute, pullTimeout: 5 * time.Minute, buildTimeout: 30 * time.Minute, pushTimeout: 10 * time.Minute, agentTimeout: 4 * time.Minute, controllerTimeout: 16 * time.Minute, present: map[string]bool{}}
 	return s, runner, buffer
 }
 func swarmCallIndex(calls []Command, parts ...string) int {
@@ -487,6 +487,7 @@ func TestSwarmNetworkResetPreservesAllocationAndStopsOnChangedNetwork(t *testing
 			s, r, b := newSwarmFixture(t, "reset-peer-network")
 			checks := 0
 			removed := false
+			created := false
 			expected := s.network + "|overlay|swarm|true|false|false|false|false||default|0|1|0|" + swarmApplication + "|kpl||"
 			r.handle = func(_ context.Context, c Command) (string, error) {
 				a := c.Args
@@ -504,7 +505,16 @@ func TestSwarmNetworkResetPreservesAllocationAndStopsOnChangedNetwork(t *testing
 					if !removed {
 						t.Fatal("create preceded removal")
 					}
+					created = true
 					return "newnetwork", nil
+				case a[0] == "network" && a[1] == "ls":
+					if created {
+						return "newnetwork", nil
+					}
+					if removed {
+						return "", nil
+					}
+					return "oldnetwork", nil
 				case a[0] == "network" && a[1] == "inspect":
 					switch a[3] {
 					case "{{.Id}}":

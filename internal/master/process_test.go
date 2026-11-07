@@ -47,15 +47,31 @@ func TestMasterProcessFixture(t *testing.T) {
 		for {
 			time.Sleep(time.Second)
 		}
-	case "spawn-ignore-term", "spawn-escaped-output":
+	case "spawn-ignore-term", "spawn-escaped-output", "exit-with-output-child", "exit-with-output-child-failed":
 		child := exec.Command(os.Args[0], "-test.run=^TestMasterProcessFixture$")
 		child.Env = append(os.Environ(), "KPL_MASTER_PROCESS_FIXTURE=ignore-term-child")
 		if mode == "spawn-escaped-output" {
 			child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			child.Stdout = os.Stdout
 		}
+		if strings.HasPrefix(mode, "exit-with-output-child") {
+			child.Stdout = os.Stdout
+		}
 		if err := child.Start(); err != nil {
 			os.Exit(97)
+		}
+		if strings.HasPrefix(mode, "exit-with-output-child") {
+			for range 1000 {
+				if _, err := os.Stat(os.Getenv("KPL_MASTER_CHILD_READY")); err == nil {
+					if mode == "exit-with-output-child-failed" {
+						os.Exit(3)
+					}
+					os.Exit(0)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			_ = child.Process.Kill()
+			os.Exit(96)
 		}
 		// The parent retains ordinary SIGTERM handling. Its child ignores TERM
 		// and has no inherited output pipes, so waiting for this parent finishes
@@ -240,4 +256,60 @@ func TestExecRunnerBoundsPipeWaitWithCustomGrace(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("inherited pipe exceeded custom cancellation grace")
 	}
+}
+
+func TestExecRunnerReapsOutputChildAfterLeaderExitsNormally(t *testing.T) {
+	ready := filepath.Join(t.TempDir(), "output-child-ready")
+	command := fixtureCommand(t, "exit-with-output-child")
+	command.Env = append(command.Env, "KPL_MASTER_CHILD_READY="+ready)
+	command.CancelGrace = 100 * time.Millisecond
+	_, err := (ExecRunner{}).Output(t.Context(), command)
+	data, readErr := os.ReadFile(ready)
+	if readErr != nil {
+		t.Fatalf("child did not initialize: %v (command: %v)", readErr, err)
+	}
+	pid, parseErr := strconv.Atoi(string(data))
+	if parseErr != nil || pid <= 0 {
+		t.Fatalf("invalid child PID: %q", data)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Fatalf("unacknowledged output pipe was treated as success: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !fixtureProcessRunning(pid) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("command returned while its output-holding child kept running")
+}
+
+func TestExecRunnerReapsOutputChildAfterLeaderFails(t *testing.T) {
+	ready := filepath.Join(t.TempDir(), "failed-output-child-ready")
+	command := fixtureCommand(t, "exit-with-output-child-failed")
+	command.Env = append(command.Env, "KPL_MASTER_CHILD_READY="+ready)
+	command.CancelGrace = 100 * time.Millisecond
+	_, err := (ExecRunner{}).Output(t.Context(), command)
+	data, readErr := os.ReadFile(ready)
+	if readErr != nil {
+		t.Fatalf("child did not initialize: %v (command: %v)", readErr, err)
+	}
+	pid, parseErr := strconv.Atoi(string(data))
+	if parseErr != nil || pid <= 0 {
+		t.Fatalf("invalid child PID: %q", data)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if ExitCode(err) != 3 {
+		t.Fatalf("leader failure changed: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !fixtureProcessRunning(pid) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("failed command left its output-holding child running")
 }

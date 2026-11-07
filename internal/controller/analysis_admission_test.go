@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -78,8 +77,16 @@ func TestAnalysisAdmissionKeepsLocalValidationAndDefersUnavailableArchive(t *tes
 		s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 		run, _ := resultFixture(t, s, "queued", "queued", time.Now().UTC())
 		s.state.experiments[run.ID] = run
-		if _, err := s.startAnalysisJob(context.Background(), run.ID, false); !errors.Is(err, errResultBusy) {
-			t.Fatalf("queued Run was admitted: %v", err)
+		release := holdExecutionQueue(t, s)
+		status, err := s.startAnalysisJob(context.Background(), run.ID, false)
+		if err != nil || status.State != "queued" {
+			t.Fatalf("queued Run cannot reserve analysis: %+v %v", status, err)
+		}
+		release()
+		failed := awaitAnalysisJob(t, s, run.ID)
+		s.analysisWorkers.Wait()
+		if failed.State != "failed" || failed.Error == "" {
+			t.Fatalf("worker did not recheck an unowned queued source: %+v", failed)
 		}
 	})
 	t.Run("invalid local metadata", func(t *testing.T) {

@@ -110,6 +110,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	// Wait starts, including requests already accepted by the HTTP listener.
 	s.cancelMu.Lock()
 	s.shuttingDown = true
+	s.cancelWorkQueueLocked()
 	for _, cancel := range s.cancels {
 		cancel()
 	}
@@ -119,6 +120,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	// retained by completed experiments and flush every Agent while ingestion
 	// is still available. Swarm removes the Agent services only after we exit.
 	s.runs.Wait()
+	s.workWorkers.Wait()
 	cleanupErr := s.cleanupAgents()
 	s.analysisWorkers.Wait()
 	<-analysisDone
@@ -186,6 +188,7 @@ func (s *Server) routes(ctx context.Context) http.Handler {
 	mux.HandleFunc("/api/v1/downloads", s.handleLibraryDownloadRequest)
 	mux.HandleFunc("/api/v1/downloads/", s.handleLibraryDownload)
 	mux.HandleFunc("/api/v1/experiments", s.handleExperiments(ctx))
+	mux.HandleFunc("/api/v1/work-queue/", s.handleWorkQueueAction)
 	mux.HandleFunc("/api/v1/results", s.handleResults)
 	mux.HandleFunc("/api/v1/result-storage", s.handleResultStorage)
 	mux.HandleFunc("POST /api/v1/result-storage/reconnect", s.handleArchiveReconnect)

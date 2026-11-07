@@ -17,11 +17,12 @@ import (
 )
 
 func TestAgentRequiresContainerReachableURLs(t *testing.T) {
-	config := Config{DockerImage: "registry.example:5000/kpl-v3:test", DockerNetwork: "kpl-v3-peers", ID: "test", AdvertiseURL: "http://agent:8090", ControllerURL: "http://controller:8080"}
+	config := Config{DockerImage: "registry.example:5000/kpl-v3:test", DockerNetwork: "kpl-v3-peers", ID: "test", AdvertiseURL: "http://agent:8090", ControllerURL: "http://controller:8080", DataDir: t.TempDir()}
 	server, err := New(config, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = server.Close() })
 	if server.docker == nil || server.config.SelfURL != config.AdvertiseURL {
 		t.Fatalf("Docker configuration not applied: %+v", server.config)
 	}

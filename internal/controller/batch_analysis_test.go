@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -160,13 +159,15 @@ func TestBatchAnalysisEligibilityAndMembershipChange(t *testing.T) {
 	batchFixture(t, s, "batch", "one", "completed", 1, 3, 1)
 	batchFixture(t, s, "batch", "two", "completed", 2, 3, 1)
 	batchFixture(t, s, "batch", "three", "running", 3, 3, 1)
-	if _, err := s.startBatchAnalysis(context.Background(), "batch", false); !errors.Is(err, errResultBusy) {
-		t.Fatalf("active batch admitted: %v", err)
+	release := holdExecutionQueue(t, s)
+	if queued, err := s.startBatchAnalysis(context.Background(), "batch", false); err != nil || queued.State != "queued" {
+		t.Fatalf("active batch cannot reserve analysis: %+v %v", queued, err)
 	}
 	s.state.mu.Lock()
 	delete(s.state.experiments, "three")
 	s.state.mu.Unlock()
 	batchFixture(t, s, "batch", "three", "completed", 3, 3, 1)
+	release()
 	if _, err := s.startBatchAnalysis(context.Background(), "batch", false); err != nil {
 		t.Fatal(err)
 	}

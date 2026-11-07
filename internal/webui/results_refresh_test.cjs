@@ -108,7 +108,7 @@ test('Saved results groups only one repetition batch and preserves individual ac
   assert.equal(groups.length, 2);
   assert.equal(groups[0].completed, 2);
   assert.equal(groups[0].active, true);
-  assert.match(element('#savedResultsRows').innerHTML, /data-batch-images="one"[^>]+disabled/);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML, /data-batch-images="one"[^>]+disabled/);
   assert.match(element('#savedResultsRows').innerHTML, /data-result-images="a"/);
   runs[2].state = 'completed';
   api.renderSavedResults();

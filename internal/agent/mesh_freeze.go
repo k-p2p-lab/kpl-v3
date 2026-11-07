@@ -77,7 +77,7 @@ func (s *Server) proxyMeshFreeze(ctx context.Context, nodeID string, request mod
 	if s.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
-	resp, err := s.client.Do(req)
+	resp, err := mutationHTTPClient(s.client).Do(req)
 	if err != nil {
 		return result, err
 	}

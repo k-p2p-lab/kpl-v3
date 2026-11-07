@@ -778,7 +778,7 @@
   const pendingJob = (job) => job && ["queued", "running"].includes(job.state);
   function jobDescription(job) {
     if (job.state === "queued")
-      return "Queued — waiting for an analysis worker.";
+      return "Queued — waiting for earlier experiments or analysis. Retained Peers are cleaned up before analysis starts.";
     if (job.state === "completed")
       return job.reused ? "Source unchanged. Reusing saved analysis…" : "Analysis complete. Preparing PNG downloads…";
     const phase =

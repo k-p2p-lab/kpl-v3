@@ -74,8 +74,11 @@ type Server struct {
 	runs                       sync.WaitGroup
 	nodeSeq                    atomic.Uint64
 	repeatBatches              map[string]*repeatBatch
-	experimentQueue            []*repeatBatch // cancelMu; one submitted sequence at a time
-	queueCleanup               []string       // run IDs whose cleanup must precede new work
+	experimentQueue            []*workSlot // cancelMu; shared experiment/analysis FIFO
+	workWorkers                sync.WaitGroup
+	workSlots                  map[string]*workSlot
+	recentWorkCancels          []string
+	queueCleanup               []string // run IDs whose cleanup must precede new work
 	resultDownloads            map[string]int
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}
@@ -385,11 +388,14 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		s.updateExperiment(experiment.ID, func(run *model.Experiment) { run.CleanupState = "running" })
 		stopErr := s.stopRunGeneration(cleanupCtx, experiment.ID, generation)
-		if stopErr == nil {
-			dataErr = s.drainRunTelemetry(cleanupCtx, experiment.ID)
-		}
-		refreshErr := s.refreshAgentState(cleanupCtx)
+		refreshErr := s.refreshAgentState(cleanupCtx, experiment.ID)
 		cleanupCancel()
+		if stopErr == nil {
+			// Slow Docker cleanup must not consume the final delivery budget.
+			drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			dataErr = s.drainRunTelemetry(drainCtx, experiment.ID)
+			drainCancel()
+		}
 		if err := errors.Join(stopErr, refreshErr); err != nil {
 			err = fmt.Errorf("stop scenario peers through generation %d: %w", generation, err)
 			cleanupErr = errors.Join(cleanupErr, err)
@@ -515,7 +521,7 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 		cleanupCtx, cleanupCancel = context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cleanupCancel()
 		stopErr := s.stopRunGeneration(cleanupCtx, runID, generation)
-		refreshErr := s.refreshAgentState(cleanupCtx)
+		refreshErr := s.refreshAgentState(cleanupCtx, runID)
 		if stopErr == nil && refreshErr == nil {
 			jobs.profiles = newRunProfileState()
 		}
@@ -814,11 +820,33 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 	return errors.Join(stopErrors...)
 }
 
-func (s *Server) refreshAgentState(ctx context.Context) error {
+// Run cleanup only depends on its owners. A temporarily unreachable unrelated
+// Agent must not turn confirmed cleanup into a failed Run. Omitting run IDs
+// retains the full-inventory refresh; legacy ownership falls back as before.
+func (s *Server) refreshAgentState(ctx context.Context, runIDs ...string) error {
+	type owner struct{ id, url string }
+	var owners map[owner]bool
+	if len(runIDs) > 0 {
+		owners = make(map[owner]bool)
+		seen := make(map[string]bool)
+		for _, id := range runIDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			participants, err := s.cleanupParticipants(id)
+			if err != nil {
+				return err
+			}
+			for _, agent := range participants {
+				owners[owner{agent.ID, agent.URL}] = true
+			}
+		}
+	}
 	s.state.mu.RLock()
 	agents := make([]model.Agent, 0, len(s.state.agents))
 	for _, agent := range s.state.agents {
-		if agent.State == model.AgentOnline {
+		if agent.State == model.AgentOnline && (owners == nil || owners[owner{agent.ID, agent.URL}]) {
 			agents = append(agents, agent)
 		}
 	}
@@ -1441,6 +1469,8 @@ func (s *Server) agent(id string) (model.Agent, bool) {
 }
 
 func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, input, output any) error {
+	route, _, _ := strings.Cut(path, "?")
+	runDrain := method == http.MethodPost && strings.HasPrefix(route, "/api/v1/runs/") && strings.HasSuffix(route, "/drain")
 	var body io.Reader
 	if input != nil {
 		data, err := json.Marshal(input)
@@ -1460,21 +1490,26 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	client := s.client
+	if method != http.MethodGet && method != http.MethodHead {
+		mutationClient := *client
+		mutationClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &mutationClient
+	}
 	if strings.HasPrefix(path, "/api/v1/network/") {
-		networkClient := *s.client
+		networkClient := *client
 		networkClient.Timeout = 0 // bounded by the preparation context
 		client = &networkClient
 	}
 	if method == http.MethodPost && (strings.HasSuffix(path, "/mesh-freeze") || strings.HasSuffix(path, "/topology") || strings.HasSuffix(path, "/profile")) {
 		// Mesh control phases supply deadlines across their target peers.
-		freezeClient := *s.client
+		freezeClient := *client
 		freezeClient.Timeout = 0
 		client = &freezeClient
 	}
-	if (method == http.MethodDelete && (strings.HasPrefix(path, "/api/v1/runs/") || path == "/api/v1/nodes")) || strings.HasSuffix(path, "/drain") {
+	if (method == http.MethodDelete && (strings.HasPrefix(path, "/api/v1/runs/") || path == "/api/v1/nodes")) || runDrain {
 		// Removing Docker namespaces/filesystems can exceed the ordinary 10s
 		// control request timeout. The scenario context still bounds cleanup.
-		cleanupClient := *s.client
+		cleanupClient := *client
 		cleanupClient.Timeout = 190 * time.Second
 		client = &cleanupClient
 	}
@@ -1498,6 +1533,11 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 			return &topologyAgentError{status: resp.StatusCode, message: fmt.Sprintf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))}
 		}
 		responseErr := fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
+		if runDrain && resp.StatusCode == http.StatusServiceUnavailable {
+			if pending := parseRunDrainPending(message); pending != nil {
+				return pending
+			}
+		}
 		if method == http.MethodPost && path == "/api/v1/nodes" && resp.StatusCode >= 500 && resp.StatusCode < 600 {
 			// A server or intermediary failure may follow successful admission.
 			// Only the explicit pre-admission responses above prove otherwise.

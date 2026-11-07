@@ -39,12 +39,15 @@ func TestSlowTelemetryDoesNotDelayAgentHeartbeat(t *testing.T) {
 		go func() { defer close(done); s.controlLoop(ctx) }()
 		defer func() { cancel(); <-done }()
 		synctest.Wait()
-		time.Sleep(20 * time.Second)
+		// Observe multiple failed delivery attempts even when telemetry requests
+		// have a longer timeout than ordinary heartbeat/control requests.
+		observation := 2*telemetryDeliveryTimeout + 10*time.Second
+		time.Sleep(observation)
 		synctest.Wait()
 		if flushes < 2 {
 			t.Fatal("telemetry stalls were not exercised")
 		}
-		if len(heartbeats) != 10 {
+		if len(heartbeats) != int(observation/(2*time.Second)) {
 			t.Fatalf("slow event forwarding suppressed heartbeat: %v", heartbeats)
 		}
 		for i, at := range heartbeats {

@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 const currentAnalysisVersion = 9
@@ -83,6 +85,8 @@ type analysisJob struct {
 	status   analysisJobStatus
 	cancel   context.CancelFunc
 	previous *analysisJobStatus
+	slot     *workSlot
+	done     chan struct{}
 }
 
 // Callers must hold persistMu. If analysisJobMu is needed, acquire it first.
@@ -295,15 +299,14 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	if err != nil {
 		return analysisJobStatus{}, err
 	}
-	if result.State == "queued" {
-		return analysisJobStatus{}, errResultBusy
-	}
+	// A running/queued Run can reserve analysis behind its experiment in the
+	// shared execution queue. Recheck its source state when this job starts.
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return analysisJobStatus{}, err
 	}
 	now := time.Now().UTC()
-	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}}
+	job := &analysisJob{status: analysisJobStatus{Version: 1, AnalysisVersion: currentAnalysisVersion, ID: hex.EncodeToString(nonce[:]), RunID: id, State: "queued", Phase: "queued", CreatedAt: now, UpdatedAt: now}, done: make(chan struct{})}
 	job.status.SavedAnalysisID = existing.status.savedAnalysisID()
 	job.status.ArtifactSlot = existing.status.ArtifactSlot
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
@@ -315,6 +318,7 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	job.cancel = cancel
+	job.slot = s.enqueueWorkLocked(workerCtx, model.WorkQueueItem{Kind: "analysis", Name: result.Name, RunID: id}, cancel)
 	s.analysisJobs[id] = job
 	s.analysisWorkers.Add(1)
 	go s.runAnalysisJob(workerCtx, job)
@@ -323,7 +327,15 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 
 func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 	defer s.analysisWorkers.Done()
+	defer s.finishWork(job.slot)
+	if job.done != nil {
+		defer close(job.done)
+	}
 	err := func() error {
+		if err := s.waitWork(ctx, job.slot); err != nil {
+			return err
+		}
+		s.updateWorkStatus(job.slot.id, "starting", 0)
 		select {
 		case s.analysisSlots <- struct{}{}:
 			defer func() { <-s.analysisSlots }()
@@ -338,6 +350,9 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			return err
 		}
 		defer snapshot.close()
+		if snapshot.active || snapshot.result.State == "running" || snapshot.result.State == "queued" {
+			return errResultBusy
+		}
 		var total int64
 		hashTotal := analysisSourceSampleBytes(snapshot.files)
 		for _, file := range snapshot.files {
@@ -378,6 +393,7 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			if phaseTotal > 0 {
 				job.status.Progress = min(100, 100*float64(processed)/float64(phaseTotal))
 			}
+			s.updateWorkStatus(job.slot.id, phase, job.status.Progress)
 			// Persist once per second; a failed write is reported at finalization too.
 			if err := s.persistAnalysisJob(job.status); err != nil {
 				s.logger.Warn("persist analysis progress", "run", job.status.RunID, "error", err)
@@ -574,6 +590,10 @@ func (s *Server) handleAnalysisJob(ctx context.Context) http.HandlerFunc {
 }
 
 func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, id string) {
+	s.serveAnalysisArtifact(w, r, id, true)
+}
+
+func (s *Server) serveAnalysisArtifact(w http.ResponseWriter, r *http.Request, id string, attachment bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		methodNotAllowed(w)
 		return
@@ -630,6 +650,34 @@ func (s *Server) handleAnalysisArtifact(w http.ResponseWriter, r *http.Request, 
 	}
 	defer file.close()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-analysis.json"`, id))
+	if attachment {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-analysis.json"`, id))
+	}
 	http.ServeContent(w, r, id+"-analysis.json", file.info.ModTime(), file.file)
+}
+
+// Synchronous legacy callers wait for the same durable, deduplicated job as
+// POST clients. Canceling their HTTP wait never cancels work shared by others.
+func (s *Server) waitAnalysisJob(ctx context.Context, id string) (analysisJobStatus, error) {
+	for {
+		s.analysisJobMu.Lock()
+		job, err := s.loadAnalysisJob(id)
+		if err != nil {
+			s.analysisJobMu.Unlock()
+			return analysisJobStatus{}, err
+		}
+		status, done := job.status, job.done
+		s.analysisJobMu.Unlock()
+		if status.State == "completed" {
+			return status, nil
+		}
+		if status.State != "queued" && status.State != "running" {
+			return status, errors.New(status.Error)
+		}
+		select {
+		case <-ctx.Done():
+			return status, ctx.Err()
+		case <-done:
+		}
+	}
 }

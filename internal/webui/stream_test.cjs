@@ -94,9 +94,10 @@ test('one connection receives the initial snapshot and merges only changed rows,
   streams[0].receive('snapshot_delta', {
     generatedAt:'two', nodes:{remove:['n1'],upsert:[{id:'n3'}],order:['n3','n2']},
     experiments:{upsert:[{id:'r2',state:'running'},{id:'r1',state:'completed'}],order:['r2','r1']},
-    edges:[],events:[],metrics:{runId:'r2'},
+    edges:[],events:[],metrics:{runId:'r2'},workQueue:[{id:'analysis',kind:'analysis',state:'running',position:0}],
   });
   assert.deepEqual(plain(state.snapshot.nodes),[{id:'n3'},{id:'n2'}]);
+  assert.deepEqual(plain(state.snapshot.workQueue),[{id:'analysis',kind:'analysis',state:'running',position:0}]);
   assert.deepEqual(plain(state.snapshot.agents),original.agents);
   assert.deepEqual(plain(state.snapshot.experiments),[{id:'r2',state:'running'},{id:'r1',state:'completed'}]);
   assert.deepEqual(plain(state.snapshot.edges),[]);

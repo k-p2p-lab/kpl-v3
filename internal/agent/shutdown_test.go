@@ -60,6 +60,13 @@ func TestAgentRunReportsShutdownCleanupFailure(t *testing.T) {
 				t.Fatal("Agent did not finish shutdown")
 			}
 			waitDockerCall(t, path, "rm")
+			replacement, err := New(s.config, s.logger)
+			if err != nil {
+				t.Fatalf("Run returned without releasing Agent data ownership: %v", err)
+			}
+			if err := replacement.Close(); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }

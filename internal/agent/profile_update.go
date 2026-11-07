@@ -108,7 +108,7 @@ func (s *Server) proxyProfileUpdate(ctx context.Context, nodeID string, request 
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
 	dispatched = true
-	resp, err := s.client.Do(req)
+	resp, err := mutationHTTPClient(s.client).Do(req)
 	if err != nil {
 		return result, err
 	}

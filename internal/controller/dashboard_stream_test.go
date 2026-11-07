@@ -152,6 +152,7 @@ func TestDashboardDeltaReconstructsSkippedFramesAndRemovals(t *testing.T) {
 	base.Edges = []model.Edge{}
 	base.Events = []model.TraceEvent{{Type: "new", NodeID: "n3"}}
 	base.Metrics.RunID = "r2"
+	base.WorkQueue = []model.WorkQueueItem{{ID: "analysis-work", Kind: "analysis", Name: "Result analysis", State: "running", Position: 0}}
 	last, err := newDashboardFrame(base, base.GeneratedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +175,7 @@ func TestDashboardDeltaReconstructsSkippedFramesAndRemovals(t *testing.T) {
 		t.Fatalf("delta did not reconstruct full snapshot: %s", patch)
 	}
 	base.Nodes, base.Experiments, base.Agents = []model.Node{}, []model.Experiment{}, []model.Agent{}
+	base.WorkQueue = []model.WorkQueueItem{}
 	empty, _ := newDashboardFrame(base, base.GeneratedAt)
 	patch, _ = empty.delta(last)
 	if err := json.Unmarshal(applyDashboardTestPatch(t, last.data, patch), &got); err != nil {

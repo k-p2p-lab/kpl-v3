@@ -27,13 +27,97 @@ function harness(api, configuration={}) {
     for(const entry of listeners.get('change')||[])entry.handler({target:element});
     return element.checked;
   }
-  return {groups,initialized,items,action,check,changes:()=>changes,listeners};
+  function master(scope, checked) {
+    const element={checked,dataset:{libraryScope:scope},matches:selector=>selector==='[data-library-select-visible]'};
+    for(const entry of listeners.get('change')||[])entry.handler({target:element});
+    return element.checked;
+  }
+  function filter(id, checked) {
+    const element={checked,dataset:{libraryGroupFilter:id},matches:selector=>selector==='[data-library-group-filter]'};
+    for(const entry of listeners.get('change')||[])entry.handler({target:element});
+  }
+  return {groups,initialized,items,action,check,master,filter,changes:()=>changes,listeners};
 }
+
+test('visible item checkboxes start selection immediately and the final uncheck restores the editor',async()=>{
+  let changes=0;
+  const h=harness(async()=>initial(),{onSelectionChanged:()=>changes++});await h.initialized;
+  assert.match(h.groups.selectionMarkup('scenario:one','One'),/type="checkbox"/);
+  h.check('scenario:one',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  h.check('batch:one',true);
+  assert.equal(h.groups.getSelection('scenarios'),null);
+  assert.deepEqual(h.groups.getSelection('results'),['batch:one']);
+  assert.doesNotMatch(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
+  h.check('batch:one',false);
+  assert.equal(h.groups.getSelection('results'),null);
+  assert.equal(changes,3);
+});
+
+test('master checkbox reflects partial selection and toggles only visible search matches',async()=>{
+  const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  let visible=['scenario:one','scenario:two'];
+  const h=harness(async()=>initial(),{bars:{'#scenarioGroupTools':bar},getVisibleKeys:()=>visible});await h.initialized;
+  h.check('scenario:one',true);
+  assert.match(bar.innerHTML,/data-library-select-visible[^>]*data-library-mixed="true"/);
+  h.master('scenarios',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one','scenario:two']);
+  assert.match(bar.innerHTML,/data-library-select-visible[^>]* checked/);
+  visible=['scenario:two'];h.groups.refreshUI();
+  assert.match(bar.innerHTML,/2 selected · 1 hidden/);
+  h.master('scenarios',false);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  assert.doesNotMatch(bar.innerHTML,/data-library-select-visible[^>]* checked/);
+  h.master('scenarios',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one','scenario:two']);
+  await h.action('clear');
+  assert.equal(h.groups.getSelection('scenarios'),null);
+});
+
+test('group checkbox menu combines groups and Ungrouped and clears hidden selections',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const h=harness(async()=>initial(),{bars});await h.initialized;
+  h.check('scenario:one',true);
+  h.filter('g2',false); // All groups minus Experiment B
+  assert.equal(h.groups.getSelection('scenarios'),null);
+  assert.equal(h.groups.matches('scenario:one'),true);
+  assert.equal(h.groups.matches('scenario:two'),true);
+  assert.equal(h.groups.matches('run:single'),false);
+  assert.equal(h.groups.getImportGroup(),'');
+  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-group-filter="\*"[^>]*data-library-mixed/);
+  h.filter('',false);
+  assert.equal(h.groups.getImportGroup(),'g1');
+  assert.equal(h.groups.matches('scenario:two'),false);
+  h.filter('g2',true);
+  assert.equal(h.groups.matches('run:single'),true);
+  assert.equal(h.groups.getImportGroup(),'');
+  h.filter('*',false);
+  assert.equal(h.groups.matches('scenario:one'),false);
+  assert.match(bars['#scenarioGroupTools'].innerHTML,/>No groups</);
+  h.filter('*',true);
+  assert.equal(h.groups.isFiltered(),false);
+});
+
+test('checkbox selection honors busy state, canonical keys and the 2000-item limit',async()=>{
+  let busy=false;
+  const h=harness(async()=>initial(),{isExternallyBusy:()=>busy});await h.initialized;
+  h.check('scenario:one',true);busy=true;
+  h.master('results',true);h.filter('g1',false);h.check('scenario:two',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  assert.equal(h.groups.isFiltered(),false);
+  busy=false;h.check('scenario:forged',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  h.items.push(...Array.from({length:2000},(_,i)=>({key:'scenario:extra-'+i})));
+  h.master('scenarios',true);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  h.items.splice(0,h.items.length,...h.items.filter(item=>item.key.startsWith('scenario:')).slice(0,2000));h.master('scenarios',true);
+  assert.equal(h.groups.getSelection('scenarios').length,2000);
+});
 
 test('selection Actions opens deletion confirmation for exactly the checked units',async()=>{
   const requests=[];let locked=false;
   const h=harness(async()=>initial(),{onDeleteSelected:(scope,keys)=>requests.push({scope,keys}),isExternallyBusy:()=>locked});await h.initialized;
-  await h.action('select');h.check('scenario:one',true);h.check('scenario:two',true);
+  h.check('scenario:one',true);h.check('scenario:two',true);
   await h.action('delete-selected');
   assert.deepEqual(requests,[{scope:'scenarios',keys:['scenario:one','scenario:two']}]);
   locked=true;await h.action('delete-selected');assert.equal(requests.length,1);
@@ -45,8 +129,8 @@ test('scenario execution reads a selection snapshot and updates on individual ch
   let changes=0;
   const h=harness(async()=>initial(),{onSelectionChanged:()=>changes++});await h.initialized;
   assert.equal(h.groups.getSelection('scenarios'),null);
-  await h.action('select');
-  assert.deepEqual(h.groups.getSelection('scenarios'),[]);
+
+  assert.equal(h.groups.getSelection('scenarios'),null);
   h.check('scenario:one',true);
   const frozen=h.groups.getSelection('scenarios');
   h.check('scenario:two',true);
@@ -60,13 +144,13 @@ test('registration locks group mutations, filters, downloads and selection until
   let registering=false,downloads=0,writes=0;
   const h=harness(async(path,options)=>{if(options?.method)writes++;return initial();},
     {isExternallyBusy:()=>registering,download:async()=>downloads++});await h.initialized;
-  await h.action('select');h.check('scenario:one',true);
+  h.check('scenario:one',true);
   registering=true;h.groups.refreshUI();
   assert.equal(h.groups.isBusy(),true);
   assert.match(h.groups.selectionMarkup('scenario:one','One'),/ disabled/);
   assert.equal(h.check('scenario:one',false),true);
   assert.equal(h.check('scenario:two',true),false);
-  await h.action('clear');await h.action('select-visible');await h.action('select','results');await h.action('download');
+  await h.action('clear');h.master('scenarios',true);await h.action('download');
   h.groups.setFilter('g2');
   assert.equal(h.groups.isFiltered(),false);
   assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
@@ -74,7 +158,7 @@ test('registration locks group mutations, filters, downloads and selection until
   assert.equal(writes,0);assert.equal(downloads,0);
   registering=false;
   assert.equal(h.groups.isBusy(),false);
-  await h.action('clear');assert.deepEqual(h.groups.getSelection('scenarios'),[]);
+  await h.action('clear');assert.equal(h.groups.getSelection('scenarios'),null);
 });
 
 test('scenario and result filters use one shared group snapshot', async()=>{
@@ -246,10 +330,11 @@ test('selection is scoped and Select visible honors the parent search filter',as
     if(options.method){moved=JSON.parse(options.body);return {...initial(),revision:'2',memberships:{}};}
     return initial();
   },{getVisibleKeys:()=>['scenario:two','run:single','not-a-key']});await h.initialized;
-  await h.action('select');
+
   assert.match(h.groups.selectionMarkup('scenario:one','One'),/type="checkbox"/);
-  assert.equal(h.groups.selectionMarkup('batch:one','Batch'),'');
-  await h.action('select-visible');
+  assert.match(h.groups.selectionMarkup('batch:one','Batch'),/type="checkbox"/);
+  assert.doesNotMatch(h.groups.selectionMarkup('batch:one','Batch'),/ checked/);
+  h.master('scenarios',true);
   assert.match(h.groups.selectionMarkup('scenario:two','Two'),/ checked/);
   assert.doesNotMatch(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
   await h.action('move');
@@ -258,7 +343,7 @@ test('selection is scoped and Select visible honors the parent search filter',as
 });
 
 test('changing the group filter clears selection; list updates drop deleted items',async()=>{
-  const h=harness(async()=>initial());await h.initialized;await h.action('select');
+  const h=harness(async()=>initial());await h.initialized;
   h.check('scenario:one',true);
   assert.match(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
   h.groups.setFilter('g1');
@@ -269,7 +354,7 @@ test('changing the group filter clears selection; list updates drop deleted item
 
 test('selection labels and group badges escape user-controlled names',async()=>{
   const h=harness(async()=>({...initial(),groups:[{id:'g1',name:'<img onerror="x">'},{id:'g2',name:'B'}]}));await h.initialized;
-  await h.action('select');
+
   assert.doesNotMatch(h.groups.badgeMarkup('scenario:one'),/<img/);
   assert.match(h.groups.badgeMarkup('scenario:one'),/&lt;img/);
   assert.match(h.groups.selectionMarkup('scenario:one','"<script>'),/&quot;&lt;script&gt;/);
@@ -281,6 +366,9 @@ test('batch selection clicks do not toggle the surrounding summary',async()=>{
   const capture=h.listeners.get('click').find(item=>item.capture).handler;
   capture({target:{closest:()=>({})},stopPropagation(){stopped=true;},preventDefault(){prevented=true;}});
   assert.equal(stopped,true);assert.equal(prevented,false);
+  stopped=false;
+  capture({target:{closest:selector=>selector==='[data-library-select]'?{}:null},stopPropagation(){stopped=true;}});
+  assert.equal(stopped,false,'ordinary checkbox clicks must reach outside-menu dismissal');
 });
 
 test('bulk moves enforce the server limit and never send an invalid target group',async()=>{
@@ -312,7 +400,7 @@ test('selection downloads preserve selection and suppress duplicate requests whi
   const pending=deferred(),downloads=[];
   const h=harness(async()=>initial(),{download:async(scope,keys)=>{downloads.push({scope,keys});return pending.promise}});
   await h.initialized;
-  await h.action('select','results');
+
   h.check('batch:one',true);
   await h.action('download','results');
   await h.action('download','results');
@@ -325,7 +413,7 @@ test('selection downloads preserve selection and suppress duplicate requests whi
 test('failed download preparation restores controls and leaves the selection retryable',async()=>{
   let attempts=0;
   const h=harness(async()=>initial(),{download:async()=>{attempts++;throw new Error('source unavailable')}});
-  await h.initialized;await h.action('select');h.check('scenario:one',true);
+  await h.initialized;h.check('scenario:one',true);
   await h.action('download');await h.action('download');
   assert.equal(attempts,2);
   assert.match(h.groups.selectionMarkup('scenario:one','One'),/ checked/);
@@ -336,10 +424,10 @@ test('CSV ZIP is limited to Saved Results selection and reports progress without
   const pending=deferred(),downloads=[];
   const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
   const h=harness(async()=>initial(),{bars,download:async()=>{},downloadCSV:(scope,keys,options)=>{downloads.push({scope,keys,options});return pending.promise}});
-  await h.initialized;await h.action('select','scenarios');h.check('scenario:one',true);
+  await h.initialized;h.check('scenario:one',true);
   assert.doesNotMatch(bars['#scenarioGroupTools'].innerHTML,/download-csv/);
   await h.action('download-csv','scenarios');assert.equal(downloads.length,0);
-  await h.action('select','results');h.check('batch:one',true);
+  h.check('batch:one',true);
   assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="download-csv"[^>]*>CSV ZIP/);
   await h.action('download-csv','results');
   assert.equal(downloads.length,1);
@@ -347,7 +435,7 @@ test('CSV ZIP is limited to Saved Results selection and reports progress without
   downloads[0].options.onProgress('CSV ZIP 1/2 · <unsafe>');
   assert.match(bars['#resultGroupTools'].innerHTML,/CSV ZIP 1\/2 · &lt;unsafe&gt;/);
   assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="cancel-download"/);
-  await h.action('download-csv','results');await h.action('select','results');await h.action('clear','results');
+  await h.action('download-csv','results');await h.action('clear','results');
   assert.equal(downloads.length,1);
   assert.match(h.groups.selectionMarkup('batch:one','One'),/ checked/);
   pending.resolve();await nextTurn();
@@ -363,7 +451,7 @@ test('canceling CSV ZIP unlocks selection and leaves accepted server analysis ru
     signal=options.signal;
     return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('Canceled','AbortError'))));
   }});
-  await h.initialized;await h.action('select','results');h.check('run:single',true);
+  await h.initialized;h.check('run:single',true);
   await h.action('download-csv','results');
   assert.equal(signal.aborted,false);
   await h.action('cancel-download','results');
@@ -376,7 +464,7 @@ test('canceling CSV ZIP unlocks selection and leaves accepted server analysis ru
 test('CSV export errors keep selected results retryable and preserve original ZIP action',async()=>{
   let csvAttempts=0,original=0;
   const h=harness(async()=>initial(),{download:async()=>{original++},downloadCSV:async()=>{csvAttempts++;throw new Error('analysis unavailable')}});
-  await h.initialized;await h.action('select','results');h.check('batch:one',true);
+  await h.initialized;h.check('batch:one',true);
   await h.action('download-csv','results');await h.action('download-csv','results');
   assert.equal(csvAttempts,2);
   await h.action('download','results');assert.equal(original,1);
@@ -387,15 +475,15 @@ test('one Download dropdown offers the three result formats and only YAML for sc
   const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
   let refreshes=0;
   const h=harness(async()=>initial(),{bars,download:async()=>{},downloadCSV:async()=>{},downloadJSON:async()=>{},actionMenus:{refresh(){refreshes++}}});
-  await h.initialized;await h.action('select','results');
+  await h.initialized;
   let html=bars['#resultGroupTools'].innerHTML;
-  assert.match(html,/data-action-menu-toggle="library-download:results"[^>]* disabled/);
+  assert.doesNotMatch(html,/data-action-menu-toggle="library-download:results"/);
   h.check('batch:one',true);html=bars['#resultGroupTools'].innerHTML;
   assert.match(html,/class="action-menu" data-action-menu="library-download:results"/);
-  assert.equal((html.match(/data-action-menu-toggle=/g)||[]).length,1);
+  assert.equal((html.match(/data-action-menu-toggle="library-download:/g)||[]).length,1);
   assert.match(html,/data-action-menu-toggle="library-download:results" aria-expanded="false">Actions/);
   assert.match(html,/class="action-menu-items">[\s\S]*>Results ZIP<\/button>[\s\S]*>CSV ZIP<\/button>[\s\S]*>Analysis JSON ZIP<\/button>/);
-  await h.action('select','scenarios');h.check('scenario:one',true);html=bars['#scenarioGroupTools'].innerHTML;
+  h.check('scenario:one',true);html=bars['#scenarioGroupTools'].innerHTML;
   assert.match(html,/data-action-menu-toggle="library-download:scenarios"/);
   assert.match(html,/>Scenarios ZIP<\/button>/);
   assert.doesNotMatch(html,/download-json|download-csv/);
@@ -404,14 +492,14 @@ test('one Download dropdown offers the three result formats and only YAML for sc
 
 test('JSON menu export supports progress and cancel, blocks all other formats and restores trigger focus',async()=>{
   const calls=[];let cancelFocus=0,triggerFocus=0;
-  const bar={innerHTML:'',contains:()=>false,querySelector:selector=>({focus(){if(selector.includes('cancel-download'))cancelFocus++;else if(selector.includes('action-menu-toggle'))triggerFocus++}})};
+  const bar={innerHTML:'',contains:()=>false,querySelector:selector=> /cancel-download|action-menu-toggle/.test(selector) ? {focus(){if(selector.includes('cancel-download'))cancelFocus++;else if(selector.includes('action-menu-toggle'))triggerFocus++}} : null};
   const h=harness(async()=>initial(),{bars:{'#resultGroupTools':bar},download:async()=>{calls.push('raw')},downloadCSV:async()=>{calls.push('csv')},downloadJSON:(scope,keys,options)=>{
     calls.push({scope,keys,options});
     return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Canceled','AbortError'))));
   }});
-  await h.initialized;await h.action('select','scenarios');h.check('scenario:one',true);
+  await h.initialized;h.check('scenario:one',true);
   await h.action('download-json','scenarios');assert.equal(calls.length,0);
-  await h.action('select','results');h.check('batch:one',true);
+  h.check('batch:one',true);
   await h.action('download-json','results');assert.equal(calls.length,1);
   assert.deepEqual(calls[0].keys,['batch:one']);assert.equal(calls[0].scope,'results');
   assert.equal(cancelFocus,1);
@@ -431,7 +519,7 @@ test('JSON menu export supports progress and cancel, blocks all other formats an
 test('JSON failure keeps selection retryable and leaves the existing download formats available',async()=>{
   let failures=0,csv=0,raw=0;
   const h=harness(async()=>initial(),{download:async()=>raw++,downloadCSV:async()=>csv++,downloadJSON:async()=>{failures++;throw new Error('analysis unavailable')}});
-  await h.initialized;await h.action('select','results');h.check('run:single',true);
+  await h.initialized;h.check('run:single',true);
   await h.action('download-json','results');await h.action('download-json','results');
   await h.action('download-csv','results');await h.action('download','results');
   assert.equal(failures,2);assert.equal(csv,1);assert.equal(raw,1);

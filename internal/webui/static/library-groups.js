@@ -8,7 +8,7 @@
   function createLibraryGroups(environment = root) {
     const document = environment.document;
     let options, initialized = false, snapshot = {revision: "0", groups: [], memberships: {}}, loaded = false;
-    let filter = "*", selectionScope = "", selected = new Set(), targetGroup = "";
+    let filters = new Set(["*"]), selectionScope = "", selected = new Set(), targetGroup = "";
     let readTask = null, mutationTask = null, epoch = 0, busy = false, needsRefresh = false;
     let errorText = "", noticeText = "", dialog = null, returnFocus = null, returnScope = "", editing = "", confirming = false;
     let analysisDownloadController = null;
@@ -32,7 +32,8 @@
 
     function groupFor(key) { return snapshot.memberships[key] || ""; }
     function getGroupName(id) { return snapshot.groups.find(group => group.id === id)?.name || ""; }
-    function matches(key) { return filter === "*" || groupFor(key) === filter; }
+    function matches(key) { return filters.has("*") || filters.has(groupFor(key)); }
+    function importGroup() { return loaded && filters.size === 1 && !filters.has("*") ? [...filters][0] : ""; }
     function locked() { return busy || Boolean(options?.isExternallyBusy?.()); }
     function ready() { return loaded && !locked() && !needsRefresh; }
     function changed() { options?.onChanged?.(); }
@@ -63,7 +64,9 @@
       snapshot = next;
       loaded = true;
       needsRefresh = false;
-      if (filter !== "*" && filter && !getGroupName(filter)) filter = "";
+      const removed = [...filters].filter(id => id !== "*" && id && !getGroupName(id));
+      for (const id of removed) filters.delete(id);
+      if (removed.length && !filters.size) filters.add("");
       if (targetGroup && !getGroupName(targetGroup)) targetGroup = "";
       if (editing && !getGroupName(editing)) { editing = ""; confirming = false; }
       refreshUI();
@@ -178,18 +181,53 @@
     function setFilter(id) {
       if (locked()) return;
       if (id !== "*" && id && !getGroupName(id)) return;
-      if (filter === id) return;
-      filter = id;
+      if (filters.size === 1 && filters.has(id)) return;
+      filters = new Set([id]);
+      filterChanged();
+    }
+
+    function filterChanged() {
       selected.clear();
+      selectionScope = "";
       errorText = "";
       noticeText = "";
       refreshUI();
       changed();
     }
 
+    function checkFilter(id, checked) {
+      if (!loaded || locked()) return;
+      if (id === "*") filters = checked ? new Set(["*"]) : new Set();
+      else {
+        const ids = ["", ...snapshot.groups.map(group => group.id)];
+        if (!ids.includes(id)) return;
+        if (filters.has("*")) filters = new Set(ids);
+        if (checked) filters.add(id); else filters.delete(id);
+        if (ids.every(value => filters.has(value))) filters = new Set(["*"]);
+      }
+      filterChanged();
+    }
+
+    function visibleKeys(scope, allItems = items()) {
+      const valid = new Set(allItems.filter(item => item.scope === scope && matches(item.key)).map(item => item.key));
+      return [...new Set(options?.getVisibleKeys?.(scope) || [...valid])].filter(key => valid.has(key));
+    }
+
+    function checkVisible(scope, checked) {
+      if (!ready() || !["scenarios", "results"].includes(scope)) return;
+      const keys = visibleKeys(scope);
+      const next = selectionScope === scope ? new Set(selected) : new Set();
+      for (const key of keys) { if (checked) next.add(key); else next.delete(key); }
+      if (next.size > maxSelection) throw new Error("Select up to 2,000 items at a time. Narrow the list or select fewer items.");
+      if (selectionScope !== scope) targetGroup = importGroup();
+      selected = next;
+      selectionScope = selected.size ? scope : "";
+      refreshUI();
+      changed();
+    }
+
     function selectionMarkup(key, label) {
-      if (selectionScope !== scopeFor(key)) return "";
-      return '<label class="library-item-select" data-library-select title="Select item"><input type="checkbox" data-library-select-key="' + escape(key) + '" aria-label="Select ' + escape(label) + '"' + (selected.has(key) ? " checked" : "") + (locked() ? " disabled" : "") + '></label>';
+      return '<label class="library-item-select" data-library-select title="Select item"><input type="checkbox" data-library-select-key="' + escape(key) + '" aria-label="Select ' + escape(label) + '"' + (selected.has(key) ? " checked" : "") + (ready() ? "" : " disabled") + '></label>';
     }
 
     function badgeMarkup(key) {
@@ -197,9 +235,16 @@
       return name ? '<span class="library-group-badge" title="Group: ' + escape(name) + '">' + escape(name) + "</span>" : "";
     }
 
-    function groupOptions(value, {all = false, counts = null} = {}) {
-      const option = (id, name) => '<option value="' + escape(id) + '"' + (value === id ? " selected" : "") + ">" + escape(name) + (counts ? " (" + (counts.get(id) || 0) + ")" : "") + "</option>";
-      return (all ? option("*", "All groups") : "") + option("", "Ungrouped") + snapshot.groups.map(group => option(group.id, group.name)).join("");
+    function groupOptions(value) {
+      const option = (id, name) => '<option value="' + escape(id) + '"' + (value === id ? " selected" : "") + ">" + escape(name) + "</option>";
+      return option("", "Ungrouped") + snapshot.groups.map(group => option(group.id, group.name)).join("");
+    }
+
+    function filterMarkup(scope, counts) {
+      const all = filters.has("*");
+      const summary = all ? "All groups" : filters.size === 1 ? (getGroupName([...filters][0]) || "Ungrouped") : filters.size ? filters.size + " groups" : "No groups";
+      const checkbox = (id, name) => '<label class="library-filter-option"><input type="checkbox" data-library-group-filter="' + escape(id) + '" aria-label="Show ' + escape(name) + '"' + (all || filters.has(id) ? " checked" : "") + (id === "*" && !all && filters.size ? ' data-library-mixed="true"' : "") + (loaded && !locked() ? "" : " disabled") + '><span>' + escape(name) + '</span><span class="library-filter-count">' + (counts.get(id) || 0) + '</span></label>';
+      return '<span class="action-menu library-filter-menu" data-library-filter-menu data-action-menu="library-filter:' + scope + '"><button class="secondary-button" type="button" data-action-menu-toggle="library-filter:' + scope + '" aria-expanded="false" aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>Groups <span class="library-filter-summary">' + escape(summary) + '</span></button><span class="action-menu-items library-filter-options" role="group" aria-label="Filter ' + scope + ' by group">' + checkbox("*", "All groups") + checkbox("", "Ungrouped") + snapshot.groups.map(group => checkbox(group.id, group.name)).join("") + '</span></span>';
     }
 
     function renderBars(allItems) {
@@ -213,6 +258,8 @@
           counts.set("*", counts.get("*") + 1);
         }
         const selecting = selectionScope === scope;
+        const keys = visibleKeys(scope, allItems), checkedCount = selecting ? keys.filter(key => selected.has(key)).length : 0;
+        const allChecked = keys.length > 0 && checkedCount === keys.length, mixed = checkedCount > 0 && !allChecked;
         const disabled = ready() ? "" : " disabled";
         const canDownload = selected.size && ready();
         const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON))
@@ -224,13 +271,31 @@
             + (options?.onDeleteSelected ? '<button class="library-delete-action" type="button" data-library-action="delete-selected"' + (canDownload ? "" : " disabled") + '>Delete selected…</button>' : "")
             + '</span></span>'
             + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
-        const html = '<div class="library-group-toolbar"><label class="library-group-filter"><span>Group</span><select data-library-filter aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>' + groupOptions(filter, {all: true, counts}) + '</select></label><div class="library-group-actions"><button class="secondary-button" type="button" data-library-action="manage">Groups</button><button class="secondary-button" type="button" data-library-action="select" data-library-scope="' + scope + '" aria-pressed="' + selecting + '"' + disabled + '>' + (selecting ? "Done" : "Select") + '</button></div></div>' +
-          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span aria-live="polite">' + selected.size + ' selected</span><button class="library-text-button" type="button" data-library-action="select-visible" data-library-scope="' + scope + '"' + disabled + '>Select visible</button><button class="library-text-button" type="button" data-library-action="clear"' + (selected.size && !locked() ? "" : " disabled") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + downloadControls + '</div>' : "") +
+        const html = '<div class="library-group-toolbar"><label class="library-select-all" data-library-select><input type="checkbox" data-library-select-visible data-library-scope="' + scope + '" aria-label="Select visible ' + scope + '"' + (allChecked ? " checked" : "") + (mixed ? ' data-library-mixed="true"' : "") + (!keys.length || !ready() ? " disabled" : "") + '><span>Select visible</span><span class="library-filter-count">' + keys.length + '</span></label><div class="library-group-actions">' + filterMarkup(scope, counts) + '<button class="secondary-button" type="button" data-library-action="manage" aria-label="Manage shared groups">Manage</button></div></div>' +
+          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span role="status" aria-live="polite">' + selected.size + ' selected' + (selected.size > checkedCount ? ' · ' + (selected.size - checkedCount) + ' hidden' : '') + '</span><button class="library-text-button" type="button" data-library-action="clear"' + (locked() ? " disabled" : "") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + downloadControls + '</div>' : "") +
           (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (locked() ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
         const active = document.activeElement;
-        const focusKind = container.contains(active) ? active?.hasAttribute("data-library-filter") ? "[data-library-filter]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : active?.hasAttribute("data-action-menu-toggle") ? "[data-action-menu-toggle]" : "" : "";
+        const focusKind = container.contains(active) ? active?.hasAttribute("data-library-select-visible") ? "[data-library-select-visible]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : active?.hasAttribute("data-action-menu-toggle") ? '[data-action-menu-toggle="' + active.dataset.actionMenuToggle + '"]' : "" : "";
+        const filterFocus = container.contains(active) ? active?.getAttribute?.("data-library-group-filter") : null;
+        const filterMenu = container.querySelector("[data-library-filter-menu]");
+        const filterOpen = filterMenu?.classList?.contains("is-open");
+        const filterScroll = filterMenu?.querySelector(".action-menu-items")?.scrollTop || 0;
         if (setMarkup(container, html)) {
+          if (filterOpen) {
+            const menu = container.querySelector("[data-library-filter-menu]");
+            menu?.classList.add("is-open");
+            const panel = menu?.querySelector(".action-menu-items");
+            if (panel) panel.scrollTop = filterScroll;
+          }
           if (focusKind) container.querySelector(focusKind)?.focus({preventScroll: true});
+          if (filterFocus != null) [...(container.querySelectorAll?.("[data-library-group-filter]") || [])].find(input => input.getAttribute("data-library-group-filter") === filterFocus)?.focus({preventScroll: true});
+        }
+        const master = container.querySelector("[data-library-select-visible]");
+        if (master) { master.checked = allChecked; master.indeterminate = mixed; }
+        for (const input of container.querySelectorAll?.("[data-library-group-filter]") || []) {
+          const id = input.dataset.libraryGroupFilter;
+          input.checked = filters.has("*") || filters.has(id);
+          input.indeterminate = id === "*" && !filters.has("*") && filters.size > 0;
         }
       }
       environment.KPLActionMenus?.refresh();
@@ -294,11 +359,13 @@
     function refreshUI() {
       const allItems = items();
       const available = new Set(allItems.map(item => item.key));
+      const hadSelection = selected.size > 0;
       for (const key of selected) if (!available.has(key)) selected.delete(key);
+      if (hadSelection && !selected.size) selectionScope = "";
       renderBars(allItems);
       renderDialog(allItems);
       for (const input of document?.querySelectorAll?.("[data-library-select-key]") || []) {
-        input.disabled = locked();
+        input.disabled = !ready();
         input.checked = selected.has(input.dataset.librarySelectKey);
       }
     }
@@ -318,7 +385,7 @@
           analysisDownloadController?.abort();
           return;
         }
-        if (locked() && ["select", "clear", "select-visible", "download", "download-csv", "download-json", "delete-selected", "move"].includes(action)) return;
+        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -332,22 +399,9 @@
         } else if (action === "refresh") {
           noticeText = "";
           await refresh();
-        } else if (action === "select") {
-          selectionScope = selectionScope === button.dataset.libraryScope ? "" : button.dataset.libraryScope;
-          selected.clear();
-          targetGroup = filter === "*" ? "" : filter;
-          refreshUI();
-          changed();
         } else if (action === "clear") {
           selected.clear();
-          refreshUI();
-          changed();
-        } else if (action === "select-visible") {
-          const scope = button.dataset.libraryScope;
-          const valid = new Set(items().filter(item => item.scope === scope && matches(item.key)).map(item => item.key));
-          const keys = [...new Set(options.getVisibleKeys?.(scope) || [...valid])].filter(key => valid.has(key));
-          if (keys.length > maxSelection) throw new Error("Select up to 2,000 items at a time. Narrow the list or select fewer items.");
-          selected = new Set(keys);
+          selectionScope = "";
           refreshUI();
           changed();
         } else if (action === "delete-selected") {
@@ -381,11 +435,12 @@
             options?.onSelectionChanged?.();
             refreshUI();
             document?.querySelector(scope === "results" ? "#resultGroupTools" : "#scenarioGroupTools")
-              ?.querySelector("[data-action-menu-toggle]")?.focus({preventScroll:true});
+              ?.querySelector('[data-action-menu-toggle="library-download:' + scope + '"]')?.focus({preventScroll:true});
           }
         } else if (action === "move") {
           await assign([...selected], targetGroup);
           selected.clear();
+          selectionScope = "";
           refreshUI();
           changed();
         } else if (action === "edit") {
@@ -431,22 +486,32 @@
       if (!initialized) {
         initialized = true;
         document?.addEventListener("click", event => {
-          if (event.target.closest?.("[data-library-select]")) event.stopPropagation();
+          if (event.target.closest?.("[data-library-select]") && event.target.closest?.("summary")) event.stopPropagation();
         }, true);
         document?.addEventListener("click", event => { void click(event); });
         document?.addEventListener("submit", event => { void submit(event); });
         document?.addEventListener("change", event => {
           const element = event.target;
-          if (element.matches?.("[data-library-filter]")) setFilter(element.value);
+          if (element.matches?.("[data-library-group-filter]")) {
+            if (!loaded || locked()) { refreshUI(); return; }
+            checkFilter(element.dataset.libraryGroupFilter, element.checked);
+          } else if (element.matches?.("[data-library-select-visible]")) {
+            if (!ready()) { refreshUI(); return; }
+            try { checkVisible(element.dataset.libraryScope, element.checked); }
+            catch (error) { element.checked = false; showError(error); }
+          }
           else if (element.matches?.("[data-library-move-target]")) targetGroup = element.value;
           else if (element.matches?.("[data-library-select-key]")) {
             const key = element.dataset.librarySelectKey;
-            if (locked() || selectionScope !== scopeFor(key)) { element.checked = selected.has(key); return; }
+            if (!ready() || !items().some(item => item.key === key) || !matches(key)) { element.checked = selected.has(key); return; }
+            if (!element.checked && selectionScope !== scopeFor(key)) return;
+            if (selectionScope !== scopeFor(key)) { selected.clear(); selectionScope = scopeFor(key); targetGroup = importGroup(); }
             if (element.checked) {
               if (selected.size >= maxSelection) { element.checked = false; showError(new Error("Select up to 2,000 items at a time.")); return; }
               selected.add(key);
             } else selected.delete(key);
-            renderBars(items());
+            if (!selected.size) selectionScope = "";
+            refreshUI();
             options?.onSelectionChanged?.();
           }
         });
@@ -456,9 +521,9 @@
     }
 
     return {init, refresh, refreshUI, matches, selectionMarkup, badgeMarkup, getGroupName, assign, setFilter,
-      forgetSelection: keys => { for (const key of keys) selected.delete(key); refreshUI(); changed(); },
+      forgetSelection: keys => { for (const key of keys) selected.delete(key); if (!selected.size) selectionScope = ""; refreshUI(); changed(); },
       getSelection: scope => selectionScope === scope ? [...selected] : null, isBusy: locked,
-      isFiltered: () => filter !== "*", getImportGroup: () => loaded && filter !== "*" ? filter : ""};
+      isFiltered: () => !filters.has("*"), getImportGroup: importGroup};
   }
 
   if (typeof module !== "undefined" && module.exports) module.exports = {createLibraryGroups};

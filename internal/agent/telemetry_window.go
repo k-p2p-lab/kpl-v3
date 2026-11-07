@@ -12,6 +12,8 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
+const telemetryDeliveryTimeout = 30 * time.Second
+
 func telemetryEncodedSize(events []model.TraceEvent) (int64, error) {
 	var size int64
 	for _, event := range events {
@@ -60,7 +62,7 @@ func (s *Server) flushSpoolEventsLocked(ctx context.Context) {
 	s.eventsInFlight = count
 	s.inFlightBytes = int64(len(data))
 	s.eventsMu.Unlock()
-	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	flushCtx, cancel := context.WithTimeout(ctx, telemetryDeliveryTimeout)
 	defer cancel()
 	err = s.postData(flushCtx, "/api/v1/events/batch", data, nil)
 	s.eventsMu.Lock()

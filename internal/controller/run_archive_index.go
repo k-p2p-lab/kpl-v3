@@ -478,17 +478,7 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 			return err
 		}
 		s.archiveProgress()
-		err = removeResultDirectory(archive, id)
-		if errors.Is(err, os.ErrNotExist) {
-			err = nil
-		}
-		if err == nil {
-			s.archiveProgress()
-			stageErr := removeResultDirectory(archive, ".incoming-"+id)
-			if stageErr != nil && !errors.Is(stageErr, os.ErrNotExist) {
-				err = stageErr
-			}
-		}
+		err = s.removeArchivedResult(archive, id)
 		archive.Close()
 		if err != nil {
 			recordError(id, err)
@@ -496,11 +486,26 @@ func (s *Server) cleanDeletedArchives(ctx context.Context) error {
 		}
 		s.archiveProgress()
 		s.setArchivePhase("preparing")
-		if err := done.WriteFile(id, []byte("removed\n"), 0600); err != nil {
+		if err := writeImportedMetadata(done, id, []byte("removed\n")); err != nil {
+			recordError(id, err)
+		} else if err := syncRunDirectory(done); err != nil {
 			recordError(id, err)
 		}
 	}
 	return firstError
+}
+
+// A local completion marker prevents future cleanup attempts. Persist the NAS
+// directory removals first so a server crash cannot restore remote entries after
+// the Controller has already recorded them as permanently removed.
+func (s *Server) removeArchivedResult(archive *os.Root, id string) error {
+	for _, name := range []string{id, ".incoming-" + id} {
+		if err := removeResultDirectory(archive, name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		s.archiveProgress()
+	}
+	return syncRunDirectory(archive)
 }
 
 func readArchiveIdentity(root *os.Root) ([]byte, error) {

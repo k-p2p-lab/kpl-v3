@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -15,50 +16,19 @@ import (
 // Existing batch manifests/receipts retain accepted work across browser loss;
 // after Controller restart unfinished records follow manual recovery as before.
 func (s *Server) enqueueExperimentsLocked(ctx context.Context, batch *repeatBatch, runs []model.Experiment, spec scenario.Scenario) {
-	batch.ready = make(chan struct{})
 	for _, run := range runs {
 		batch.queuedIDs = append(batch.queuedIDs, run.ID)
 	}
-	s.experimentQueue = append(s.experimentQueue, batch)
+	batch.slot = s.enqueueWorkLocked(ctx, model.WorkQueueItem{Kind: "experiment", Name: runs[0].Name, RunID: runs[0].ID, BatchID: runs[0].BatchID}, batch.cancel)
+	batch.slot.batch = batch
 	s.updateQueuePositionsLocked()
-	if len(s.experimentQueue) == 1 {
-		close(batch.ready)
-	}
 	s.runs.Add(1)
 	go s.runRepeatedScenarios(ctx, batch, runs, spec)
 }
 
-func (s *Server) updateQueuePositionsLocked() {
-	s.state.mu.Lock()
-	for position, batch := range s.experimentQueue {
-		for _, id := range batch.queuedIDs {
-			run := s.state.experiments[id]
-			run.QueuePosition = position
-			s.state.experiments[id] = run
-		}
-	}
-	s.state.mu.Unlock()
-	s.state.notify()
-}
-
 // Called after the scheduler retires its cancellation handles and timing state.
 func (s *Server) finishQueuedExperimentsLocked(batch *repeatBatch) {
-	index := slices.Index(s.experimentQueue, batch)
-	if index < 0 {
-		return
-	}
-	s.experimentQueue = slices.Delete(s.experimentQueue, index, index+1)
-	s.state.mu.Lock()
-	for _, id := range batch.queuedIDs {
-		run := s.state.experiments[id]
-		run.QueuePosition = 0
-		s.state.experiments[id] = run
-	}
-	s.state.mu.Unlock()
-	s.updateQueuePositionsLocked()
-	if index == 0 && len(s.experimentQueue) > 0 {
-		close(s.experimentQueue[0].ready)
-	}
+	s.finishWorkLocked(batch.slot)
 }
 
 func (s *Server) rememberQueueCleanupLocked(id string) {
@@ -70,16 +40,21 @@ func (s *Server) rememberQueueCleanupLocked(id string) {
 // Only the head of the queue enters this method. Failed cleanup stays a barrier
 // even if that head is canceled. Ownership records survive result deletion, so
 // removing a failed result cannot lose the Agent addresses needed for fencing.
-func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec scenario.Scenario) error {
+func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec scenario.Scenario, progress ...func(string)) error {
 	s.cancelMu.Lock()
 	ids := slices.Clone(s.queueCleanup)
 	s.cancelMu.Unlock()
 	if len(ids) == 0 {
 		return ctx.Err()
 	}
-	s.updateExperiment(waitingID, func(run *model.Experiment) {
-		run.PhaseName = "Waiting for previous Peer cleanup"
-	})
+	phase := func(value string) {
+		if len(progress) > 0 && progress[0] != nil {
+			progress[0](value)
+		} else if waitingID != "" {
+			s.updateExperiment(waitingID, func(run *model.Experiment) { run.PhaseName = value })
+		}
+	}
+	phase("Waiting for previous Peer cleanup")
 	previousError := ""
 	for {
 		if err := ctx.Err(); err != nil {
@@ -117,10 +92,13 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 					}
 				})
 			}
+			if err := s.clearPendingWorkCleanup(ids); err != nil {
+				return fmt.Errorf("clear confirmed Peer cleanup: %w", err)
+			}
 			s.cancelMu.Lock()
 			s.queueCleanup = slices.DeleteFunc(s.queueCleanup, func(id string) bool { return slices.Contains(ids, id) })
 			s.cancelMu.Unlock()
-			s.updateExperiment(waitingID, func(run *model.Experiment) { run.PhaseName = "" })
+			phase("")
 			return ctx.Err()
 		}
 		if ctx.Err() != nil {
@@ -129,9 +107,7 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 		if err.Error() != previousError {
 			previousError = err.Error()
 			s.logger.Warn("experiment queue waiting for Peer cleanup", "run", waitingID, "error", err)
-			s.updateExperiment(waitingID, func(run *model.Experiment) {
-				run.PhaseName = "Waiting for previous Peer cleanup: " + err.Error()
-			})
+			phase("Waiting for previous Peer cleanup: " + err.Error())
 		}
 		if err := sleepContext(ctx, 3*time.Second); err != nil {
 			return err

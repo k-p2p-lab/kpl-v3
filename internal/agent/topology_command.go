@@ -121,12 +121,8 @@ func (s *Server) proxyTopology(ctx context.Context, nodeID string, request model
 	}
 	// Topology readiness may take longer than the shared ten-second client.
 	// Keep its transport configuration and scope only this request to its ctx.
-	client := &http.Client{}
-	if s.client != nil {
-		client.Transport = s.client.Transport
-		client.Jar = s.client.Jar
-		client.CheckRedirect = s.client.CheckRedirect
-	}
+	client := mutationHTTPClient(s.client)
+	client.Timeout = 0
 	resp, err := client.Do(req)
 	if err != nil {
 		return result, err

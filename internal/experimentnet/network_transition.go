@@ -61,11 +61,23 @@ func (m *Manager) waitFreshNetwork(ctx context.Context, request model.Experiment
 		if err := ctx.Err(); err != nil {
 			return "", fmt.Errorf("fresh Peer network %q did not become visible: %w", id, err)
 		}
-		created, err := m.inspect(ctx)
+		ids, err := m.networkIDs(ctx)
 		if err != nil {
 			return "", fmt.Errorf("fresh Peer network could not be verified: %w", err)
 		}
-		if created != nil {
+		for _, observed := range ids {
+			if observed != oldID && observed != id {
+				return "", fmt.Errorf("unexpected Peer network replacement while waiting for fresh ID %q: observed IDs=%q; no replacement was removed", id, ids)
+			}
+		}
+		// A manager view may briefly regress to the retiring ID after create
+		// acknowledges. Wait for the known new ID alone, then inspect that ID
+		// directly rather than doing a second name lookup with another view.
+		if len(ids) == 1 && ids[0] == id {
+			created, err := m.inspectID(ctx, id)
+			if err != nil {
+				return "", fmt.Errorf("fresh Peer network could not be verified: %w", err)
+			}
 			if err := verifyFreshNetwork(created, request, allocation, oldID, id); err != nil {
 				return "", err
 			}

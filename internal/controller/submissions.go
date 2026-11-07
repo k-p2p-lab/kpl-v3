@@ -107,14 +107,30 @@ func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, coun
 		record, e := s.readBatchExtension(id)
 		err = e
 		if record != nil && len(record.Current) > 0 && err == nil {
-			data, e := os.ReadFile(filepath.Join(s.config.DataDir, currentRunsDirectory, id, "experiment.json"))
+			local, e := s.analysisDirectory(id)
 			var run model.Experiment
 			if e == nil {
-				e = json.Unmarshal(data, &run)
+				var data []byte
+				data, e = readResumeFile(local, "experiment.json", resultMetadataLimit)
+				local.Close()
+				if e == nil {
+					e = json.Unmarshal(data, &run)
+				}
+			}
+			if e == nil && (run.ID != id || run.State == "" || run.BatchID != "" && run.BatchID != id) {
+				e = errors.New("invalid saved submission identity or state")
 			}
 			if e == nil {
 				if live, exists := s.state.experimentWithTiming(id); exists {
 					run = live
+				} else {
+					// As with Saved Results, a persisted active state cannot
+					// claim a scheduler in this process after restart. Replaying
+					// the receipt never resumes or rewrites the original attempt.
+					if run.State == "queued" || run.State == "running" {
+						run.State = "interrupted"
+					}
+					run.Timing, run.QueuePosition = nil, 0
 				}
 			}
 			s.state.persistMu.Unlock()

@@ -65,27 +65,29 @@ func (s *Server) handleResultAnalysis(w http.ResponseWriter, r *http.Request, id
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	// User-initiated analysis runs independently of archive size inspection.
-	// Bound expensive event indexes without holding persistence/deletion locks.
-	select {
-	case s.analysisSlots <- struct{}{}:
-		defer func() { <-s.analysisSlots }()
-	case <-ctx.Done():
-		writeError(w, http.StatusGatewayTimeout, "analysis timed out waiting for another analysis; try one result at a time")
+	if err := ctx.Err(); err != nil {
+		writeError(w, http.StatusGatewayTimeout, err.Error())
 		return
 	}
-	snapshot, err := s.captureResultFilesContext(ctx, id, false)
+	// Submission is durable across requester cancellation, like the POST API.
+	// The shared work queue owns cancellation during Controller shutdown.
+	_, err := s.startAnalysisJob(context.WithoutCancel(r.Context()), id, false)
 	if err != nil {
 		if errors.Is(err, errResultNotFound) {
 			http.NotFound(w, r)
+		} else if errors.Is(err, errAnalysisQueueFull) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
 		} else {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 		}
 		return
 	}
-	defer snapshot.close()
-	analysis, err := analyzeResult(ctx, snapshot)
+	status, err := s.waitAnalysisJob(ctx, id)
 	if err != nil {
+		if errors.Is(err, errResultNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		status := http.StatusUnprocessableEntity
 		if ctx.Err() != nil {
 			status = http.StatusGatewayTimeout
@@ -93,19 +95,12 @@ func (s *Server) handleResultAnalysis(w http.ResponseWriter, r *http.Request, id
 		writeError(w, status, err.Error())
 		return
 	}
-	s.state.persistMu.Lock()
-	deleted, err := s.state.resultDeletedLocked(id)
-	s.state.persistMu.Unlock()
-	if deleted {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "cannot check saved result")
-		return
-	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, analysis)
+	artifactRequest := r.Clone(ctx)
+	query := artifactRequest.URL.Query()
+	query.Set("jobId", status.ID)
+	artifactRequest.URL.RawQuery = query.Encode()
+	s.serveAnalysisArtifact(w, artifactRequest, id, false)
 }
 
 type analysisProgress func(phase string, bytes int64)

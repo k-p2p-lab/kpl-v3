@@ -410,8 +410,20 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 		return err
 	}
 	_ = directory.Close()
-	if err := s.retainBatchCurrentLocked(runs, id); err != nil {
+	deleted, err := s.state.resultDeletedLocked(id)
+	if err != nil {
 		return err
+	}
+	// The durable fence is published only after retaining batch history. A
+	// previous attempt may already have unlinked experiment.json before a crash
+	// or another removal failure, so retries must not require that metadata.
+	if !deleted {
+		if err := s.retainBatchCurrentLocked(runs, id); err != nil {
+			return err
+		}
+	}
+	if err := s.retainWorkCleanupBeforeDelete(id); err != nil {
+		return fmt.Errorf("persist Peer cleanup barrier: %w", err)
 	}
 	if err := s.markResultDeletedLocked(id); err != nil {
 		return fmt.Errorf("persist deletion marker: %w", err)

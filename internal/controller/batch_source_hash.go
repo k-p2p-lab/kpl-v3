@@ -34,6 +34,7 @@ func (s *Server) hashBatchAnalysisSources(ctx context.Context, job *batchAnalysi
 			total := analysisSourceSampleBytes(snapshot.files)
 			s.analysisJobMu.Lock()
 			job.status.State, job.status.Phase = "running", fmt.Sprintf("Run %d/%d · checking-sources", i+1, len(selected))
+			s.updateWorkStatus(job.slot.id, job.status.Phase, job.status.Progress)
 			job.status.TotalBytes, job.status.ProcessedBytes = total, 0
 			if job.status.StartedAt.IsZero() {
 				job.status.StartedAt = time.Now().UTC()
@@ -55,6 +56,7 @@ func (s *Server) hashBatchAnalysisSources(ctx context.Context, job *batchAnalysi
 				last = now
 				s.analysisJobMu.Lock()
 				job.status.ProcessedBytes, job.status.UpdatedAt = processed, now
+				s.updateWorkStatus(job.slot.id, job.status.Phase, job.status.Progress)
 				s.analysisJobMu.Unlock()
 			})
 			if err == nil {

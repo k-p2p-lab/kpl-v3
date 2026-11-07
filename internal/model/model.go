@@ -249,6 +249,7 @@ type TopologySummary struct {
 }
 
 type Snapshot struct {
+	WorkQueue   []WorkQueueItem  `json:"workQueue"`
 	Topology    *TopologySummary `json:"topology,omitempty"`
 	GeneratedAt time.Time        `json:"generatedAt"`
 	Agents      []Agent          `json:"agents"`

@@ -1,18 +1,14 @@
-.library-group-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .65rem .75rem; min-width: 0; }
-.library-group-actions { display: flex; align-items: center; gap: .5rem; }
+.library-group-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .65rem .75rem; min-width: 0; }
+.library-group-actions { display: flex; align-items: center; gap: .5rem; min-width: 0; margin-left: auto; }
 .library-group-actions > button { padding-inline: .7rem; }
-.library-group-actions > [aria-pressed="true"] { border-color: var(--cyan); color: var(--cyan); background: rgba(57,214,208,.07); }
-.library-group-filter { display: grid; gap: .4rem; min-width: 0; font-size: .78rem; }
-.library-group-filter > select { min-width: 0; width: 100%; }
-.library-group-filter > span { color: var(--muted); }
 #scenarioGroupTools, #resultGroupTools { container: library-tools / inline-size; min-width: 0; }
 #scenarioGroupTools { flex: 0 0 auto; padding: .6rem .75rem .75rem; margin-bottom: .4rem; border-bottom: 1px solid var(--line-soft); }
 #resultGroupTools { padding: .85rem 1.2rem; border-bottom: 1px solid var(--line); }
 .library-group-toolbar select, .library-group-selection select, .library-group-dialog input { min-height: var(--control-height); border: 1px solid var(--line); border-radius: .45rem; background: var(--surface); color: var(--text); padding: .4rem .6rem; font: inherit; }
 .library-group-toolbar select, .library-group-selection select { font-size: .8rem; }
-.library-group-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; margin-top: .75rem; padding-top: .65rem; border-top: 1px solid var(--line); }
+.library-group-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; margin-top: .75rem; padding: .7rem; border: 1px solid color-mix(in srgb, var(--cyan) 30%, var(--line)); border-radius: .65rem; background: color-mix(in srgb, var(--cyan) 5%, var(--surface)); }
 .library-selection-count { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .85rem; min-width: 0; font-size: .78rem; }
-.library-selection-count > span { margin-right: auto; }
+.library-selection-count > span { margin-right: auto; color: var(--cyan); font-weight: 650; font-variant-numeric: tabular-nums; }
 .library-group-selection select { min-width: 0; width: 100%; }
 .library-selection-downloads { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .55rem; min-width: 0; }
 .library-selection-downloads > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
@@ -21,7 +17,22 @@
 .library-group-status { margin: .6rem 0 0; font-size: .77rem; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .library-group-status[role="alert"] { color: var(--red); }
 .library-item-select { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 1.8rem; min-height: 1.8rem; cursor: pointer; vertical-align: middle; }
-.library-item-select input[type="checkbox"] { width: 1rem; height: 1rem; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--cyan); cursor: pointer; }
+.library-item-select input[type="checkbox"], .library-select-all input[type="checkbox"], .library-filter-option input[type="checkbox"] { width: 1.05rem; height: 1.05rem; min-height: 0; margin: 0; padding: 0; flex: 0 0 auto; accent-color: var(--cyan); cursor: pointer; }
+.library-select-all { display: inline-flex; align-items: center; gap: .5rem; min-height: var(--control-height); font-size: .78rem; cursor: pointer; white-space: nowrap; }
+.library-filter-count { color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.library-select-all .library-filter-count { padding: .1rem .4rem; border-radius: 1rem; background: var(--bg-soft); }
+.library-filter-menu { min-width: 0; }
+.library-filter-menu > button { max-width: min(18rem, 60vw); gap: .45rem; }
+.library-filter-summary { color: var(--muted); max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-filter-options { width: min(21rem, calc(100vw - 1rem)); }
+.library-filter-option { display: flex; align-items: center; gap: .65rem; min-height: 2.5rem; padding: .5rem .65rem; border-radius: .4rem; font-size: .82rem; cursor: pointer; }
+.library-filter-option > span:not(.library-filter-count) { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.library-filter-option:first-child { border-bottom: 1px solid var(--line); border-radius: .4rem .4rem 0 0; }
+.library-filter-option:hover, .library-filter-option:focus-within { background: var(--bg-soft); }
+.library-filter-option:has(input:checked) { color: var(--cyan); }
+.library-item-select:has(input:disabled), .library-select-all:has(input:disabled), .library-filter-option:has(input:disabled) { cursor: default; opacity: .55; }
+.scenario-library-item:has([data-library-select-key]:checked), [data-result-table] tr:has([data-library-select-key]:checked), .saved-batch:has(> summary [data-library-select-key]:checked) { background: color-mix(in srgb, var(--cyan) 7%, var(--surface)); }
+.library-item-select input:focus-visible, .library-select-all input:focus-visible, .library-filter-option input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .scenario-library-item.has-group-selection { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: .15rem; }
 .scenario-library-item > .library-item-select { align-self: start; margin-top: .45rem; }
 .result-item-heading { display: flex; align-items: flex-start; gap: .4rem; min-width: 0; }
@@ -69,11 +80,10 @@
   .scenario-library-list { min-height: 7rem; flex-shrink: 0; }
 }
 @container library-tools (max-width: 27rem) {
-  .library-group-toolbar { align-items: center; gap: .55rem; }
-  .library-group-filter { display: contents; }
-  .library-group-filter > select { grid-column: 1 / -1; grid-row: 2; }
-  .library-group-filter > span { font-size: .78rem; }
-  .library-group-actions { grid-column: 2; grid-row: 1; }
+  .library-group-toolbar { gap: .5rem; }
+  .library-group-actions { flex: 1 1 auto; justify-content: flex-end; }
+  .library-group-actions > button, .library-filter-menu > button { padding-inline: .55rem; font-size: .75rem; }
+  .library-filter-summary { max-width: 7rem; }
 }
 @container library-tools (min-width: 42rem) {
   .library-group-selection { grid-template-columns: minmax(0, 1fr) minmax(10rem, 16rem) auto auto; }

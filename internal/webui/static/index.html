@@ -285,6 +285,12 @@
           <div class="run-header-actions"><span class="count-badge" id="runCount">0</span><button class="secondary-button" id="refreshExperiments" type="button" aria-controls="runList">Refresh</button></div>
         </header>
         <div class="panel-body" id="panel-experiments-body">
+          <section class="work-queue" id="workQueue" aria-labelledby="workQueueHeading" hidden>
+            <header><h3 id="workQueueHeading">Execution queue</h3><span class="count-badge" id="workQueueCount">0</span></header>
+            <p>Experiments and analysis run one at a time. Each experiment batch keeps its runs together.</p>
+            <ol class="work-queue-list" id="workQueueList" aria-label="Execution queue tasks" tabindex="-1"></ol>
+            <p class="work-queue-status" id="workQueueStatus" role="status" aria-live="polite" hidden></p>
+          </section>
           <div class="run-batch-estimates" id="runBatchEstimates" aria-label="Group finish estimates" hidden></div>
           <div class="run-list" id="runList">
             <div class="empty-copy">No experiments yet.</div>
@@ -626,7 +632,7 @@
         <button class="secondary-button" type="button" data-scenario-close>Cancel</button>
         <button class="primary-button" id="runScenario" type="button">Run</button>
       </footer>
-      <p class="dialog-help" id="repetitionHelp">Choose Select in Saved scenarios to run several scenarios. Runs applies to each selected scenario; Run without selection uses the editor YAML. Submissions run in order, after Peer cleanup. Stop or failure cancels only that batch's remaining runs.</p>
+      <p class="dialog-help" id="repetitionHelp">Check scenarios in Saved scenarios to run several. Runs applies to each checked scenario; Run without selection uses the editor YAML. Submissions run in order, after Peer cleanup. Stop or failure cancels only that batch's remaining runs.</p>
     </form>
   </dialog>
 
@@ -717,6 +723,7 @@
   <script src="/result-analysis-downloads.js" defer></script>
   <script src="/library-groups.js" defer></script>
   <script src="/scenario-run-queue.js" defer></script>
+  <script src="/work-queue.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/action-menus.js" defer></script>
 </body>

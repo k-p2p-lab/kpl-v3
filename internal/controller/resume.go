@@ -290,15 +290,17 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		// Attempted run IDs will never run again. Fence every possible generation,
 		// including generations whose state was lost in a Controller restart.
 		err := s.stopRunGeneration(cleanupCtx, runID, ^uint64(0))
-		if err == nil {
-			err = s.drainRunTelemetry(cleanupCtx, runID)
-		}
 		cancel()
+		if err == nil {
+			drainCtx, drainCancel := context.WithTimeout(ctx, timeout)
+			err = s.drainRunTelemetry(drainCtx, runID)
+			drainCancel()
+		}
 		if err != nil {
 			return fmt.Errorf("cleanup previous run %s: %w", runID, err)
 		}
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return s.refreshAgentState(cleanupCtx)
+	return s.refreshAgentState(cleanupCtx, runIDs...)
 }

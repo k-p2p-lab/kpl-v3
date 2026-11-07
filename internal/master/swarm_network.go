@@ -137,7 +137,7 @@ func (s *swarm) resetPeerNetwork(ctx context.Context) error {
 	if err := s.run(ctx, "network", "rm", id); err != nil {
 		return fmt.Errorf("Peer network removal failed or is unconfirmed; no replacement requested: %w", err)
 	}
-	newID, err := s.output(ctx, args...)
+	newID, err := s.createResetPeerNetwork(ctx, args, id)
 	if err != nil {
 		return fmt.Errorf("Peer network was removed but recreation failed or is unconfirmed; use the recovery command only if absent: %w", err)
 	}

@@ -44,9 +44,24 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		timeout := model.DefaultRunDrainTimeout
+		if raw := r.URL.Query().Get("timeout"); raw != "" {
+			value, err := time.ParseDuration(raw)
+			if err != nil || value <= 0 || value > model.MaxRunDrainTimeout {
+				writeError(w, http.StatusBadRequest, "timeout must be positive and no greater than 2m")
+				return
+			}
+			timeout = value
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		if err := s.drainRunEvents(ctx, parts[0]); err != nil {
+			var pending *runLogsPendingError
+			if errors.As(err, &pending) {
+				w.Header().Set("Retry-After", "1")
+				writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunTelemetryPendingCode, RemainingEvents: pending.remaining})
+				return
+			}
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
@@ -279,7 +294,7 @@ func (s *Server) proxyPublish(ctx context.Context, nodeID string, request model.
 	if s.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
-	resp, err := s.client.Do(req)
+	resp, err := mutationHTTPClient(s.client).Do(req)
 	if err != nil {
 		return err
 	}

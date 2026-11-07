@@ -46,6 +46,7 @@ type state struct {
 	agentSnapshots          map[string]time.Time
 	nodeReportTimes         map[string]time.Time
 	experiments             map[string]model.Experiment
+	workQueue               []model.WorkQueueItem
 	runTimings              map[string]*runTiming
 	events                  []model.TraceEvent
 	watchers                map[chan struct{}]struct{}
@@ -280,6 +281,12 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			// A full inventory may infer an exit before disk history replay
 			// delivers its confirmed failure. Preserve that original outcome.
 			if old.State == model.NodeStopped && node.State != model.NodeStopped && !(old.Metadata["cleanupComplete"] != "true" && node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") {
+				node = old
+			} else if old.State == model.NodeFailed && old.Metadata["cleanupComplete"] == "true" {
+				// Confirmed process failure and completed removal are terminal
+				// evidence. A late cleanup/status chunk cannot erase its cause or
+				// make an already removed container appear pending again. Keep
+				// accepting recovery for failures whose cleanup is still pending.
 				node = old
 			} else if old.State == model.NodeFailed && node.State != model.NodeFailed && node.State != model.NodeStopping && node.State != model.NodeStopped {
 				// A failed process cannot restart under the same node ID. Keep
@@ -589,7 +596,7 @@ func (s *state) inventoryForViewLocked(dashboard bool) model.Snapshot {
 }
 
 func (s *state) inventoryForTopologyLocked(dashboard, includeTopology bool) model.Snapshot {
-	result := model.Snapshot{GeneratedAt: time.Now().UTC()}
+	result := model.Snapshot{GeneratedAt: time.Now().UTC(), WorkQueue: cloneWorkQueue(s.workQueue)}
 	for _, agent := range s.agents {
 		result.Agents = append(result.Agents, agent)
 	}

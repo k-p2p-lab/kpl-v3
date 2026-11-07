@@ -6,6 +6,16 @@ import (
 	"time"
 )
 
+type runLogsPendingError struct {
+	remaining int
+	cause     error
+}
+
+func (e *runLogsPendingError) Error() string {
+	return fmt.Sprintf("run logs not fully delivered (%d remaining): %v", e.remaining, e.cause)
+}
+func (e *runLogsPendingError) Unwrap() error { return e.cause }
+
 // Other experiments may keep producing telemetry. Wait only for this run's
 // queued and in-flight evidence, after its producers have stopped.
 func (s *Server) drainRunEvents(ctx context.Context, id string) error {
@@ -38,7 +48,7 @@ func (s *Server) drainRunEvents(ctx context.Context, id string) error {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("run logs not fully delivered (%d remaining): %w", remaining, err)
+			return &runLogsPendingError{remaining: remaining, cause: err}
 		}
 		s.flushEvents(ctx)
 		select {

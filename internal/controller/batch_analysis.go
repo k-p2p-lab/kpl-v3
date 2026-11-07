@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 const batchAnalysisVersion = 1
@@ -33,6 +35,7 @@ type batchAnalysisJob struct {
 	status   batchAnalysisStatus
 	cancel   context.CancelFunc
 	previous *batchAnalysisStatus
+	slot     *workSlot
 }
 type batchAnalysisResult struct {
 	SourceHash      string                       `json:"sourceHash,omitempty"`
@@ -233,6 +236,27 @@ func (s *Server) batchAnalysisStatus(id string) (batchAnalysisStatus, error) {
 	}
 	return job.status, nil
 }
+
+func selectBatchAnalysisMembers(members []savedResult) (selected, excluded []savedResult, expected int, pending bool, err error) {
+	selected, excluded = []savedResult{}, []savedResult{}
+	iterations := map[int]bool{}
+	for _, member := range currentBatchMembers(members) {
+		if member.Repetitions < 2 || member.Repetitions > maxScenarioRepetitions || member.Iteration < 1 || member.Iteration > member.Repetitions || iterations[member.Iteration] || expected != 0 && expected != member.Repetitions {
+			return nil, nil, 0, false, errors.New("inconsistent repeated-run metadata")
+		}
+		expected = member.Repetitions
+		iterations[member.Iteration] = true
+		pending = pending || member.Active || member.State == "running" || member.State == "queued"
+		if member.State == "completed" {
+			selected = append(selected, member)
+		} else {
+			excluded = append(excluded, member)
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].Iteration < selected[j].Iteration })
+	return selected, excluded, expected, pending, nil
+}
+
 func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool) (batchAnalysisStatus, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
@@ -243,27 +267,13 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	if err != nil {
 		return batchAnalysisStatus{}, err
 	}
-	selected, excluded := []savedResult{}, []savedResult{}
-	expected, iterations := 0, map[int]bool{}
-	for _, m := range currentBatchMembers(members) {
-		if m.Active || m.State == "running" || m.State == "queued" || s.cancels[m.ID] != nil || s.repeatBatches[m.ID] != nil {
-			return batchAnalysisStatus{}, errResultBusy
-		}
-		if m.Repetitions < 2 || m.Repetitions > maxScenarioRepetitions || m.Iteration < 1 || m.Iteration > m.Repetitions || iterations[m.Iteration] || expected != 0 && expected != m.Repetitions {
-			return batchAnalysisStatus{}, errors.New("inconsistent repeated-run metadata")
-		}
-		expected = m.Repetitions
-		iterations[m.Iteration] = true
-		if m.State == "completed" {
-			selected = append(selected, m)
-		} else {
-			excluded = append(excluded, m)
-		}
+	selected, _, expected, pending, err := selectBatchAnalysisMembers(members)
+	if err != nil {
+		return batchAnalysisStatus{}, err
 	}
-	if len(selected) < 2 {
+	if len(selected) < 2 && !pending {
 		return batchAnalysisStatus{}, errors.New("batch mean requires at least two completed runs")
 	}
-	sort.Slice(selected, func(i, j int) bool { return selected[i].Iteration < selected[j].Iteration })
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
 	existing, err := s.loadBatchAnalysis(id)
@@ -304,19 +314,69 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	}
 	work, cancel := context.WithCancel(ctx)
 	job := &batchAnalysisJob{status: status, cancel: cancel}
+	job.slot = s.enqueueWorkLocked(work, model.WorkQueueItem{Kind: "batch-analysis", Name: members[0].Name, BatchID: id}, cancel)
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
 		job.previous = &previous
 	}
 	s.batchAnalysisJobs[id] = job
 	s.analysisWorkers.Add(1)
-	go s.runBatchAnalysis(work, job, selected, excluded, max(0, expected-len(selected)-len(excluded)))
+	go s.runBatchAnalysis(work, job)
 	return status, nil
 }
-func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, selected, excluded []savedResult, missing int) {
+
+// Re-read after the shared FIFO slot is granted: experiments before this job
+// may have completed, failed, or been canceled since admission.
+func (s *Server) prepareBatchAnalysisJob(ctx context.Context, job *batchAnalysisJob) ([]savedResult, []savedResult, int, error) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, 0, err
+	}
+	members, err := s.allBatchMembers(ctx, job.status.BatchID)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	selected, excluded, expected, pending, err := selectBatchAnalysisMembers(members)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if pending {
+		return nil, nil, 0, errResultBusy
+	}
+	if len(selected) < 2 {
+		return nil, nil, 0, errors.New("batch mean requires at least two completed runs")
+	}
+	s.analysisJobMu.Lock()
+	defer s.analysisJobMu.Unlock()
+	if s.batchAnalysisJobs[job.status.BatchID] != job {
+		return nil, nil, 0, context.Canceled
+	}
+	job.status.Membership = batchMembership(members)
+	job.status.TotalRuns, job.status.ExpectedRuns = len(selected), expected
+	job.status.RunIDs = []string{}
+	for _, member := range selected {
+		job.status.RunIDs = append(job.status.RunIDs, member.ID)
+	}
+	if err := s.persistBatchAnalysis(job.status); err != nil {
+		return nil, nil, 0, err
+	}
+	return selected, excluded, max(0, expected-len(selected)-len(excluded)), nil
+}
+
+func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 	defer s.analysisWorkers.Done()
-	result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded, Runs: []resultAnalysis{}}
+	defer s.finishWork(job.slot)
 	err := func() error {
+		if err := s.waitWork(ctx, job.slot); err != nil {
+			return err
+		}
+		s.updateWorkStatus(job.slot.id, "starting", 0)
+		selected, excluded, missing, err := s.prepareBatchAnalysisJob(ctx, job)
+		if err != nil {
+			return err
+		}
+		result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded, Runs: []resultAnalysis{}}
 		hashes := make(map[string]string, len(selected))
 		if job.previous != nil {
 			var sourceHash string
@@ -389,6 +449,7 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob, se
 						fraction = min(.99, float64(processed)/float64(phaseTotal))
 					}
 					job.status.Progress = 100 * (float64(i) + fraction) / float64(len(selected))
+					s.updateWorkStatus(job.slot.id, job.status.Phase, job.status.Progress)
 				})
 				// Fresh/forced analyses hash the same captured files they analyze;
 				// only potentially reusable batches need a separate verification pass.

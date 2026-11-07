@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -18,6 +19,41 @@ func TestManagerWaitsForNetworkRemovalAndCreationVisibility(t *testing.T) {
 	}
 	if fake.createCalls != 1 {
 		t.Fatalf("created before the old network disappeared: %d calls", fake.createCalls)
+	}
+}
+
+func TestManagerCreationWaitsThroughKnownRetiringViews(t *testing.T) {
+	for _, mode := range []string{"retiring", "both-known", "foreign"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, fake, request := managerFixture(t)
+				oldID := fake.network.ID
+				original, polls := m.command, 0
+				m.command = func(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
+					if fake.sequence > 0 && len(args) > 1 && args[0] == "network" && args[1] == "ls" {
+						polls++
+						if mode == "foreign" {
+							return []byte("foreign-replacement"), nil
+						}
+						if polls < 3 {
+							if mode == "retiring" {
+								return []byte(oldID), nil
+							}
+							return []byte(oldID + " " + fake.network.ID), nil
+						}
+					}
+					return original(ctx, input, args...)
+				}
+				result, err := m.prepare(t.Context(), request)
+				if mode == "foreign" {
+					if err == nil || fake.gateway || fake.createCalls != 1 {
+						t.Fatalf("foreign view accepted or mutation replayed: result=%+v err=%v", result, err)
+					}
+				} else if err != nil || result.NetworkID == "" || fake.createCalls != 1 || !fake.gateway {
+					t.Fatalf("known retiring view caused false failure: result=%+v err=%v creates=%d", result, err, fake.createCalls)
+				}
+			})
+		})
 	}
 }
 

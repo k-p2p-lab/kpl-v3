@@ -442,11 +442,20 @@ func (d *dockerRuntime) runWithOutput(ctx context.Context, input io.Reader, outp
 		commandContext = exec.CommandContext
 	}
 	command := commandContext(ctx, d.binary, args...)
+	// A Docker transport/helper can inherit output pipes after its CLI exits.
+	// Bound pipe completion as well as the command's own context.
+	if command.WaitDelay <= 0 {
+		command.WaitDelay = time.Second
+	}
+	configureDockerCommand(command)
 	command.Stdin = input
 	var stderr limitedDockerOutput
 	command.Stdout = output
 	command.Stderr = &stderr
 	err := command.Run()
+	if err != nil || ctx.Err() != nil {
+		reclaimDockerCommand(command)
+	}
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}

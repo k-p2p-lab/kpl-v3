@@ -633,9 +633,9 @@ test('Run queues multiple submissions during an active experiment with a fresh k
   api.renderSavedScenarios();
   assert.equal(elements.get('#runScenario').disabled,false);
   await api.submitScenarioRun();
-  assert.match(elements.get('#toast').textContent,/Queued experiment: Next\. 1 submission ahead/);
+  assert.match(elements.get('#toast').textContent,/Queued experiment: Next\. 1 task ahead/);
   await api.submitScenarioRun();
-  assert.match(elements.get('#toast').textContent,/2 submissions ahead/);
+  assert.match(elements.get('#toast').textContent,/2 tasks ahead/);
   assert.deepEqual(keys,['request-1','request-2']);
 });
 

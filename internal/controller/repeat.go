@@ -23,7 +23,7 @@ type repeatBatch struct {
 	repetitions int
 	members     []string
 	cleanupRuns []string
-	ready       chan struct{}
+	slot        *workSlot
 	queuedIDs   []string
 }
 
@@ -46,6 +46,9 @@ func (s *Server) cancelRepeatLocked(runID string) bool {
 	}
 	if exists {
 		s.markStopRequestedLocked(runID, batch.executionID)
+		if batch.slot != nil {
+			s.updateWorkStatus(batch.slot.id, "Stopping", 0)
+		}
 		batch.cancel()
 	}
 	return exists
@@ -230,14 +233,19 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 			delete(s.state.runTimings, experiment.ID)
 		}
 		s.state.mu.Unlock()
+		if err := s.persistQueueCleanupLocked(); err != nil {
+			s.logger.Error("persist pending Peer cleanup", "error", err)
+		}
 		s.finishQueuedExperimentsLocked(batch)
 		s.cancelMu.Unlock()
 	}()
-	select {
-	case <-ctx.Done():
-		s.cancelQueuedIterations(experiments, "Experiment submission was canceled before it started")
+	if err := s.waitWork(ctx, batch.slot); err != nil {
+		reason := "Experiment submission was canceled before it started"
+		if ctx.Err() == nil {
+			reason = "Cannot prepare experiment queue: " + err.Error()
+		}
+		s.cancelQueuedIterations(experiments, reason)
 		return
-	case <-batch.ready:
 	}
 	if err := s.waitQueueCleanup(ctx, experiments[0].ID, spec); err != nil {
 		s.cancelQueuedIterations(experiments, "Experiment submission was canceled while waiting for previous Peer cleanup")

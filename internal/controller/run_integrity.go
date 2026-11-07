@@ -10,6 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -127,20 +130,131 @@ func (s *Server) cleanupParticipants(id string) ([]model.Agent, error) {
 	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 	return agents, nil
 }
+
+type agentRunDrainPendingError struct {
+	remaining int
+	message   string
+}
+
+func (e *agentRunDrainPendingError) Error() string { return e.message }
+
+func parseRunDrainPending(data []byte) *agentRunDrainPendingError {
+	var response struct {
+		Error           string `json:"error"`
+		Code            string `json:"code"`
+		RemainingEvents *int   `json:"remainingEvents"`
+	}
+	if json.Unmarshal(data, &response) != nil {
+		return nil
+	}
+	if response.Code == model.RunTelemetryPendingCode && response.RemainingEvents != nil && *response.RemainingEvents > 0 {
+		return &agentRunDrainPendingError{remaining: *response.RemainingEvents, message: response.Error}
+	}
+	// A new Controller can finish draining older Agents that still return only
+	// the original error string. No other 503 is assumed to mean queued data.
+	if response.Code == "" && strings.HasPrefix(response.Error, "run logs not fully delivered (") {
+		raw, _, found := strings.Cut(strings.TrimPrefix(response.Error, "run logs not fully delivered ("), " remaining):")
+		remaining, err := strconv.Atoi(raw)
+		if found && err == nil && remaining > 0 {
+			return &agentRunDrainPendingError{remaining: remaining, message: response.Error}
+		}
+	}
+	return nil
+}
+
+const runDrainConcurrency = 4
+const runDrainRetryDelay = time.Second
+
+func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model.Agent) error {
+	var lastPending *agentRunDrainPendingError
+	for {
+		if err := ctx.Err(); err != nil {
+			if lastPending != nil {
+				return fmt.Errorf("%w; last Agent report: %s", err, lastPending)
+			}
+			return err
+		}
+		wait := model.MaxRunDrainTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			wait = min(wait, time.Until(deadline))
+		}
+		if wait <= 0 {
+			continue
+		}
+		path := "/api/v1/runs/" + url.PathEscape(id) + "/drain?timeout=" + url.QueryEscape(wait.String())
+		err := s.callAgent(ctx, agent.URL, http.MethodPost, path, nil, nil)
+		if err == nil {
+			return nil
+		}
+		var pending *agentRunDrainPendingError
+		if !errors.As(err, &pending) {
+			if ctx.Err() != nil && lastPending != nil {
+				return fmt.Errorf("%w; last Agent report: %s", ctx.Err(), lastPending)
+			}
+			return err
+		}
+		lastPending = pending
+		s.logger.Info("waiting for final Agent telemetry", "run", id, "agent", agent.ID, "remaining_events", pending.remaining)
+		if err := sleepContext(ctx, runDrainRetryDelay); err != nil {
+			return fmt.Errorf("%w; last Agent report: %s", err, lastPending)
+		}
+	}
+}
+
 func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+	}
 	agents, err := s.cleanupParticipants(id)
 	if err != nil {
 		return err
 	}
+	var capable []model.Agent
 	for _, agent := range agents {
-		if !agent.RunDrain {
-			continue
-		} // old Agents are explicitly marked unverified
-		if err = s.callAgent(ctx, agent.URL, http.MethodPost, "/api/v1/runs/"+url.PathEscape(id)+"/drain", nil, nil); err != nil {
-			return fmt.Errorf("collect final logs from Agent %s: %w", agent.ID, err)
+		if agent.RunDrain {
+			capable = append(capable, agent)
 		}
 	}
-	return nil
+	// Contact owners with bounded concurrency so a slow Agent does not block
+	// all others. The parent deadline bounds the whole collection phase.
+	jobs := make(chan int, len(capable))
+	for index := range capable {
+		jobs <- index
+	}
+	close(jobs)
+	errorsByAgent := make([]error, len(capable))
+	var workers sync.WaitGroup
+	for range min(runDrainConcurrency, len(capable)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				agent := capable[index]
+				if err := s.drainAgentTelemetry(ctx, id, agent); err != nil {
+					errorsByAgent[index] = fmt.Errorf("collect final logs from Agent %s: %w", agent.ID, err)
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	var failures []error
+	count := 0
+	for index, err := range errorsByAgent {
+		if err == nil {
+			continue
+		}
+		count++
+		s.logger.Warn("final Agent telemetry drain failed", "run", id, "agent", capable[index].ID, "error", err)
+		if len(failures) < 4 {
+			failures = append(failures, err)
+		}
+	}
+	if count > len(failures) {
+		failures = append(failures, fmt.Errorf("%d additional Agents failed final log collection; inspect Controller logs", count-len(failures)))
+	}
+	return errors.Join(failures...)
 }
 func (s *Server) flushRunSources(id string) error {
 	root, err := s.analysisDirectory(id)

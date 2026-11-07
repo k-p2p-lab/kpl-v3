@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -55,7 +56,8 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []str
 	defer s.cancelMu.Unlock()
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
-	if _, err := s.readBatchExtension(id); err != nil {
+	record, err := s.readBatchExtension(id)
+	if err != nil {
 		return nil, err
 	}
 	// Membership cannot change through admission or another deletion while
@@ -72,6 +74,41 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []str
 	for _, member := range members {
 		memberIDs[member.ID] = true
 	}
+	// An interrupted deletion can leave a fenced directory without readable
+	// experiment.json. It is intentionally absent from allBatchMembers/listing,
+	// but the durable batch history still proves this cleanup belongs here.
+	if record != nil && len(record.Deleted) > 0 {
+		runs, err := s.openResultRuns()
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if runs != nil {
+			defer runs.Close()
+			for runID := range record.Deleted {
+				if memberIDs[runID] {
+					continue
+				}
+				fenced, err := s.state.resultDeletedLocked(runID)
+				if err != nil {
+					return nil, err
+				}
+				if !fenced {
+					continue
+				}
+				directory, err := openResultDirectory(runs, runID)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				directory.Close()
+				memberIDs[runID] = true
+				members = append(members, savedResult{ID: runID, BatchID: id})
+			}
+		}
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
 	s.state.mu.RLock()
 	for runID, run := range s.state.experiments {
 		if run.BatchID == id {

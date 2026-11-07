@@ -460,7 +460,7 @@ func (t *telemetry) flush(ctx context.Context, events []model.TraceEvent) (int, 
 	if t.token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
-	resp, err := t.client.Do(req)
+	resp, err := mutationHTTPClient(t.client).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -486,7 +486,7 @@ func (t *telemetry) reportNode(ctx context.Context, node model.Node) error {
 	if t.token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
-	resp, err := t.client.Do(req)
+	resp, err := mutationHTTPClient(t.client).Do(req)
 	if err != nil {
 		return err
 	}

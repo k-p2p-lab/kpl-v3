@@ -33,6 +33,12 @@ func (ExecRunner) Run(ctx context.Context, command Command) error {
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
+		if !command.Interactive && err != nil {
+			// The leader may exit normally while a child holds its output pipe.
+			// A nonzero leader exit masks ErrWaitDelay. Both failure results must
+			// stop the remaining group after the inherited pipe wait is bounded.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
 		if ctx.Err() != nil {
 			if !command.Interactive {
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

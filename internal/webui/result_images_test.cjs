@@ -893,3 +893,46 @@ test('image ZIP names preserve the original Run suffix and safely prefix the exp
  assert.equal(images.imageZIPFilename('...','run-123'),'[run-123]-run-123-images.zip');
  assert.match(images.imageZIPFilename('한'.repeat(10000),'run'),/^\[한{32}\]-run-images.zip$/);
 });
+
+test('unknown analysis admission refreshes status before allowing an explicit new retry',async()=>{
+  let reads=0,posts=0;
+  const {ui,element}=fixture(async(url,options)=>{
+    if(url.includes('/result?'))return {...artifact('run'),analysisId:'finished'};
+    if(options.method==='POST'){
+      posts++;
+      assert.equal(options.headers['Content-Type'],'application/json');
+      assert.deepEqual(JSON.parse(options.body),{expectedAnalysis:{id:posts===1?'failed-a':'failed-b',state:'failed'}});
+      if(posts===1)throw Object.assign(Error('job changed'),{status:409,code:'analysis-attempt-changed'});
+      return job('run','completed',{id:'finished'});
+    }
+    return job('run','failed',{id:++reads===1?'failed-a':'failed-b'});
+  });
+  await ui.open('run',{retry:true});
+  assert.equal(posts,1);assert.match(element('resultImagesStatus').textContent,/outcome unknown/);
+  assert.equal(element('retryResultImages').textContent,'Refresh status');
+  element('retryResultImages').listeners.click();
+  await settle(()=>element('retryResultImages').textContent==='Retry'&&/Analysis failed/.test(element('resultImagesStatus').textContent));
+  assert.equal(posts,1,'status refresh must not start another analysis');
+  element('retryResultImages').listeners.click();
+  await settle(()=>/images ready/.test(element('resultImagesStatus').textContent));
+  assert.equal(posts,2);
+});
+
+test('Run and batch analysis starts and forced refresh bind the observed job ID and state',async()=>{
+  for(const isBatch of [false,true])for(const refresh of [false,true]){
+    let posts=0;
+    const observed={id:refresh?'failed-observed':'',state:refresh?'failed':'idle'};
+    const f=fixture(async(url,options)=>{
+      if(options.method==='POST'){
+        posts++;assert.equal(options.headers['Content-Type'],'application/json');
+        assert.deepEqual(JSON.parse(options.body),{expectedAnalysis:observed});
+        assert.equal(url.includes('?refresh=1'),refresh);
+        assert.equal(url.includes('/batch-analysis-jobs/'),isBatch);
+        throw Object.assign(Error('attempt changed'),{status:409,code:'analysis-attempt-changed'});
+      }
+      return {...job('run',observed.state,{id:observed.id}),...(isBatch?{batchId:'run'}:{})};
+    });
+    await f.ui.open('run',{isBatch,refresh});
+    assert.equal(posts,1);assert.match(f.element('resultImagesStatus').textContent,/outcome unknown/);
+  }
+});

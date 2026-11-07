@@ -17,6 +17,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MaxSubmissionBytes bounds interactive scenario validation, save and execution
+// inputs. Parse also serves retained historical data and does not impose this
+// admission limit itself.
+const MaxSubmissionBytes = 1 << 20
+
 type Scenario struct {
 	Version            int                         `json:"version" yaml:"version"`
 	Name               string                      `json:"name" yaml:"name"`

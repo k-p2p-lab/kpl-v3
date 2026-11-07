@@ -300,14 +300,18 @@ test('Retry prevents duplicate or competing continuation requests and keeps old 
   assert.match(toast,/Queued 3 unfinished runs from run 2/);
 });
 
-test('Retry failure restores controls and historical attempts do not inflate batch counts or repeat targets',async()=>{
+test('Retry transport failure reports unknown, restores controls, and keeps historical attempts out of repeat targets',async()=>{
   const {api,state,element}=fixture(resumableRuns());
   const before=JSON.stringify(state.savedResults);
-  let toast='';
+  let toast='',refreshes=0;const tabs=[];
   api.api=async()=>{throw new Error('Agent unavailable');};
+  api.refreshSavedResults=async()=>{refreshes++;};
+  api.KPLDashboardTabs={show:tab=>tabs.push(tab)};
   api.showToast=message=>{toast=message;};
   await api.resumeSavedBatch('batch',true);
-  assert.equal(toast,'Agent unavailable');
+  assert.match(toast,/Retry outcome unknown.*execution queue.*Agent unavailable/);
+  assert.equal(refreshes,1);
+  assert.deepEqual(tabs,['experiments']);
   assert.equal(JSON.stringify(state.savedResults),before);
   assert.equal(state.pendingResumes.size,0);
   assert.match(element('#savedResultsRows').innerHTML,/Retry from run 2 \(3\)/);

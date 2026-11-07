@@ -53,4 +53,20 @@ func TestBuildSourceMetadataDoesNotFollowForeignGitDirectory(t *testing.T) {
 	if len(args) < 4 || args[1] != "KPL_SOURCE_REVISION="+sourceRevision || args[3] != "KPL_SOURCE_MODIFIED=false" {
 		t.Fatalf("stamped foreign Git context instead of actual source checkout: %q", args)
 	}
+	t.Run("injected worktree config cannot hide source modifications", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(source, "fixture.txt"), []byte("actual modified source"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(foreign, "fixture.txt"), []byte("source being built"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		s.a.Environ = append(baseEnv, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.worktree", "GIT_CONFIG_VALUE_0="+foreign)
+		args, err := s.sourceBuildArguments(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(args) < 4 || args[1] != "KPL_SOURCE_REVISION="+sourceRevision || args[3] != "KPL_SOURCE_MODIFIED=true" {
+			t.Fatalf("different worktree hid actual source modifications: %q", args)
+		}
+	})
 }

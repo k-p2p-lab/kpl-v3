@@ -18,14 +18,64 @@ import (
 )
 
 var errBatchNotResumable = errors.New("batch has no eligible runs to continue")
+var errBatchAttemptsChanged = errors.New("Batch attempts changed; refresh results before retrying.")
+
+func decodeRetryExpectedRuns(w http.ResponseWriter, r *http.Request) ([]string, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	var request *struct {
+		ExpectedRunIDs json.RawMessage `json:"expectedRunIds"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); errors.Is(err, io.EOF) {
+		// Existing clients send no body. They retain the legacy unguarded API.
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("invalid retry request: %w", err)
+	}
+	if request == nil {
+		return nil, errors.New("retry request must be a JSON object")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("retry request must contain one JSON object")
+	}
+	if len(request.ExpectedRunIDs) == 0 {
+		return nil, nil
+	}
+	var ids []string
+	if err := json.Unmarshal(request.ExpectedRunIDs, &ids); err != nil || len(ids) == 0 || len(ids) > maxScenarioRepetitions {
+		return nil, fmt.Errorf("expectedRunIds must contain 1 through %d run IDs", maxScenarioRepetitions)
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !validResultID(id) || seen[id] {
+			return nil, errors.New("expectedRunIds must contain distinct valid run IDs")
+		}
+		seen[id] = true
+	}
+	return ids, nil
+}
 
 func (s *Server) handleBatchResume(ctx context.Context, retry bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		experiment, err := s.resumeScenarioBatch(ctx, r.PathValue("batchID"), retry)
+		var expected []string
+		if retry {
+			var err error
+			expected, err = decodeRetryExpectedRuns(w, r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		experiment, err := s.resumeScenarioBatchExpected(ctx, r.PathValue("batchID"), retry, expected)
 		if err != nil {
 			switch {
 			case errors.Is(err, errResultNotFound):
 				http.NotFound(w, r)
+			case errors.Is(err, errBatchAttemptsChanged):
+				writeJSON(w, http.StatusConflict, map[string]string{"error": errBatchAttemptsChanged.Error(), "code": "batch-attempt-changed"})
 			case errors.Is(err, errBatchNotResumable), errors.Is(err, errResultBusy):
 				writeError(w, http.StatusConflict, err.Error())
 			default:
@@ -53,6 +103,10 @@ func (s *Server) RetryScenarioBatch(parent context.Context, id string) (model.Ex
 }
 
 func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bool) (model.Experiment, error) {
+	return s.resumeScenarioBatchExpected(parent, id, retry, nil)
+}
+
+func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, retry bool, expectedRunIDs []string) (model.Experiment, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	if s.shuttingDown {
@@ -77,6 +131,38 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 	sort.Slice(members, func(i, j int) bool { return members[i].Iteration < members[j].Iteration })
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	if retry && expectedRunIDs != nil {
+		// File descriptors captured while listing can precede a final state
+		// write. Under persistMu, use the live state where available so a just
+		// completed iteration is neither part of the precondition nor retried.
+		s.state.mu.RLock()
+		for i := range allMembers {
+			if live, exists := s.state.experiments[allMembers[i].ID]; exists && live.BatchID == id {
+				allMembers[i].State = live.State
+			}
+		}
+		s.state.mu.RUnlock()
+		members = currentBatchMembers(allMembers)
+		sort.Slice(members, func(i, j int) bool { return members[i].Iteration < members[j].Iteration })
+		remaining := make(map[string]bool, len(expectedRunIDs))
+		for _, runID := range expectedRunIDs {
+			remaining[runID] = true
+		}
+		count := 0
+		for _, member := range members {
+			if member.State == "completed" {
+				continue
+			}
+			if !remaining[member.ID] {
+				return model.Experiment{}, errBatchAttemptsChanged
+			}
+			delete(remaining, member.ID)
+			count++
+		}
+		if len(remaining) != 0 || count != len(expectedRunIDs) {
+			return model.Experiment{}, errBatchAttemptsChanged
+		}
+	}
 
 	hasFailure, lastAttempt, expected := false, 0, 0
 	seen := make(map[int]bool)

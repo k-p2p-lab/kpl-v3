@@ -85,6 +85,20 @@ test('missing analyses are prepared sequentially with progress before JSON expor
   assert.equal(entries(await f.downloads[0].arrayBuffer()).length,2);
 });
 
+test('analysis export binds the observed job and stops changed attempts without retrying POST',async()=>{
+  let posts=0;
+  const f=fixture(async(path,options)=>{
+    if(options.method==='POST'){
+      posts++;assert.equal(options.headers['Content-Type'],'application/json');
+      assert.deepEqual(JSON.parse(options.body),{expectedAnalysis:{id:'failed-old',state:'failed'}});
+      throw Object.assign(Error('changed attempt'),{status:409,code:'analysis-attempt-changed'});
+    }
+    return {id:'failed-old',runId:'one',state:'failed'};
+  });
+  await assert.rejects(f.download('results',['run:one']),/outcome unknown/);
+  assert.equal(posts,1);assert.equal(f.links.length,0);
+});
+
 test('invalid, missing or replaced JSON prevents downloading an incomplete selection',async()=>{
   for(const failure of ['malformed','missing','changed','wrong-run','wrong-job']) {
     const f=fixture(async(path,options)=>{

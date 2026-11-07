@@ -258,6 +258,10 @@ func selectBatchAnalysisMembers(members []savedResult) (selected, excluded []sav
 }
 
 func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool) (batchAnalysisStatus, error) {
+	return s.startBatchAnalysisExpected(ctx, id, refresh, nil)
+}
+
+func (s *Server) startBatchAnalysisExpected(ctx context.Context, id string, refresh bool, expectation *analysisExpectation) (batchAnalysisStatus, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	if s.shuttingDown || ctx.Err() != nil {
@@ -283,6 +287,9 @@ func (s *Server) startBatchAnalysis(ctx context.Context, id string, refresh bool
 	membership := batchMembership(members)
 	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.Membership == membership && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		return existing.status, nil
+	}
+	if !expectation.matchesBatch(existing.status.analysisJobStatus) {
+		return batchAnalysisStatus{}, errAnalysisAttemptChanged
 	}
 	count := 0
 	for _, job := range s.batchAnalysisJobs {
@@ -604,7 +611,13 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 				}
 			}
 		case http.MethodPost:
-			status, err = s.startBatchAnalysis(ctx, id, r.URL.Query().Get("refresh") == "1")
+			var expected *analysisExpectation
+			expected, err = decodeAnalysisExpectation(w, r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			status, err = s.startBatchAnalysisExpected(ctx, id, r.URL.Query().Get("refresh") == "1", expected)
 		default:
 			methodNotAllowed(w)
 			return
@@ -622,6 +635,10 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 	}
 }
 func writeBatchAnalysisError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errAnalysisAttemptChanged) {
+		writeAnalysisAttemptChanged(w)
+		return
+	}
 	code := http.StatusUnprocessableEntity
 	if errors.Is(err, errResultNotFound) || errors.Is(err, os.ErrNotExist) {
 		code = http.StatusNotFound

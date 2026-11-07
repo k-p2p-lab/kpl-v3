@@ -11,7 +11,7 @@ import (
 func (a *App) RunDevelopment(ctx context.Context, name string, args []string) error {
 	switch name {
 	case "validate":
-		return a.validateScenario(args)
+		return a.validateScenario(ctx, args)
 	case "test":
 		if len(args) > 1 {
 			return usageError("usage: kpl dev test [go|swarm|ui|race|linux]")

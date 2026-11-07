@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+type fixtureNetworkCreateExitError struct{}
+
+func (fixtureNetworkCreateExitError) Error() string { return "exit status 1" }
+func (fixtureNetworkCreateExitError) ExitCode() int { return 1 }
 
 func TestSwarmNetworkResetWaitsForDockerConvergence(t *testing.T) {
 	for _, mode := range []string{"removal-lag", "name-conflict", "creation-lag", "retiring-after-create", "both-known-after-create", "foreign-after-create", "replacement", "never-removed", "uncertain-create"} {
@@ -72,7 +78,8 @@ func TestSwarmNetworkResetWaitsForDockerConvergence(t *testing.T) {
 					case a[0] == "network" && a[1] == "create":
 						creates++
 						if !removed || mode == "removal-lag" && removalPolls < 3 || mode == "name-conflict" && creates == 1 {
-							return "", errors.New("Error response from daemon: network with name kpl-peers already exists")
+							_, _ = io.WriteString(c.Stderr, "Error response from daemon: network with name kpl-peers already exists\n")
+							return "", fixtureNetworkCreateExitError{}
 						}
 						if mode == "uncertain-create" {
 							return "", errors.New("Docker create response lost")

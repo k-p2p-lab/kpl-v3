@@ -57,7 +57,18 @@
       let analysisID = savedID;
       if (!analysisID) {
         if (!images.pendingJob(job)) {
-          job = await request(path, {method:"POST"}, signal);
+          try {
+            job = await request(path, {method:"POST", headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({expectedAnalysis:{id:job.id || "",state:job.state || "idle"}})}, signal);
+          } catch (error) {
+            if (error.code === "analysis-attempt-changed") {
+              const failure = new Error("Analysis request outcome unknown. Refresh results and inspect the execution queue before retrying. " + error.message);
+              failure.code = error.code;
+              failure.status = error.status;
+              throw failure;
+            }
+            throw error;
+          }
           validateJob(job);
         }
         while (images.pendingJob(job)) {

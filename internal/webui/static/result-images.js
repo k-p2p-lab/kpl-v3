@@ -851,6 +851,7 @@
     const dialog = $("resultImagesDialog");
     let currentID = "",
       currentBatch = false,
+      reconnectOnly = false,
       controller = null,
       revision = 0,
       currentData = null,
@@ -1097,6 +1098,8 @@
     }
     async function open(id, { refresh = false, retry = false, isBatch = false } = {}) {
       if (!id || (currentID === id && currentBatch === isBatch && controller)) return;
+      const readOnlyRetry = reconnectOnly && currentID === id && currentBatch === isBatch && !refresh;
+      if (currentID !== id || currentBatch !== isBatch) reconnectOnly = false;
       const preserve = dialog.open && currentID === id && currentBatch === isBatch && !!displayedAnalysis;
       if (!dialog.open || currentID !== id || currentBatch !== isBatch) selectedProtocol = "common";
       cancel(preserve);
@@ -1116,6 +1119,7 @@
       controller = view;
       const path = `/api/v1/${isBatch ? "batch-analysis-jobs" : "analysis-jobs"}/${encodeURIComponent(id)}`;
       const refreshButton = $("refreshResultImages");
+      let postInFlight = false;
       refreshButton.disabled = true;
       $("resultImagesProgress").hidden = true;
       status(`${preserve ? "Showing saved analysis · " : ""}Checking analysis job…`);
@@ -1176,8 +1180,10 @@
         let job = await request(path, {}, view.signal);
         if (revision !== requestRevision) return;
         if ((isBatch ? job.batchId : job.runId) !== id) throw new Error("Unexpected analysis job response.");
-        const needsUpdate = refresh || job.stale || job.state === "idle" ||
-          (retry && ["failed", "interrupted", "canceled"].includes(job.state));
+        reconnectOnly = false;
+        $("retryResultImages").textContent = "Retry";
+        const needsUpdate = !readOnlyRetry && (refresh || job.stale || job.state === "idle" ||
+          (retry && ["failed", "interrupted", "canceled"].includes(job.state)));
         const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
         if (savedID && (needsUpdate || job.state !== "completed")) {
           try {
@@ -1191,7 +1197,14 @@
         if (revision !== requestRevision) return;
         if (needsUpdate) {
           status(`${displayedAnalysis ? "Showing saved analysis · " : ""}Requesting analysis update…`);
-          job = await request(path + (refresh ? "?refresh=1" : ""), { method: "POST" }, view.signal);
+          postInFlight = true;
+          job = await request(path + (refresh ? "?refresh=1" : ""), { method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({expectedAnalysis: {id: job.id || "", state: job.state || "idle"}}) }, view.signal);
+          postInFlight = false;
+        }
+        if (readOnlyRetry && job.state === "idle") {
+          status("No analysis job is currently admitted. Choose Retry to submit a new request.", true);
+          return;
         }
         while (true) {
           if (revision !== requestRevision) return;
@@ -1223,7 +1236,12 @@
         status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.${job.reused ? " Source unchanged; saved analysis reused." : ""}`);
       } catch (error) {
         if (revision === requestRevision) {
-          const message = error.name === "AbortError"
+          const queueFull = error.status === 503 && /^(?:batch )?analysis queue is full(?:;|$)/i.test(error.message || "");
+          const uncertain = error.code === "analysis-attempt-changed" || postInFlight && (error.accepted === true
+            || !Number.isInteger(error.status) || error.status === 408 || error.status >= 500 && error.accepted !== false && !queueFull);
+          if (uncertain) { reconnectOnly = true; $("retryResultImages").textContent = "Refresh status"; }
+          const message = uncertain ? `Analysis request outcome unknown. Refresh status to inspect the current job before retrying. ${error.message}`
+            : error.name === "AbortError"
             ? "Status request timed out. The server job continues; retry to reconnect."
             : error.message;
           status(`${displayedAnalysis ? "Showing saved analysis · " : ""}${message}`, true);

@@ -7,7 +7,8 @@
 
   function describe(value) {
     const build = value?.build || {};
-    const version = text(build.version), revision = text(build.revision);
+    const version = text(build.version), recordedRevision = text(build.revision);
+    const revision = /^(unknown|development)$/i.test(recordedRevision) ? "Unknown" : recordedRevision;
     const image = text(value?.image);
     const digest = typeof value?.imageDigest === "string" && digestPattern.test(value.imageDigest)
       && image.endsWith(`@${value.imageDigest}`) ? value.imageDigest : "Unknown";
@@ -20,7 +21,14 @@
     };
   }
 
-  let api, pending, hasResult = false;
+  let api, pending, activeController, generation = 0, hasResult = false;
+
+  function cancelPending() {
+    ++generation;
+    activeController?.abort();
+    activeController = null;
+    pending = null;
+  }
 
   function render(value) {
     const details = describe(value);
@@ -32,25 +40,36 @@
     if (summary) summary.title = `Controller ${details.version}\nRevision: ${details.revision}\nDeployment image: ${details.image}\nImage digest: ${details.digest}`;
   }
 
-  function refresh() {
-    if (!api || root.document.hidden || pending) return pending;
+  function refresh(options = {}) {
+    if (!api || root.document.hidden) return pending;
+    if (pending) {
+      if (!options.force) return pending;
+      cancelPending();
+    }
+    const current = ++generation;
     const controller = new AbortController();
+    activeController = controller;
     const timer = setTimeout(() => controller.abort(), 10000);
     pending = Promise.resolve().then(async () => {
       const status = root.document.querySelector("#runtimeVersionStatus");
       try {
         const value = await api("/api/v1/version", {signal: controller.signal});
+        if (current !== generation) return;
         render(value);
         hasResult = true;
         if (status) status.textContent = "";
       } catch {
+        if (current !== generation) return;
         if (!hasResult) render(null);
         if (status) status.textContent = hasResult
           ? "Could not refresh runtime version. Showing the last confirmed information."
           : "Runtime version is unavailable. Reconnect to try again.";
       } finally {
         clearTimeout(timer);
-        pending = null;
+        if (current === generation) {
+          pending = null;
+          activeController = null;
+        }
       }
     });
     return pending;
@@ -59,7 +78,10 @@
   function init(options) {
     if (api || !root.document?.querySelector("#runtimeVersion")) return;
     api = options.api;
-    root.document.addEventListener("visibilitychange", () => { if (!root.document.hidden) void refresh(); });
+    root.document.addEventListener("visibilitychange", () => {
+      if (root.document.hidden) cancelPending();
+      else void refresh({force:true});
+    });
     void refresh();
   }
 

@@ -63,15 +63,22 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 	}
 	var filtered []string
 	separated, valueExpected := false, false
+	globalSeparated := false
+	separator := -1
 	for i := 0; i < len(words); i++ {
 		if words[i] == "--" {
-			separated = true
+			separator = len(filtered)
+			globalSeparated = separator == 0
+			separated = !globalSeparated
 			filtered = append(filtered, words[i+1:]...)
 			break
 		}
 		switch words[i] {
 		case "--repo", "--env-file":
 			if i == len(words)-1 {
+				if validateCLIPath(filtered) != nil {
+					return nil
+				}
 				return printCandidates(a.Stdout, fileCandidates(prefix, words[i] != "--env-file"), prefix)
 			}
 			i++
@@ -90,20 +97,33 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		}
 	}
 	words = filtered
+	if globalSeparated {
+		words, separator = splitLeafSeparator(words)
+		separated = separator >= 0
+	}
 	if len(words) > 0 && words[0] == "help" {
 		words = words[1:]
+		if separator > 0 {
+			separator--
+		}
 	}
 	if validateCLIPath(words) != nil {
 		return nil
 	}
+	if separator > 0 && len(words) > 0 && words[0] != "help" && separator < cliCommandDepth(words) {
+		return nil
+	}
 	if len(words) > 0 {
 		command, arguments := canonicalCLICommand(words[0], words[1:])
+		if separator > 0 {
+			separator += len(arguments) - (len(words) - 1)
+		}
 		words = append([]string{command}, arguments...)
 		if IsRuntimeCommand(command) {
 			return printCandidates(a.Stdout, []string{"--help"}, prefix)
 		}
 	}
-	if !separated && !valueExpected {
+	if !separated && !globalSeparated && !valueExpected {
 		for _, option := range []string{"--repo", "--env-file"} {
 			if value, ok := strings.CutPrefix(prefix, option+"="); ok {
 				var candidates []string
@@ -115,7 +135,8 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 		}
 	}
 	var candidates []string
-	if !separated && !valueExpected && strings.HasPrefix(prefix, "--") {
+	valueOptionActive := !separated || len(words)-1 < separator
+	if !separated && !globalSeparated && !valueExpected && strings.HasPrefix(prefix, "--") {
 		candidates = append(candidates, "--repo", "--env-file", "--help")
 	}
 	if len(words) == 0 {
@@ -188,7 +209,7 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				}
 			}
 		case "publish":
-			if words[len(words)-1] == "--platforms" {
+			if valueOptionActive && words[len(words)-1] == "--platforms" {
 				candidates = append(candidates, completionPlatforms...)
 			} else if !separated && len(words) == 2 {
 				candidates = append(candidates, "--platforms")
@@ -237,9 +258,9 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 			if len(words) == 2 {
 				candidates = append(candidates, "controller", "agent", "network-manager", "resource-monitor", "prometheus", "grafana", "access", "auth")
 			}
-			if words[len(words)-1] == "--context" {
+			if valueOptionActive && words[len(words)-1] == "--context" {
 				candidates = append(candidates, a.completionDocker(ctx, "context", "ls", "--format", "{{.Name}}")...)
-			} else if words[len(words)-1] == "--tail" {
+			} else if valueOptionActive && words[len(words)-1] == "--tail" {
 				candidates = append(candidates, "100", "all")
 			} else if !separated {
 				candidates = append(candidates, "--tail")
@@ -276,7 +297,7 @@ func (a *App) completionNodes(ctx context.Context, used []string) []string {
 	var candidates []string
 	for _, record := range a.completionDocker(ctx, "node", "ls", "--format", "{{.ID}} {{.Hostname}}") {
 		fields := strings.Fields(record)
-		if len(fields) != 2 {
+		if len(fields) != 2 || !swarmID.MatchString(fields[0]) {
 			continue
 		}
 		present := false
@@ -287,7 +308,10 @@ func (a *App) completionNodes(ctx context.Context, used []string) []string {
 			}
 		}
 		if !present {
-			candidates = append(candidates, fields...)
+			candidates = append(candidates, fields[0])
+			if swarmNodeName.MatchString(fields[1]) && !strings.HasPrefix(fields[1], "-") {
+				candidates = append(candidates, fields[1])
+			}
 		}
 	}
 	return candidates

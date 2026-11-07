@@ -1,13 +1,64 @@
 package master
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
 )
+
+const networkCreateDiagnosticLimit = 8 << 10
+
+var errNetworkCreateDiagnosticLimit = errors.New("network creation diagnostics exceeded the capture limit")
+
+type networkCreateDiagnostics struct {
+	buffer   bytes.Buffer
+	cancel   context.CancelFunc
+	exceeded bool
+}
+
+func (d *networkCreateDiagnostics) Write(p []byte) (int, error) {
+	if d.exceeded || len(p) > networkCreateDiagnosticLimit-d.buffer.Len() {
+		d.exceeded = true
+		d.cancel()
+		return 0, errNetworkCreateDiagnosticLimit
+	}
+	return d.buffer.Write(p)
+}
+
+// Docker's actual refusal is written to stderr; exec.ExitError only contains
+// the exit status. Capture a bounded diagnostic without changing streamed CLI
+// output, and distinguish a proven name conflict from ambiguous transport loss.
+func (s *swarm) tryCreateResetPeerNetwork(ctx context.Context, args []string) (string, error, bool) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	diagnostic := networkCreateDiagnostics{cancel: cancel}
+	app := *s.a
+	if app.Stderr != nil {
+		app.Stderr = io.MultiWriter(app.Stderr, &diagnostic)
+	} else {
+		app.Stderr = &diagnostic
+	}
+	id, err := app.Output(attemptCtx, "docker", args...)
+	if diagnostic.exceeded {
+		return "", errNetworkCreateDiagnosticLimit, false
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err(), false
+	}
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return id, err, false
+	}
+	var exited interface{ ExitCode() int }
+	line := strings.TrimSuffix(strings.TrimSuffix(diagnostic.buffer.String(), "\n"), "\r")
+	expected := "Error response from daemon: network with name " + s.network + " already exists"
+	refused := errors.As(err, &exited) && exited.ExitCode() == 1 && line == expected
+	return id, err, refused
+}
 
 // Docker acknowledges overlay mutations before every manager view converges.
 // Wait by full identity; never remove or adopt a concurrent replacement.
@@ -51,11 +102,11 @@ func (s *swarm) createResetPeerNetwork(ctx context.Context, args []string, oldID
 		if err := s.waitResetNetworkView(ctx, oldID, ""); err != nil {
 			return "", err
 		}
-		id, err := s.output(ctx, args...)
+		id, err, refused := s.tryCreateResetPeerNetwork(ctx, args)
 		if err != nil {
 			// This explicit daemon refusal proves this attempt created nothing.
 			// Other failures can follow successful creation and must not replay.
-			if !strings.Contains(err.Error(), "network with name "+s.network+" already exists") {
+			if !refused {
 				return "", err
 			}
 			if pauseErr := swarmSleep(ctx, 250*time.Millisecond); pauseErr != nil {

@@ -472,6 +472,7 @@
           <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
           <details class="results-guide"><summary>About results, retries, and downloads</summary>
             <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
+            <p>Select results, then use <strong>Actions → Start analysis</strong> for per-Run analyses, including retrying failed analyses. <strong>Retry failed runs</strong> reviews current failed batches and retries their unfinished iterations. Accepted work uses the shared execution queue. Large selections may be submitted partially when the analysis queue is full.</p>
           </details>
           <div class="results-storage-controls">
             <p class="results-storage-status" id="resultStorageStatus" role="status" aria-live="polite"></p>
@@ -733,6 +734,18 @@
     </form>
   </dialog>
 
+  <dialog id="resultBulkDialog" aria-labelledby="resultBulkHeading" aria-describedby="resultBulkDescription">
+    <div class="dialog-shell">
+      <header><div><p class="eyebrow">SELECTED RESULTS</p><h2 id="resultBulkHeading">Submit selected work</h2></div></header>
+      <p id="resultBulkDescription" class="panel-note"></p>
+      <pre id="resultBulkNames" class="result-bulk-list"></pre>
+      <p id="resultBulkProgress" role="status" aria-live="polite"></p>
+      <pre id="resultBulkReport" class="result-bulk-list" hidden></pre>
+      <p id="resultBulkError" class="dialog-error" role="alert"></p>
+      <footer><button class="secondary-button" type="button" id="cancelResultBulk">Cancel</button><button class="secondary-button" type="button" id="viewResultBulkQueue" hidden>View queue</button><button class="primary-button" type="button" id="confirmResultBulk">Queue selected</button></footer>
+    </div>
+  </dialog>
+
   <dialog id="libraryDeleteDialog" aria-labelledby="libraryDeleteHeading" aria-describedby="libraryDeleteDescription">
     <header><h2 id="libraryDeleteHeading">Delete selected items?</h2></header>
     <p id="libraryDeleteDescription"></p>
@@ -766,6 +779,7 @@
   <script src="/library-deletions.js" defer></script>
   <script src="/result-analysis-downloads.js" defer></script>
   <script src="/library-groups.js" defer></script>
+  <script src="/result-bulk-actions.js" defer></script>
   <script src="/scenario-run-queue.js" defer></script>
   <script src="/work-queue.js" defer></script>
   <script src="/runtime-version.js" defer></script>

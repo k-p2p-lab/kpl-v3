@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	scenarioYAMLLimit = 1 << 20
+	scenarioYAMLLimit = scenario.MaxSubmissionBytes
 	// A JSON string can encode one source byte as a six-byte Unicode escape.
 	// This envelope therefore accepts every valid 1 MiB scenario regardless
 	// of the JSON escaping chosen by the client.

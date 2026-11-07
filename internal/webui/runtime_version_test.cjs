@@ -22,6 +22,11 @@ test('runtime identity distinguishes source revision, binary hash and registry d
   assert.equal(describe({image:'team/kpl:latest', imageDigest:digest}).digest, 'Unknown');
   assert.equal(describe({...data,imageDigest:'sha256:short'}).digest, 'Unknown');
   assert.equal(describe({...data,imageDigest:`sha256:${'c'.repeat(64)}`}).digest, 'Unknown');
+  for (const revision of ['unknown','development','']) {
+    const missing = describe({...data,build:{version:'dev',revision}});
+    assert.equal(missing.revision,'Unknown');
+    assert.equal(missing.summary,'Version · dev · sha256:aaaaaaaaaaaa');
+  }
 });
 
 function browser() {
@@ -86,4 +91,49 @@ test('initial failure presents unknown and a later refresh can recover', async (
   assert.match(element('#runtimeVersionStatus').textContent,/unavailable/);
   fail=false; await runtime.refresh();
   assert.equal(element('#runtimeVersionDigest').textContent,digest);
+});
+
+test('a new stream baseline supersedes a pending version response from the previous Controller', async t => {
+  const {element,runtime} = browser();
+  const requests=[];
+  t.after(() => {for (const request of requests) request.resolve(fixture());});
+  runtime.init({api:(url, options) => new Promise(resolve => requests.push({resolve,signal:options.signal}))});
+  const previous=runtime.refresh();
+  await Promise.resolve();
+  const current=runtime.refresh({force:true});
+  await Promise.resolve();
+  assert.equal(requests.length,2,'a new baseline must query the current Controller');
+  assert.equal(requests[0].signal.aborted,true);
+  const nextDigest=`sha256:${'c'.repeat(64)}`;
+  requests[1].resolve({...fixture(),image:`registry.example/kpl@${nextDigest}`,imageDigest:nextDigest});
+  await current;
+  assert.equal(element('#runtimeVersionDigest').textContent,nextDigest);
+  // Some transports can still settle after abort. Their response must not
+  // overwrite the identity confirmed by the newer connection.
+  requests[0].resolve(fixture());
+  await previous;
+  assert.equal(element('#runtimeVersionDigest').textContent,nextDigest);
+  assert.equal(element('#runtimeVersionStatus').textContent,'');
+});
+
+test('hiding a page cancels a pending version lookup and returning queries again', async t => {
+  const {element,document,listeners,runtime} = browser();
+  const requests=[];
+  t.after(() => {for (const request of requests) request.resolve(fixture());});
+  runtime.init({api:(url, options) => new Promise(resolve => requests.push({resolve,signal:options.signal}))});
+  const previous=runtime.refresh();
+  await Promise.resolve();
+  document.hidden=true;
+  listeners.visibilitychange();
+  assert.equal(requests[0].signal.aborted,true);
+  document.hidden=false;
+  listeners.visibilitychange();
+  const current=runtime.refresh();
+  await Promise.resolve();
+  assert.equal(requests.length,2);
+  requests[1].resolve({...fixture(),build:{version:'v3.next'}});
+  await current;
+  requests[0].resolve({...fixture(),build:{version:'v3.previous'}});
+  await previous;
+  assert.equal(element('#runtimeVersionBuild').textContent,'v3.next');
 });

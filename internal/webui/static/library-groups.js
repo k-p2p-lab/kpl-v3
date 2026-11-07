@@ -262,9 +262,11 @@
         const allChecked = keys.length > 0 && checkedCount === keys.length, mixed = checkedCount > 0 && !allChecked;
         const disabled = ready() ? "" : " disabled";
         const canDownload = selected.size && ready();
-        const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON))
+        const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
             + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Actions<span class="visually-hidden"> for selected ' + scope + '</span></button><span class="action-menu-items">'
+            + (scope === "results" && options?.onAnalyzeSelected ? '<button type="button" data-library-action="analyze-selected" title="Queue analysis for eligible selected saved runs"' + (canDownload ? "" : " disabled") + '>Start analysis</button>' : "")
+            + (scope === "results" && options?.onRetrySelected ? '<button type="button" data-library-action="retry-selected" title="Queue selected failed runs again; completed runs are kept"' + (canDownload ? "" : " disabled") + '>Retry failed runs</button>' : "")
             + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
             + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
             + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download completed per-Run analysis JSON files in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
@@ -385,7 +387,7 @@
           analysisDownloadController?.abort();
           return;
         }
-        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "move"].includes(action)) return;
+        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "analyze-selected", "retry-selected", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -406,6 +408,24 @@
           changed();
         } else if (action === "delete-selected") {
           if (selected.size && ready()) options?.onDeleteSelected?.(selectionScope, [...selected]);
+        } else if (action === "analyze-selected" || action === "retry-selected") {
+          const operation = action === "analyze-selected" ? options?.onAnalyzeSelected : options?.onRetrySelected;
+          if (selectionScope !== "results" || !selected.size || !ready() || !operation) return;
+          const keys = [...selected];
+          busy = true;
+          errorText = "";
+          noticeText = action === "analyze-selected" ? "Queueing selected analyses…" : "Queueing failed runs…";
+          options?.onSelectionChanged?.();
+          refreshUI();
+          try {
+            const report = await operation(keys);
+            noticeText = typeof report === "string" ? report : "Selected work was submitted. Check the execution queue.";
+          } finally {
+            busy = false;
+            options?.onSelectionChanged?.();
+            refreshUI();
+            document?.querySelector("#resultGroupTools")?.querySelector('[data-action-menu-toggle="library-download:results"]')?.focus({preventScroll:true});
+          }
         } else if (action === "download" || action === "download-csv" || action === "download-json") {
           const csv = action === "download-csv";
           const json = action === "download-json", analysis = csv || json;

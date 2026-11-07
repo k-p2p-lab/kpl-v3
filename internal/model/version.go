@@ -66,7 +66,14 @@ func BuildVersion() string {
 			}
 			binaryVersion = revision + dirty + "/" + info.GoVersion
 		}
-		if executable, err := os.Executable(); err == nil {
+		// On Linux the executable pathname can be replaced while this process
+		// still runs the previous inode (for example, by kpl dev build). The
+		// kernel's executable handle identifies the code actually running.
+		executable := "/proc/self/exe"
+		if runtime.GOOS != "linux" {
+			executable, _ = os.Executable()
+		}
+		if executable != "" {
 			if file, err := os.Open(executable); err == nil {
 				defer file.Close()
 				hash := sha256.New()

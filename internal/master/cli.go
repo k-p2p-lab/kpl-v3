@@ -165,6 +165,64 @@ func cliHelpRequested(words []string) bool {
 	return false
 }
 
+// cliCommandDepth counts the public command words before leaf arguments.
+// Separators inside a partially specified path must not be moved by command
+// normalization into a position that re-enables options in a native handler.
+func cliCommandDepth(words []string) int {
+	depth := 1
+	if len(words) == 0 {
+		return 0
+	}
+	switch words[0] {
+	case "config", "dev", "image", "run", "scenario":
+		depth = 2
+	case "swarm":
+		depth = 2
+		if len(words) > 1 && (words[1] == "node" || words[1] == "network") {
+			depth = 3
+		}
+	}
+	return min(depth, len(words))
+}
+
+// splitLeafSeparator is used after a global prefix '--' has ended operator
+// option extraction. A later '--' still belongs to the selected command.
+func splitLeafSeparator(words []string) ([]string, int) {
+	for i := 1; i < len(words); i++ {
+		if words[i] == "--" {
+			result := append([]string(nil), words[:i]...)
+			return append(result, words[i+1:]...), i
+		}
+		switch words[i] {
+		case "--scenario", "--platforms", "--image", "--tail", "--context":
+			if i+1 < len(words) && words[i+1] != "--" {
+				i++
+			}
+		}
+	}
+	return words, -1
+}
+
+func cliNeedsRepository(command string, arguments []string, explicitConfig bool) bool {
+	switch command {
+	case "validate":
+		return len(arguments) == 0
+	case "config-version":
+		return !explicitConfig
+	case "swarm":
+		if len(arguments) == 0 {
+			return true
+		}
+		switch arguments[0] {
+		case "init", "configure", "config", "credentials":
+			return !explicitConfig
+		case "scenario":
+			return len(arguments) < 2
+		}
+	}
+	return true
+}
+
 func (a *App) Execute(ctx context.Context, args []string, version string) error {
 	if len(args) > 1 && args[0] == "run" && IsRuntimeCommand(args[1]) {
 		return a.executeRuntime(ctx, args[1:])
@@ -225,14 +283,37 @@ func (a *App) Execute(ctx context.Context, args []string, version string) error 
 	if len(rest) == 0 {
 		return a.Help(nil)
 	}
+	if separator == 0 && rest[0] != "run" {
+		rest, separator = splitLeafSeparator(rest)
+	}
 	if err := validateCLIPath(rest); err != nil {
 		return err
+	}
+	if separator > 0 && rest[0] != "help" {
+		if separator < cliCommandDepth(rest) {
+			return usageError("place -- after the complete command path")
+		}
+		// Scenario paths may start with '-' and are handled as literal values.
+		// Runtime roles retain their own flag parser. Other leaf commands have
+		// no option-like positional arguments and must never activate them.
+		if rest[0] != "scenario" && rest[0] != "run" {
+			for _, argument := range rest[separator:] {
+				if strings.HasPrefix(argument, "-") {
+					return usageError("arguments after -- are positional; option-like values are not valid here")
+				}
+			}
+		}
 	}
 	if rest[0] == "help" {
 		return a.Help(rest[1:])
 	}
 	command, arguments := canonicalCLICommand(rest[0], rest[1:])
-	// Inserting a subcommand for an alias also shifts the separator position.
+	// A separator before COMMAND ends only global option extraction. The
+	// selected subcommand still parses its own flags, including --help.
+	if separator == 0 {
+		separator = -1
+	}
+	// Mapping the command tree to native handlers shifts the separator position.
 	if separator > 0 {
 		separator += len(arguments) - (len(rest) - 1)
 	}
@@ -280,8 +361,9 @@ func (a *App) Execute(ctx context.Context, args []string, version string) error 
 	if command == "swarm" && len(arguments) == 1 && (arguments[0] == "node" || arguments[0] == "network") {
 		return a.Help(rest)
 	}
-	// Explicit scenarios also work in images without a source checkout.
-	if command != "validate" || len(arguments) == 0 || repo != "" || a.Env("KPL_REPO") != "" {
+	// Explicit file operations do not need repository assets. A requested
+	// checkout remains authoritative even for these source-independent commands.
+	if repo != "" || a.Env("KPL_REPO") != "" || cliNeedsRepository(command, arguments, a.EnvFileExplicit) {
 		if err := a.resolveRepository(repo); err != nil {
 			return err
 		}

@@ -640,6 +640,9 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .runtime-version dd { margin: 0; min-width: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 .runtime-version-details > p { margin: .65rem 0 0; overflow-wrap: anywhere; }
 .runtime-version-details > p:empty { display: none; }
+.result-bulk-list { margin: 0; padding: .7rem; max-height: min(16rem, 35dvh); overflow: auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .8rem; line-height: 1.6; border: 1px solid var(--line-soft); border-radius: .5rem; }
+#resultBulkDialog .dialog-shell { min-width: 0; }
+#resultBulkDescription, #resultBulkProgress, #resultBulkError { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (max-width: 1100px) { .runtime-version { flex-basis: auto; width: 100%; } }
 @media (max-width: 520px) { .runtime-version dl { grid-template-columns: minmax(0, 1fr); gap: .2rem; } .runtime-version dd { margin-bottom: .4rem; } }
 .workspace-heading h2 { margin: .45rem 0; font-size: clamp(1.45rem, 2.4vw, 1.9rem); letter-spacing: -.04em; font-weight: 700; }

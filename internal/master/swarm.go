@@ -196,6 +196,9 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 		if len(args) > 1 || len(args) == 1 && strings.HasPrefix(args[0], "-") {
 			return &UsageError{Message: "scenario accepts one file"}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		path := filepath.Join(a.Repo, "examples", "swarm-smoke.yaml")
 		if len(args) == 1 {
 			path = args[0]
@@ -212,7 +215,10 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 		if !info.Mode().IsRegular() {
 			return errors.New("scenario must be a regular file")
 		}
-		_, err = io.Copy(a.Stdout, file)
+		_, err = io.Copy(contextWriter{ctx: ctx, writer: a.Stdout}, contextReader{ctx: ctx, reader: file})
+		if cancelErr := ctx.Err(); cancelErr != nil {
+			return cancelErr
+		}
 		return err
 	}
 	o, err := parseSwarmOptions(name, args)

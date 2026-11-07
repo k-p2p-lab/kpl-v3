@@ -149,13 +149,10 @@ func (s *swarm) pauseService(ctx context.Context, service string) error {
 	return s.run(ctx, "service", "update", "--detach=true", "--no-resolve-image", "--constraint-add", "node.role==manager", "--constraint-add", "node.role==worker", service)
 }
 
-func (s *swarm) prepareRestart(ctx context.Context, nodes []string) ([]string, error) {
-	if !s.present["controller"] || !s.present["agent"] {
-		return nil, errors.New("restart requires existing Controller and Agent services; use deploy for initial deployment")
-	}
+func (s *swarm) validateAgentPlacement(ctx context.Context, nodes []string) error {
 	selected, err := s.selectedNodes(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	seen := map[string]bool{}
 	eligible := int64(0)
@@ -166,7 +163,7 @@ func (s *swarm) prepareRestart(ctx context.Context, nodes []string) ([]string, e
 		seen[node] = true
 		state, err := s.inspectNode(ctx, "{{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}", node)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if state == "linux ready active" {
 			eligible++
@@ -174,10 +171,20 @@ func (s *swarm) prepareRestart(ctx context.Context, nodes []string) ([]string, e
 	}
 	minimum, err := positiveSwarmInteger(s.config["KPL_MIN_AGENTS"])
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if eligible < minimum {
-		return nil, fmt.Errorf("restart requires at least %d eligible Agent nodes; specify nodes or a selector", minimum)
+		return fmt.Errorf("%s requires at least %d eligible Agent nodes; specify nodes or a selector", s.options.name, minimum)
+	}
+	return nil
+}
+
+func (s *swarm) prepareRestart(ctx context.Context, nodes []string) ([]string, error) {
+	if !s.present["controller"] || !s.present["agent"] {
+		return nil, errors.New("restart requires existing Controller and Agent services; use deploy for initial deployment")
+	}
+	if err := s.validateAgentPlacement(ctx, nodes); err != nil {
+		return nil, err
 	}
 	var tasks []string
 	for _, service := range s.services {
@@ -268,9 +275,20 @@ func (s *swarm) deploy(ctx context.Context) error {
 		if _, err := s.prepareRestart(ctx, nodes); err != nil {
 			return err
 		}
+	} else if err := s.validateAgentPlacement(ctx, nodes); err != nil {
+		// Reject known-insufficient placement before adding labels can start a
+		// global Agent, or an initial deployment can leave a new overlay behind.
+		return err
 	}
 	if err := s.resolveImage(ctx); err != nil {
 		return err
+	}
+	if s.options.name == "deploy" {
+		// Tag resolution can outlast an external service replacement. Do not
+		// overwrite a new owner using the inventory captured before the pull.
+		if err := s.loadServices(ctx); err != nil {
+			return err
+		}
 	}
 	networks, err := s.output(ctx, "network", "ls", "--quiet", "--filter", "name=^"+regexp.QuoteMeta(s.network)+"$")
 	if err != nil {
@@ -378,6 +396,18 @@ func (s *swarm) addNodes(ctx context.Context) error {
 	return nil
 }
 
+func (s *swarm) readyCleanupNode(ctx context.Context, node string) error {
+	state, err := s.inspectNode(ctx, "{{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}", node)
+	if err != nil {
+		return err
+	}
+	fields := strings.Fields(state)
+	if len(fields) != 3 || fields[0] != "linux" || fields[1] != "ready" || fields[2] != "active" && fields[2] != "pause" && fields[2] != "drain" {
+		return fmt.Errorf("node %s must be Linux and Ready with Active, Pause or Drain availability to verify cleanup; got %s", node, state)
+	}
+	return nil
+}
+
 func (s *swarm) removeNodes(ctx context.Context) error {
 	if !s.present["agent"] {
 		return errors.New("Agent service does not exist")
@@ -388,7 +418,7 @@ func (s *swarm) removeNodes(ctx context.Context) error {
 	}
 	var tasks []string
 	for _, node := range nodes {
-		if err := s.readyNode(ctx, node); err != nil {
+		if err := s.readyCleanupNode(ctx, node); err != nil {
 			return err
 		}
 		captured, err := s.captureTasks(ctx, s.stack+"_agent", node)
@@ -425,6 +455,36 @@ func (s *swarm) removeNodes(ctx context.Context) error {
 	return nil
 }
 
+func (s *swarm) waitRemovedServices(ctx context.Context) error {
+	allowed := make(map[string]bool, len(s.serviceIDs))
+	for _, id := range s.serviceIDs {
+		allowed[id] = true
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	for {
+		remaining, err := s.output(waitCtx, "service", "ls", "--quiet", "--filter", "label=com.docker.stack.namespace="+s.stack)
+		if err != nil {
+			return fmt.Errorf("cannot verify stack service removal: %w", err)
+		}
+		ids, err := swarmIDs(remaining)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if !allowed[id] {
+				return fmt.Errorf("new stack service %s appeared during removal; inspect status before retrying", id)
+			}
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := swarmSleep(waitCtx, 2*time.Second); err != nil {
+			return fmt.Errorf("stack service removal is still pending; inspect status: %w", err)
+		}
+	}
+}
+
 func (s *swarm) remove(ctx context.Context) error {
 	gatewayReady := false
 	if s.present["network-manager"] {
@@ -441,27 +501,24 @@ func (s *swarm) remove(ctx context.Context) error {
 			return fmt.Errorf("service removal failed; inspect status and retry remove: %w", err)
 		}
 	}
+	if err := s.waitRemovedServices(ctx); err != nil {
+		return fmt.Errorf("service removal is unverified; stack resource cleanup was not attempted: %w", err)
+	}
 	if gatewayReady {
 		if err := s.removeGateway(ctx); err != nil {
 			fmt.Fprintf(s.a.Stderr, "Gateway removal is unverified; inspect retained gateway and control network: %v\n", err)
 		}
 	}
+	// Gateway inspection can block. Refuse a replacement created in that
+	// interval before asking Docker's name-based stack removal to clean assets.
+	if err := s.waitRemovedServices(ctx); err != nil {
+		return fmt.Errorf("stack service inventory changed; stack resource cleanup was not attempted: %w", err)
+	}
 	if err := s.run(ctx, "stack", "rm", s.stack); err != nil {
 		return err
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-	for {
-		remaining, err := s.output(waitCtx, "service", "ls", "--quiet", "--filter", "label=com.docker.stack.namespace="+s.stack)
-		if err != nil {
-			return fmt.Errorf("cannot verify stack removal: %w", err)
-		}
-		if remaining == "" {
-			break
-		}
-		if err := swarmSleep(waitCtx, 2*time.Second); err != nil {
-			return fmt.Errorf("stack removal is still pending; inspect status: %w", err)
-		}
+	if err := s.waitRemovedServices(ctx); err != nil {
+		return err
 	}
 	nodes, err := s.selectedNodes(ctx)
 	if err != nil {

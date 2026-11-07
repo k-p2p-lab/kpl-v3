@@ -525,3 +525,47 @@ test('JSON failure keeps selection retryable and leaves the existing download fo
   assert.equal(failures,2);assert.equal(csv,1);assert.equal(raw,1);
   assert.match(h.groups.selectionMarkup('run:single','Single'),/ checked/);
 });
+
+test('selected result actions share the dropdown while scenario controls remain unchanged',async()=>{
+  const resultBar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  const scenarioBar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  const h=harness(async()=>initial(),{bars:{'#resultGroupTools':resultBar,'#scenarioGroupTools':scenarioBar},
+    onAnalyzeSelected:async()=>'',onRetrySelected:async()=>''});
+  await h.initialized;h.check('scenario:one',true);
+  assert.doesNotMatch(scenarioBar.innerHTML,/Start analysis|Retry failed runs/);
+  h.check('batch:one',true);
+  assert.match(resultBar.innerHTML,/data-library-action="analyze-selected"[^>]*>Start analysis/);
+  assert.match(resultBar.innerHTML,/data-library-action="retry-selected"[^>]*>Retry failed runs/);
+});
+
+test('bulk work freezes selected keys, locks repeat clicks, and preserves the selection after submission',async()=>{
+  const gate=deferred(),calls=[];
+  const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  const h=harness(async()=>initial(),{bars:{'#resultGroupTools':bar},onAnalyzeSelected:async keys=>{
+    calls.push([...keys]);await gate.promise;return 'Queued 2 analyses · 1 skipped.';
+  },onRetrySelected:async()=>{throw Error('second action must stay locked')}});
+  await h.initialized;h.check('batch:one',true);h.check('run:single',true);
+  await h.action('analyze-selected','results');
+  assert.equal(h.groups.isBusy(),true);
+  await h.action('analyze-selected','results');await h.action('retry-selected','results');
+  await h.action('clear','results');
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0],['batch:one','run:single']);
+  assert.deepEqual(h.groups.getSelection('results'),['batch:one','run:single']);
+  gate.resolve();await nextTurn();await nextTurn();
+  assert.equal(h.groups.isBusy(),false);
+  assert.match(bar.innerHTML,/Queued 2 analyses · 1 skipped/);
+  assert.deepEqual(h.groups.getSelection('results'),['batch:one','run:single']);
+});
+
+test('bulk work failures retain selection and show plain escaped feedback without automatic retry',async()=>{
+  let calls=0;const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  const h=harness(async()=>initial(),{bars:{'#resultGroupTools':bar},onRetrySelected:async()=>{
+    calls++;throw Error('<script>Outcome unknown</script>');
+  }});
+  await h.initialized;h.check('run:single',true);await h.action('retry-selected','results');
+  assert.equal(calls,1);assert.equal(h.groups.isBusy(),false);
+  assert.deepEqual(h.groups.getSelection('results'),['run:single']);
+  assert.match(bar.innerHTML,/&lt;script&gt;Outcome unknown&lt;\/script&gt;/);
+  assert.doesNotMatch(bar.innerHTML,/<script>/);
+});

@@ -12,6 +12,25 @@ import (
 
 type ExecRunner struct{}
 
+const maxCapturedCommandOutput = 8 << 20
+
+var errCapturedCommandOutputLimit = errors.New("captured command output exceeds 8 MiB")
+
+type capturedCommandOutput struct {
+	buffer   bytes.Buffer
+	cancel   context.CancelFunc
+	exceeded bool
+}
+
+func (out *capturedCommandOutput) Write(data []byte) (int, error) {
+	if len(data) > maxCapturedCommandOutput-out.buffer.Len() {
+		out.exceeded = true
+		out.cancel()
+		return 0, errCapturedCommandOutputLimit
+	}
+	return out.buffer.Write(data)
+}
+
 func (ExecRunner) Run(ctx context.Context, command Command) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -74,10 +93,18 @@ func (ExecRunner) Run(ctx context.Context, command Command) error {
 }
 
 func (r ExecRunner) Output(ctx context.Context, command Command) ([]byte, error) {
-	var out bytes.Buffer
+	// These calls collect metadata for parsing, unlike Run's streamed logs.
+	// Stop malformed/oversized producers instead of retaining unlimited output
+	// or passing truncated metadata to deployment decisions.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	out := capturedCommandOutput{cancel: cancel}
 	command.Stdout = &out
 	err := r.Run(ctx, command)
-	return out.Bytes(), err
+	if out.exceeded {
+		return nil, fmt.Errorf("%s: %w", command.Name, errCapturedCommandOutputLimit)
+	}
+	return out.buffer.Bytes(), err
 }
 
 type UsageError struct{ Message string }

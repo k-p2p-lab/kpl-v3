@@ -254,6 +254,10 @@ func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {
 }
 
 func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) (analysisJobStatus, error) {
+	return s.startAnalysisJobExpected(ctx, id, refresh, nil)
+}
+
+func (s *Server) startAnalysisJobExpected(ctx context.Context, id string, refresh bool, expected *analysisExpectation) (analysisJobStatus, error) {
 	// Use server lifetime, not the POST request context. Fence Add against shutdown.
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
@@ -272,6 +276,9 @@ func (s *Server) startAnalysisJob(ctx context.Context, id string, refresh bool) 
 	}
 	if existing.status.State == "queued" || existing.status.State == "running" || existing.status.State == "completed" && !refresh && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) && existing.status.SourceRevision == revision {
 		return existing.status, nil
+	}
+	if !expected.matches(existing.status) {
+		return analysisJobStatus{}, errAnalysisAttemptChanged
 	}
 	count := 0
 	for _, job := range s.analysisJobs {
@@ -562,12 +569,22 @@ func (s *Server) handleAnalysisJob(ctx context.Context) http.HandlerFunc {
 		case http.MethodGet:
 			status, err = s.analysisJobStatus(id)
 		case http.MethodPost:
-			status, err = s.startAnalysisJob(ctx, id, r.URL.Query().Get("refresh") == "1")
+			var expected *analysisExpectation
+			expected, err = decodeAnalysisExpectation(w, r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			status, err = s.startAnalysisJobExpected(ctx, id, r.URL.Query().Get("refresh") == "1", expected)
 		default:
 			methodNotAllowed(w)
 			return
 		}
 		if err != nil {
+			if errors.Is(err, errAnalysisAttemptChanged) {
+				writeAnalysisAttemptChanged(w)
+				return
+			}
 			code := http.StatusUnprocessableEntity
 			if errors.Is(err, errResultNotFound) {
 				code = http.StatusNotFound

@@ -312,7 +312,7 @@ func configSettings(args []string) (Config, error) {
 	for _, arg := range args {
 		key, value, ok := strings.Cut(arg, "=")
 		if !ok {
-			return nil, errors.New("use literal KEY=VALUE arguments with init or configure")
+			return nil, errors.New("use literal KEY=VALUE arguments with kpl config init or kpl config set")
 		}
 		if err := ValidateSetting(key, value); err != nil {
 			return nil, err
@@ -379,11 +379,11 @@ func saveConfig(path string, data []byte, original []byte, originalInfo os.FileI
 	} else {
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || !os.SameFile(originalInfo, info) {
-			return errors.New("config changed while editing; retry configure")
+			return errors.New("config changed while editing; retry kpl config set")
 		}
 		current, currentInfo, err := readConfigBytes(path)
 		if err != nil || !os.SameFile(originalInfo, currentInfo) || !bytes.Equal(current, original) {
-			return errors.New("config changed while editing; retry configure")
+			return errors.New("config changed while editing; retry kpl config set")
 		}
 		if err := os.Rename(name, path); err != nil {
 			return err
@@ -422,7 +422,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 		}
 	case "configure":
 		if len(args) == 0 {
-			return errors.New("configure requires at least one KEY=VALUE setting")
+			return errors.New("kpl config set requires at least one KEY=VALUE setting")
 		}
 	case "init":
 	default:
@@ -456,7 +456,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 		defer os.Remove(lock)
 		originalInfo, err = os.Lstat(path)
 		if err != nil || !originalInfo.Mode().IsRegular() {
-			return errors.New("configure requires an existing regular config file, not a symlink")
+			return errors.New("kpl config set requires an existing regular config file, not a symlink")
 		}
 		var current os.FileInfo
 		original, current, err = readConfigBytes(path)
@@ -464,7 +464,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 			return err
 		}
 		if !os.SameFile(originalInfo, current) {
-			return errors.New("config changed while opening; retry configure")
+			return errors.New("config changed while opening; retry kpl config set")
 		}
 		c, legacy, err = parseConfig(original)
 		if err != nil {
@@ -565,7 +565,7 @@ func (a *App) ConfigCommand(ctx context.Context, name string, args []string) err
 		if legacy {
 			fmt.Fprintln(a.Stdout, "Migrated KPL_API_TOKEN to dashboard login settings.")
 		}
-		fmt.Fprintln(a.Stdout, "Exported environment variables still override saved settings. Run deploy to apply changes to services.")
+		fmt.Fprintln(a.Stdout, "Exported environment variables still override saved settings. Run kpl swarm deploy to apply changes to services.")
 	}
 	return nil
 }

@@ -29,6 +29,32 @@ func IsRuntimeCommand(name string) bool {
 	return false
 }
 
+func parseRoleFlags(flags *flag.FlagSet, args []string) error {
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usageError(flags.Name() + " accepts flags only; unexpected positional arguments")
+	}
+	return nil
+}
+
+func roleDefaultError(flags *flag.FlagSet, name string, err error) error {
+	if err == nil {
+		return nil
+	}
+	explicit := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == name {
+			explicit = true
+		}
+	})
+	if explicit {
+		return nil
+	}
+	return err
+}
+
 // Container roles share this executable and retain their own flag parsing.
 // They run before operator option handling and do not need a source checkout.
 func (a *App) executeRuntime(ctx context.Context, args []string) error {
@@ -68,7 +94,7 @@ func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) 
 	nodeID := flags.String("node-id", os.Getenv("KPL_SWARM_NODE_ID"), "stable Swarm node ID")
 	controlNode := flags.String("control-node-id", os.Getenv("KPL_CONTROL_NODE_ID"), "node hosting the default control services")
 	nodeName := flags.String("node-name", os.Getenv("KPL_SWARM_NODE_HOSTNAME"), "Docker host name")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
 		return err
 	}
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
@@ -86,21 +112,25 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	agentDiscoveryDNS := flags.String("agent-discovery-dns", os.Getenv("KPL_AGENT_DISCOVERY_DNS"), "optional Swarm Agent task DNS name for Dashboard discovery (port 8090)")
 	dataDir := flags.String("data-dir", "data", "experiment data directory")
 	minimumFree := uint64(1 << 30)
+	var minimumFreeErr error
 	if raw := os.Getenv("KPL_RUN_MIN_FREE_BYTES"); raw != "" {
 		value, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid KPL_RUN_MIN_FREE_BYTES: %w", err)
+			minimumFreeErr = fmt.Errorf("invalid KPL_RUN_MIN_FREE_BYTES: %w", err)
+		} else {
+			minimumFree = value
 		}
-		minimumFree = value
 	}
 	runMinFree := flags.Uint64("run-min-free-bytes", minimumFree, "minimum local free bytes before starting each run (0 disables admission guard)")
 	archiveRate := controller.DefaultArchiveMiBPerSecond
+	var archiveRateErr error
 	if raw := os.Getenv("KPL_ARCHIVE_MIB_PER_SECOND"); raw != "" {
 		value, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid KPL_ARCHIVE_MIB_PER_SECOND: %w", err)
+			archiveRateErr = fmt.Errorf("invalid KPL_ARCHIVE_MIB_PER_SECOND: %w", err)
+		} else {
+			archiveRate = value
 		}
-		archiveRate = value
 	}
 	archiveMiB := flags.Uint64("archive-mib-per-second", archiveRate, "idle archive copy/verification limit in MiB/s (0 disables throttling; experiment pauses remain)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
@@ -108,7 +138,13 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
 	prometheusPort := flags.String("prometheus-port", os.Getenv("PROMETHEUS_PORT"), "public Prometheus port advertised to the Dashboard (default 9090)")
 	grafanaPort := flags.String("grafana-port", os.Getenv("GRAFANA_PORT"), "public Grafana port advertised to the Dashboard (default 3000)")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
+		return err
+	}
+	if err := roleDefaultError(flags, "run-min-free-bytes", minimumFreeErr); err != nil {
+		return err
+	}
+	if err := roleDefaultError(flags, "archive-mib-per-second", archiveRateErr); err != nil {
 		return err
 	}
 	parsedPrometheusPort, err := parsePort(*prometheusPort, 9090, "Prometheus")
@@ -150,10 +186,7 @@ func parsePort(raw string, fallback int, name string) (int, error) {
 
 func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("kpl run agent", flag.ContinueOnError)
-	hostRebootDefault, err := parseHostRebootEnabled(os.Getenv("KPL_AGENT_HOST_REBOOT_ENABLED"))
-	if err != nil {
-		return err
-	}
+	hostRebootDefault, hostRebootErr := parseHostRebootEnabled(os.Getenv("KPL_AGENT_HOST_REBOOT_ENABLED"))
 	hostRebootEnabled := flags.Bool("host-reboot-enabled", hostRebootDefault, "allow confirmed Linux worker host reboot through the Dashboard")
 	controlNodeID := flags.String("control-node-id", os.Getenv("KPL_CONTROL_NODE_ID"), "Swarm node hosting the Controller; host reboot refuses this node")
 	id := flags.String("id", "", "stable unique agent id")
@@ -175,7 +208,10 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	dockerNetwork := flags.String("docker-network", "", "attachable Swarm peer overlay network")
 	autoResetNetwork := flags.Bool("auto-reset-network", false, "require an initialized network before admitting Peers")
 	controlNetwork := flags.String("control-network", "", "stable attachable overlay for Agent control")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
+		return err
+	}
+	if err := roleDefaultError(flags, "host-reboot-enabled", hostRebootErr); err != nil {
 		return err
 	}
 	if err := auth.Validate(user, password); err != nil {
@@ -218,7 +254,7 @@ func parseHostRebootEnabled(raw string) (bool, error) {
 func runNetworkManager(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("kpl run network-manager", flag.ContinueOnError)
 	dataDir := flags.String("data-dir", "/var/lib/kpl/network", "network recovery state directory")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
 		return err
 	}
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
@@ -233,7 +269,7 @@ func runNetworkManager(ctx context.Context, args []string) error {
 func runNetworkGateway(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("kpl run network-gateway", flag.ContinueOnError)
 	configPath := flags.String("config", "", "gateway configuration file")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(*configPath)
@@ -250,7 +286,7 @@ func runNetworkGateway(ctx context.Context, args []string) error {
 func runPeer(ctx context.Context, logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("kpl run peer", flag.ContinueOnError)
 	configPath := flags.String("config", "", "peer container JSON config")
-	if err := flags.Parse(args); err != nil {
+	if err := parseRoleFlags(flags, args); err != nil {
 		return err
 	}
 	if *configPath == "" {

@@ -95,8 +95,19 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 			if err := s.completeQueueCleanup(ids); err != nil {
 				return fmt.Errorf("clear confirmed Peer cleanup: %w", err)
 			}
-			phase("")
-			return ctx.Err()
+			// A deletion or late inventory recovery can add a durable cleanup
+			// obligation while the Agent round-trip above is in progress. Drain
+			// that newly known work before this head claims experiment isolation.
+			s.cancelMu.Lock()
+			ids = slices.Clone(s.queueCleanup)
+			s.cancelMu.Unlock()
+			if len(ids) == 0 {
+				phase("")
+				return ctx.Err()
+			}
+			previousError = ""
+			phase("Waiting for previous Peer cleanup")
+			continue
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()

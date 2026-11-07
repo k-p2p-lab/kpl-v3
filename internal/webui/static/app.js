@@ -15,6 +15,7 @@ const state = {
   agentNumbers: loadAgentNumbers(),
   pendingStops: new Set(), pendingResumes: new Set(), pendingAppends: new Set(), deletedResultIDs: new Set(),
   pendingDelete: null, deletingResultId: null, loginRedirecting: false,
+  pendingResultBulk: null, resultBulkBusy: false,
   topology: {
     enabled: false, loading: false,
     layout: {},
@@ -350,6 +351,7 @@ async function api(path, options = {}) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
     const failure = new Error(error.error || response.statusText);
     failure.status = response.status;
+    if (typeof error.code === "string") failure.code = error.code;
     if (typeof error.accepted === "boolean") failure.accepted = error.accepted;
     throw failure;
   }
@@ -499,7 +501,7 @@ function connectStream() {
       }
       scheduleSnapshotRender(state.streamSnapshot);
       markLive();
-      if (!delta) globalThis.KPLRuntimeVersion?.refresh();
+      if (!delta) globalThis.KPLRuntimeVersion?.refresh({force:true});
     } catch { void reconnect(); }
   };
   stream.addEventListener("snapshot", event => receive(event, false));
@@ -734,6 +736,7 @@ async function requestRunStop(id) {
 }
 
 function resultLocked(run) {
+  if (state.resultBulkBusy) return true;
   if (run.batchId && (state.pendingResumes?.has(run.batchId) || state.pendingAppends?.has(run.batchId))) return true;
   if (isPendingRun(run)) return true;
   return Boolean(run.batchId && [...(state.savedResults || []), ...(state.snapshot?.experiments || [])].some((other) => other.batchId === run.batchId && isPendingRun(other)));
@@ -796,7 +799,7 @@ function validateSavedScenario(value, requireYAML = false) {
 }
 
 function scenarioOperationBusy() {
-  return state.libraryDeleting || state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
+  return state.libraryDeleting || state.resultBulkBusy || state.scenariosLoading || state.scenarioSaving || state.scenarioSubmitting
     || Boolean(state.scenarioLoadingId) || Boolean(state.scenarioDeletingId) || Boolean(state.scenarioImporting) || Boolean(state.scenarioImportBatch);
 }
 
@@ -1531,7 +1534,8 @@ async function resumeSavedBatch(id, retry = false) {
   state.pendingResumes.add(id);
   renderSavedResults();
   try {
-    const first = await api(`/api/v1/result-batches/${encodeURIComponent(id)}/${retry ? "retry" : "resume"}`, { method: "POST" });
+    const first = await api(`/api/v1/result-batches/${encodeURIComponent(id)}/${retry ? "retry" : "resume"}`, { method: "POST",
+      ...(retry ? {headers: {"Content-Type": "application/json"}, body: JSON.stringify({expectedRunIds: remaining.map(run => run.id)})} : {}) });
     if (retry) {
       // The new ID belongs to the queued retry. Old attempts keep their state
       // and logs; do not optimistically turn those IDs back into running work.
@@ -1562,7 +1566,12 @@ async function resumeSavedBatch(id, retry = false) {
     showToast(retry ? `Queued ${remaining.length} unfinished ${remaining.length === 1 ? "run" : "runs"} from run ${remaining[0].iteration}. Previous Peers are cleaned up before execution.` : `Continuing ${remaining.length} remaining ${remaining.length === 1 ? "run" : "runs"}. Previous attempted runs are preserved.`);
     await refreshSavedResults();
   } catch (error) {
-    showToast(error.message);
+    if (retry && (error.code === "batch-attempt-changed" || error.accepted === true || !Number.isInteger(error.status)
+        || error.status === 408 || error.status >= 500 && error.accepted !== false)) {
+      showToast(`Retry outcome unknown. Inspect the execution queue and refresh saved results before trying again. ${error.message}`);
+      globalThis.KPLDashboardTabs?.show("experiments");
+      void refreshSavedResults();
+    } else showToast(error.message);
   } finally {
     state.pendingResumes.delete(id);
     renderSavedResults();
@@ -1869,6 +1878,119 @@ async function confirmResultDeletion() {
     void globalThis.KPLLibraryGroups?.refresh().catch(() => {});
     void refreshSavedResults();
   }
+}
+
+function resultBulkSummary(plan, report) {
+  if (!report) return "No work submitted.";
+  const count = report.accepted.length;
+  const label = plan.action === "analysis" ? `per-Run analysis job${count === 1 ? "" : "s"}` : `retry batch${count === 1 ? "" : "es"}`;
+  const reused = report.accepted.filter(item => item.reused).length;
+  return `Confirmed ${report.accepted.length} ${label}${reused ? ` (${reused} reused)` : ""}. `
+    + `${report.skipped.length} skipped · ${report.failed.length} failed · ${report.unknown.length} unknown · ${report.remaining.length} not submitted.`;
+}
+
+async function requestResultBulkAction(action, keys) {
+  if (state.pendingResultBulk || state.deletingResultId || state.libraryDeleting || state.scenarioSubmitting
+      || state.pendingResumes?.size || state.pendingAppends?.size) throw new Error("Wait for the current result operation to finish.");
+  const plan = globalThis.KPLResultBulkActions.prepare(action, [...keys], state.savedResults || []);
+  const previewRuns = plan.entries.reduce((count, entry) => count + entry.runCount, 0);
+  const label = action === "analysis" ? "Start selected analyses" : "Retry selected failed runs";
+  $("#resultBulkHeading").textContent = label;
+  $("#resultBulkDescription").textContent = action === "analysis"
+    ? `${plan.entries.length} per-Run ${plan.entries.length === 1 ? "analysis" : "analyses"} can be submitted; ${plan.skipped.length} skipped. Analyses wait behind running experiments. Completed analyses are reused and failed analyses are retried. Batch means are separate.`
+    : `${plan.entries.length} failed batch${plan.entries.length === 1 ? "" : "es"} with ${previewRuns} unfinished run${previewRuns === 1 ? "" : "s"} in this preview; ${plan.skipped.length} skipped. The server rechecks each batch. Completed runs and previous attempts remain saved.`;
+  $("#resultBulkNames").textContent = plan.entries.slice(0, 12).map(entry => `${entry.name} · ${entry.id}${action === "retry" ? ` · ${entry.runCount} unfinished` : ""}`).join("\n")
+    + (plan.entries.length > 12 ? `\n…and ${plan.entries.length - 12} more.` : "")
+    + (plan.skipped.length ? "\nSkipped:\n" + plan.skipped.slice(0, 6).map(entry => `${entry.name}: ${entry.reason}`).join("\n") : "");
+  $("#resultBulkProgress").textContent = "Review the selection before queueing. Items are submitted in order; accepted work continues on the server.";
+  $("#resultBulkReport").textContent = "";
+  $("#resultBulkReport").hidden = true;
+  $("#resultBulkError").textContent = "";
+  $("#confirmResultBulk").disabled = !plan.entries.length;
+  $("#confirmResultBulk").textContent = action === "analysis" ? "Queue analyses" : "Queue retries";
+  $("#cancelResultBulk").textContent = "Cancel";
+  $("#viewResultBulkQueue").hidden = true;
+  return new Promise(resolve => {
+    state.pendingResultBulk = {plan, resolve};
+    $("#resultBulkDialog").showModal();
+    $("#cancelResultBulk").focus();
+  });
+}
+
+function resultBulkUpdatedAt(value) {
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) return null;
+  const fraction = typeof value === "string" ? /\.(\d{1,9})(?:Z|[+-]\d{2}:\d{2})$/.exec(value)?.[1] || "" : "";
+  return BigInt(milliseconds) * 1000000n + BigInt(fraction.padEnd(9, "0").slice(3, 9));
+}
+
+function applyResultBulkAccepted(action, accepted) {
+  const value = accepted.response;
+  if (action === "analysis") {
+    for (const run of state.savedResults || []) if (run.id === accepted.entry.id) {
+      const previous = resultBulkUpdatedAt(run.analysis?.updatedAt), received = resultBulkUpdatedAt(value.updatedAt);
+      if (previous === null || received !== null && (received > previous || received === previous && run.analysis?.id === value.id)) run.analysis = value;
+    }
+  } else {
+    state.savedResults ||= [];
+    if (!state.savedResults.some(run => run.id === value.id)) state.savedResults.push(value);
+    if (state.snapshot) {
+      state.snapshot.experiments ||= [];
+      if (!state.snapshot.experiments.some(run => run.id === value.id)) state.snapshot.experiments.push(value);
+    }
+  }
+}
+
+async function confirmResultBulkAction() {
+  const pending = state.pendingResultBulk;
+  if (!pending || state.resultBulkBusy || pending.report?.unknown.length) return;
+  state.resultBulkBusy = true;
+  pending.controller = new AbortController();
+  $("#confirmResultBulk").disabled = true;
+  $("#cancelResultBulk").textContent = "Stop submitting";
+  $("#resultBulkError").textContent = "";
+  renderSavedScenarios();
+  renderSavedResults();
+  try {
+    state.resultBulkAdmissions ||= globalThis.KPLResultBulkActions.createAdmissions({api});
+    const report = await state.resultBulkAdmissions.execute(pending.plan, {
+      signal: pending.controller.signal,
+      onProgress: progress => {
+        $("#resultBulkProgress").textContent = `Submitting ${progress.index + 1}/${progress.total}: ${progress.name}`;
+      },
+      onAccepted: accepted => applyResultBulkAccepted(pending.plan.action, accepted),
+    });
+    pending.report = report;
+    pending.summary = resultBulkSummary(pending.plan, report);
+    $("#resultBulkProgress").textContent = pending.summary;
+    const details = [
+      ...report.skipped.map(item => `Skipped · ${item.name}: ${item.reason}`),
+      ...report.failed.map(item => `Failed · ${item.entry.name}: ${item.message}`),
+      ...report.unknown.map(item => `Unknown · ${item.entry.name}: ${item.message}`),
+    ];
+    $("#resultBulkReport").textContent = details.slice(0, 25).join("\n") + (details.length > 25 ? `\n…and ${details.length - 25} more.` : "");
+    $("#resultBulkReport").hidden = !details.length;
+    $("#resultBulkError").textContent = report.unknown.length
+      ? "Outcome unknown. Inspect the execution queue and refresh results before making a new selection. No automatic retry was sent."
+      : report.failed.length || report.remaining.length ? "Some work was not submitted. Retry remaining sends only items without a confirmed outcome; confirmed jobs are kept." : "";
+    $("#viewResultBulkQueue").hidden = !report.accepted.length && !report.unknown.length;
+  } catch (error) {
+    $("#resultBulkError").textContent = error.message;
+  } finally {
+    state.resultBulkBusy = false;
+    $("#cancelResultBulk").textContent = "Close";
+    $("#confirmResultBulk").textContent = "Retry remaining";
+    $("#confirmResultBulk").disabled = !pending.report || Boolean(pending.report.unknown.length)
+      || !(pending.report.failed.length || pending.report.remaining.length);
+    renderSavedScenarios();
+    renderResultViews();
+    void refreshSavedResults();
+  }
+}
+
+function closeResultBulkAction() {
+  if (state.resultBulkBusy) { state.pendingResultBulk?.controller?.abort(); return; }
+  $("#resultBulkDialog").close();
 }
 
 function renderLibraryDeletionPlan(plan) {
@@ -2920,8 +3042,26 @@ $("#libraryDeleteDialog").addEventListener("close", () => {
   focusLibrarySelectionTools(scope);
 });
 
+$("#confirmResultBulk").addEventListener("click", () => { void confirmResultBulkAction(); });
+$("#cancelResultBulk").addEventListener("click", closeResultBulkAction);
+$("#viewResultBulkQueue").addEventListener("click", () => {
+  closeResultBulkAction();
+  globalThis.KPLDashboardTabs?.show("experiments");
+});
+$("#resultBulkDialog").addEventListener("cancel", event => {
+  if (state.resultBulkBusy) { event.preventDefault(); state.pendingResultBulk?.controller?.abort(); }
+});
+$("#resultBulkDialog").addEventListener("close", () => {
+  if (state.resultBulkBusy) return;
+  const pending = state.pendingResultBulk;
+  state.pendingResultBulk = null;
+  pending?.resolve(pending.summary || "No work submitted.");
+});
+
 globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisibleKeys: visibleLibraryGroupKeys,
-  isExternallyBusy: () => state.scenarioSubmitting || state.libraryDeleting,
+  isExternallyBusy: () => state.scenarioSubmitting || state.libraryDeleting || state.resultBulkBusy,
+  onAnalyzeSelected: keys => requestResultBulkAction("analysis", keys),
+  onRetrySelected: keys => requestResultBulkAction("retry", keys),
   onDeleteSelected: (scope, keys) => { state.libraryDeleteScope = scope; requestLibraryDeletion(scope, keys); },
   onSelectionChanged: renderSavedScenarios,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,

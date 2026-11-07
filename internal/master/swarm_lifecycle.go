@@ -2,9 +2,11 @@ package master
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -225,6 +227,40 @@ func (s *swarm) stopService(ctx context.Context, service string, budget time.Dur
 	return s.waitTasks(ctx, tasks, budget)
 }
 
+// Archive paths belong to the Docker control host, which can be remote. Do not
+// stat or create the source directory on the machine running this operator.
+// Compose merges volumes by target, retaining the local Controller data volume.
+func (s *swarm) deploymentComposeFiles() ([]string, func(), error) {
+	args := []string{"--compose-file", filepath.Join(s.a.Repo, "stack.swarm.yaml")}
+	cleanup := func() {}
+	source := s.config["KPL_ARCHIVE_HOST_PATH"]
+	if err := ValidateSetting("KPL_ARCHIVE_HOST_PATH", source); err != nil {
+		return nil, cleanup, err
+	}
+	if source == "" {
+		return args, cleanup, nil
+	}
+	// YAML quoting does not prevent Compose interpolation. Escape every dollar
+	// before JSON quoting so both '${...}' and ordinary '$name' remain literal.
+	quoted, err := json.Marshal(strings.ReplaceAll(source, "$", "$$"))
+	if err != nil {
+		return nil, cleanup, err
+	}
+	file, err := os.CreateTemp("", "kpl-archive-stack-*.yaml")
+	if err != nil {
+		return nil, cleanup, err
+	}
+	name := file.Name()
+	cleanup = func() { _ = os.Remove(name) }
+	_, err = fmt.Fprintf(file, "version: \"3.8\"\nservices:\n  controller:\n    volumes:\n      - type: bind\n        source: %s\n        target: /var/lib/kpl/data/runs\n", quoted)
+	err = errors.Join(err, file.Close())
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return append(args, "--compose-file", name), cleanup, nil
+}
+
 func (s *swarm) deploy(ctx context.Context) error {
 	for _, key := range []string{"KPL_IMAGE", "KPL_CONTROL_NODE_ID", "KPL_USER", "KPL_PASSWORD", "GRAFANA_ADMIN_PASSWORD"} {
 		if s.config[key] == "" {
@@ -241,11 +277,16 @@ func (s *swarm) deploy(ctx context.Context) error {
 	metrics := "http://" + host + ":" + s.config["KPL_HTTP_PORT"] + "/metrics"
 	prometheus := "http://" + host + ":" + s.config["PROMETHEUS_PORT"] + "/"
 	s.a = s.a.WithEnv(map[string]*string{"KPL_CONTROLLER_METRICS_URL": &metrics, "KPL_PROMETHEUS_EXTERNAL_URL": &prometheus})
+	compose, cleanup, err := s.deploymentComposeFiles()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	// stack config interpolates credentials; validate it without emitting YAML.
 	quiet := *s.a
 	quiet.Stdout = io.Discard
 	checkCtx, cancel := context.WithTimeout(ctx, s.timeout)
-	err = quiet.Run(checkCtx, "docker", "stack", "config", "--compose-file", filepath.Join(s.a.Repo, "stack.swarm.yaml"))
+	err = quiet.Run(checkCtx, "docker", append([]string{"stack", "config"}, compose...)...)
 	cancel()
 	if err != nil {
 		return err
@@ -363,7 +404,8 @@ func (s *swarm) deploy(ctx context.Context) error {
 	if err := s.a.Preflight(ctx, s.config, false); err != nil {
 		return err
 	}
-	if err := s.run(ctx, "stack", "deploy", "--with-registry-auth", "--resolve-image", "always", "--detach=true", "--compose-file", filepath.Join(s.a.Repo, "stack.swarm.yaml"), s.stack); err != nil {
+	deployArgs := append([]string{"stack", "deploy", "--with-registry-auth", "--resolve-image", "always", "--detach=true"}, compose...)
+	if err := s.run(ctx, append(deployArgs, s.stack)...); err != nil {
 		return err
 	}
 	fmt.Fprintln(s.a.Stdout, "Deployment submitted. Use status, then check Agent status in the Controller. Use Discover Agents to recover missing registrations before running an experiment.")

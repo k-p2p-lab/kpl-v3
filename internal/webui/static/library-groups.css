@@ -3,6 +3,12 @@
 .library-group-actions > button { padding-inline: .7rem; }
 #scenarioGroupTools, #resultGroupTools { container: library-tools / inline-size; min-width: 0; }
 #scenarioGroupTools { flex: 0 0 auto; padding: .6rem .75rem .75rem; margin-bottom: .4rem; border-bottom: 1px solid var(--line-soft); }
+#scenarioGroupTools .library-group-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); }
+#scenarioGroupTools .library-group-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; margin-left: 0; }
+#scenarioGroupTools .library-filter-menu { width: 100%; }
+#scenarioGroupTools .library-filter-menu > button { width: 100%; max-width: 100%; justify-content: flex-start; }
+#scenarioGroupTools .library-filter-summary { flex: 1; min-width: 0; max-width: none; text-align: left; }
+#scenarioGroupTools .library-filter-menu > button::after { flex: 0 0 .35rem; }
 #resultGroupTools { padding: .85rem 1.2rem; border-bottom: 1px solid var(--line); }
 .library-group-toolbar select, .library-group-selection select, .library-group-dialog input { min-height: var(--control-height); border: 1px solid var(--line); border-radius: .45rem; background: var(--surface); color: var(--text); padding: .4rem .6rem; font: inherit; }
 .library-group-toolbar select, .library-group-selection select { font-size: .8rem; }

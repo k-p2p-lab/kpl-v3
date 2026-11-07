@@ -29,14 +29,14 @@ test('runtime identity distinguishes source revision, binary hash and registry d
   }
 });
 
-function browser() {
+function browser(options = {}) {
   const elements = new Map(), listeners = {};
   const element = selector => {
     if (!elements.has(selector)) elements.set(selector, {textContent:'', title:'', set innerHTML(value) { throw new Error('runtime identity must use plain text'); }});
     return elements.get(selector);
   };
   const document = {hidden:false, querySelector:element, addEventListener:(name, fn) => {listeners[name] = fn;}};
-  const context = {document, AbortController, setTimeout, clearTimeout};
+  const context = {document, AbortController, setTimeout, clearTimeout, KPLActionMenus:options.actionMenus};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'static/runtime-version.js'),'utf8'),context);
   return {element, document, listeners, runtime:context.KPLRuntimeVersion};
@@ -91,6 +91,23 @@ test('initial failure presents unknown and a later refresh can recover', async (
   assert.match(element('#runtimeVersionStatus').textContent,/unavailable/);
   fail=false; await runtime.refresh();
   assert.equal(element('#runtimeVersionDigest').textContent,digest);
+});
+
+test('version and failure status updates reposition the shared popover after rendering', async () => {
+  let fail=false;
+  const positions=[];
+  let element;
+  const browserState=browser({actionMenus:{refresh(){positions.push({summary:element('#runtimeVersionSummary').textContent,status:element('#runtimeVersionStatus').textContent});}}});
+  element=browserState.element;
+  browserState.runtime.init({api:()=>{if(fail)throw Error('offline');return fixture();}});
+  await browserState.runtime.refresh();
+  assert.equal(positions.length,1);
+  assert.equal(positions[0].summary,describe(fixture()).summary);
+  assert.equal(positions[0].status,'');
+  fail=true;
+  await browserState.runtime.refresh();
+  assert.equal(positions.length,2);
+  assert.match(positions[1].status,/last confirmed/);
 });
 
 test('a new stream baseline supersedes a pending version response from the previous Controller', async t => {

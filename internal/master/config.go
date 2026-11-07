@@ -12,12 +12,15 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/controller"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -28,7 +31,7 @@ type Config map[string]string
 
 var ConfigKeys = []string{
 	"KPL_STACK_NAME", "KPL_CONTROL_NODE_ID", "KPL_PEER_NETWORK", "KPL_PEER_SUBNET", "KPL_IMAGE",
-	"KPL_AGENT_CAPACITY", "KPL_AGENT_HOST_REBOOT_ENABLED", "KPL_RUN_MIN_FREE_BYTES", "KPL_ARCHIVE_MIB_PER_SECOND", "KPL_AGENT_METRICS_PORT", "KPL_USER", "KPL_PASSWORD",
+	"KPL_AGENT_CAPACITY", "KPL_AGENT_HOST_REBOOT_ENABLED", "KPL_RUN_MIN_FREE_BYTES", "KPL_ARCHIVE_MIB_PER_SECOND", "KPL_ARCHIVE_HOST_PATH", "KPL_AGENT_METRICS_PORT", "KPL_USER", "KPL_PASSWORD",
 	"GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD", "KPL_HTTP_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT",
 	"KPL_MIN_AGENTS", "KPL_DOCKER_TIMEOUT", "KPL_IMAGE_BUILD_TIMEOUT", "KPL_IMAGE_PUSH_TIMEOUT",
 	"KPL_IMAGE_PULL_TIMEOUT", "KPL_CONTROLLER_STOP_TIMEOUT", "KPL_AGENT_STOP_TIMEOUT",
@@ -61,6 +64,13 @@ func ValidateSetting(key, value string) error {
 		return fmt.Errorf("%s must fit on one line without NUL bytes", key)
 	}
 	switch key {
+	case "KPL_ARCHIVE_HOST_PATH":
+		if value == "" {
+			return nil
+		}
+		if !utf8.ValidString(value) || !path.IsAbs(value) || value == "/" || path.Clean(value) != value || strings.ContainsFunc(value, unicode.IsControl) {
+			return errors.New("KPL_ARCHIVE_HOST_PATH must be an absolute normalized Linux directory path other than /, without control characters")
+		}
 	case "KPL_AGENT_HOST_REBOOT_ENABLED":
 		if value != "true" && value != "false" {
 			return errors.New("KPL_AGENT_HOST_REBOOT_ENABLED must be true or false")
@@ -162,6 +172,7 @@ func ConfigDefaults(c Config) Config {
 	defaults := map[string]string{
 		"KPL_AGENT_HOST_REBOOT_ENABLED": "false",
 		"KPL_ARCHIVE_MIB_PER_SECOND":    strconv.FormatUint(controller.DefaultArchiveMiBPerSecond, 10),
+		"KPL_ARCHIVE_HOST_PATH":         "",
 		"KPL_STACK_NAME":                "kpl", "KPL_RUN_MIN_FREE_BYTES": "1073741824", "KPL_AGENT_CAPACITY": "20", "KPL_MIN_AGENTS": "1",
 		"KPL_USER": "admin", "GRAFANA_ADMIN_USER": "admin", "KPL_HTTP_PORT": "8080", "KPL_AGENT_METRICS_PORT": "9091",
 		"PROMETHEUS_PORT": "9090", "GRAFANA_PORT": "3000", "KPL_DOCKER_TIMEOUT": "60", "KPL_IMAGE_BUILD_TIMEOUT": "1800",

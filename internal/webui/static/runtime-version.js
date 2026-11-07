@@ -69,6 +69,8 @@
         if (current === generation) {
           pending = null;
           activeController = null;
+          // A refreshed label or status can change the open popover's bounds.
+          root.KPLActionMenus?.refresh();
         }
       }
     });

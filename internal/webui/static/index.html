@@ -46,9 +46,10 @@
         <h2>Network experiments</h2>
         <p class="workspace-intro">Monitor your cluster, follow active runs, and explore results.</p>
       </div>
-      <details class="runtime-version" id="runtimeVersion">
-        <summary id="runtimeVersionSummary">Version · Loading…</summary>
-        <div class="runtime-version-details">
+      <details class="runtime-version action-menu" id="runtimeVersion">
+        <summary id="runtimeVersionSummary" aria-controls="runtimeVersionDetails" aria-expanded="false">Version · Loading…</summary>
+        <div class="runtime-version-details action-menu-items" id="runtimeVersionDetails" role="region" aria-labelledby="runtimeVersionSummary">
+          <header class="runtime-version-panel-heading"><strong>Runtime version</strong><button class="icon-button" type="button" aria-label="Close version information"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button></header>
           <dl>
             <dt>Controller version</dt><dd id="runtimeVersionBuild">Unknown</dd>
             <dt>Source revision</dt><dd id="runtimeVersionRevision">Unknown</dd>

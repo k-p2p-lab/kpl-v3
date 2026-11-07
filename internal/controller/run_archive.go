@@ -408,6 +408,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			return err
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		localPayload := false
 		for _, entry := range entries {
 			name := entry.Name()
 			if (strings.HasPrefix(name, ".analysis-") && strings.HasSuffix(name, ".tmp") || strings.HasPrefix(name, ".kpl-metadata-")) && entry.Type().IsRegular() {
@@ -424,6 +425,15 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				return err
 			}
 			files = append(files, file)
+			localPayload = localPayload || !retainedRunFile(name)
+		}
+		// Persist payload names before a remote commit can refer to them,
+		// including a sealed file left by an interrupted earlier attempt. This
+		// must not depend on a changed source hint or a best-effort status write.
+		if localPayload {
+			if err := syncRunDirectory(root); err != nil {
+				return err
+			}
 		}
 		capturedFingerprint, err = sourceFingerprintAt(root, manifest)
 		if err != nil {
@@ -457,6 +467,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	uploads := []upload{}
 	cleanup := []resultFile{}
 	reused := []storedRunFile{}
+	localHashes := map[string]string{}
 	manifestChanged := false
 	for _, file := range files {
 		logical := ""
@@ -470,7 +481,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			known := false
 			for _, stored := range manifest.Logs[logical] {
 				if stored.Segment == file.name {
-					if err := verifyArchivedSegment(file, stored); err != nil {
+					if err := verifyArchivedSegment(ctx, file, stored); err != nil {
 						return err
 					}
 					known = true
@@ -484,10 +495,11 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				uploads = append(uploads, upload{file: file, logical: logical, segment: true})
 			}
 		} else {
-			digest, err := hashRunFile(file)
+			digest, err := hashRunFileContext(ctx, file)
 			if err != nil {
 				return err
 			}
+			localHashes[file.name] = digest
 			if previous, ok := manifest.Files[file.name]; ok && previous.SHA256 == digest {
 				// Atomic rewrites can preserve bytes while changing local mtime.
 				// Status uses this hint; leaving it stale strands a fully copied
@@ -572,7 +584,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			already := false
 			for _, stored := range manifest.Logs[upload.logical] {
 				if stored.Segment == upload.file.name {
-					if err := verifyArchivedSegment(upload.file, stored); err != nil {
+					if err := verifyArchivedSegment(ctx, upload.file, stored); err != nil {
 						return err
 					}
 					already = true
@@ -584,6 +596,17 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 				cleanup = append(cleanup, upload.file)
 				continue
 			}
+		} else if stored, ok := published.Files[upload.logical]; ok && stored.Size == upload.file.size && stored.SHA256 != "" && stored.SHA256 == localHashes[upload.file.name] {
+			// A crash may publish the remote replacement before updating the
+			// local index. Prefer that exact committed object to another upload,
+			// including when the local index still refers to an older object.
+			stored.ModifiedAt = upload.file.info.ModTime().UnixNano()
+			manifest.Files[upload.logical] = stored
+			reused = append(reused, stored)
+			if !retainedRunFile(upload.logical) {
+				cleanup = append(cleanup, upload.file)
+			}
+			continue
 		}
 		object := upload.logical
 		if upload.segment {
@@ -747,11 +770,11 @@ func (s *Server) hashArchiveFile(ctx context.Context, file resultFile) (string, 
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-func verifyArchivedSegment(file resultFile, stored storedRunFile) error {
+func verifyArchivedSegment(ctx context.Context, file resultFile, stored storedRunFile) error {
 	if file.size != stored.Size || stored.SHA256 == "" {
 		return errors.New("local log differs from committed archive segment")
 	}
-	digest, err := hashRunFile(file)
+	digest, err := hashRunFileContext(ctx, file)
 	if err != nil {
 		return err
 	}

@@ -178,6 +178,32 @@
       return mutate(endpoint + "/members", "PUT", {groupId, keys: unique}, "Moved " + unique.length + (unique.length === 1 ? " item." : " items."));
     }
 
+    function reorder(ids, successMessage = "Group order saved.") {
+      const remaining = new Set(snapshot.groups.map(group => group.id));
+      if (!Array.isArray(ids) || ids.length !== remaining.size || ids.some(id => !remaining.delete(id)) || remaining.size) {
+        return Promise.reject(new Error("Group order must contain every current group exactly once."));
+      }
+      return mutate(endpoint + "/order", "PUT", {ids: [...ids]}, successMessage);
+    }
+
+    function moveGroup(id, delta) {
+      const index = snapshot.groups.findIndex(group => group.id === id);
+      if (index < 0) return Promise.reject(new Error("That group no longer exists. Refresh groups to try again."));
+      const target = index + delta;
+      if (target < 0 || target >= snapshot.groups.length) return Promise.resolve(snapshot);
+      const ids = snapshot.groups.map(group => group.id);
+      [ids[index], ids[target]] = [ids[target], ids[index]];
+      return reorder(ids, "Moved " + snapshot.groups[index].name + " to position " + (target + 1) + " of " + ids.length + ". Order saved.");
+    }
+
+    function focusOrderControl(id, action) {
+      if (!dialog?.open) return;
+      const row = [...(dialog.querySelectorAll("[data-library-order-group]") || [])].find(item => item.dataset.libraryOrderGroup === id);
+      const controls = [row?.querySelector('[data-library-action="' + action + '"]'), row?.querySelector('[data-library-action="edit"]'), dialog.querySelector('[data-library-action="refresh"]'), dialog.querySelector("#libraryGroupName")];
+      controls.find(control => control && !control.disabled)?.focus({preventScroll: true});
+      row?.scrollIntoView?.({block: "nearest", inline: "nearest"});
+    }
+
     function setFilter(id) {
       if (locked()) return;
       if (id !== "*" && id && !getGroupName(id)) return;
@@ -309,7 +335,7 @@
       dialog.id = "libraryGroupDialog";
       dialog.className = "library-group-dialog";
       dialog.setAttribute("aria-labelledby", "libraryGroupTitle");
-      dialog.innerHTML = '<div class="library-group-dialog-shell"><header><div><h2 id="libraryGroupTitle">Groups</h2><p class="helper">Shared by scenarios and saved results.</p></div><button class="icon-button" type="button" data-library-action="close" aria-label="Close groups"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button></header><form class="library-group-create" data-library-create><label for="libraryGroupName">New group</label><input id="libraryGroupName" name="name" maxlength="256" placeholder="Group name" autocomplete="off" required><button class="primary-button" type="submit">Create</button></form><div class="library-group-list"></div><div class="library-group-editor"></div><p class="library-group-dialog-status" aria-live="polite"></p><footer><button class="secondary-button" type="button" data-library-action="refresh">Refresh</button><button class="primary-button" type="button" data-library-action="close">Done</button></footer></div>';
+      dialog.innerHTML = '<div class="library-group-dialog-shell"><header><div><h2 id="libraryGroupTitle">Groups</h2><p class="helper">Shared by scenarios and saved results.</p></div><button class="icon-button" type="button" data-library-action="close" aria-label="Close groups"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3 3l10 10M13 3L3 13"/></svg></button></header><form class="library-group-create" data-library-create><label for="libraryGroupName">New group</label><input id="libraryGroupName" name="name" maxlength="256" placeholder="Group name" autocomplete="off" required><button class="primary-button" type="submit">Create</button></form><p class="helper library-group-order-help">Use the arrows to change group order. Changes are saved immediately for scenarios and results; All groups and Ungrouped stay first.</p><div class="library-group-list"></div><div class="library-group-editor"></div><p class="library-group-dialog-status" aria-live="polite"></p><footer><button class="secondary-button" type="button" data-library-action="refresh">Refresh</button><button class="primary-button" type="button" data-library-action="close">Done</button></footer></div>';
       document.body.append(dialog);
       dialog.addEventListener("close", () => {
         editing = "";
@@ -330,9 +356,10 @@
         count[scopeFor(key)]++;
         counts.set(id, count);
       }
-      const html = snapshot.groups.length ? snapshot.groups.map(group => {
+      const html = snapshot.groups.length ? snapshot.groups.map((group, index) => {
         const count = counts.get(group.id) || {scenarios: 0, results: 0};
-        return '<div class="library-group-list-item"><div><strong>' + escape(group.name) + '</strong><span>' + count.scenarios + ' scenarios · ' + count.results + ' result sets</span></div><button class="secondary-button" type="button" data-library-action="edit" data-library-group="' + escape(group.id) + '"' + (ready() ? "" : " disabled") + '>Edit</button></div>';
+        const move = (action, direction, arrow, edge) => '<button class="secondary-button library-group-order-button" type="button" data-library-action="' + action + '" data-library-group="' + escape(group.id) + '" title="Move ' + direction + '" aria-label="' + escape("Move " + group.name + " " + direction) + '"' + (ready() && !edge ? "" : " disabled") + '>' + arrow + '</button>';
+        return '<div class="library-group-list-item" data-library-order-group="' + escape(group.id) + '"><div class="library-group-item-info"><strong>' + escape(group.name) + '</strong><span>' + count.scenarios + ' scenarios · ' + count.results + ' result sets</span></div><div class="library-group-row-actions">' + move("move-up", "up", "↑", index === 0) + move("move-down", "down", "↓", index === snapshot.groups.length - 1) + '<button class="secondary-button" type="button" data-library-action="edit" data-library-group="' + escape(group.id) + '"' + (ready() ? "" : " disabled") + '>Edit</button></div></div>';
       }).join("") : '<p class="helper">' + (loaded ? "No groups yet. Create a group to organize scenarios and results." : "Loading groups…") + "</p>";
       setMarkup(groups, html);
       const editor = dialog.querySelector(".library-group-editor");
@@ -406,6 +433,10 @@
           selectionScope = "";
           refreshUI();
           changed();
+        } else if (action === "move-up" || action === "move-down") {
+          if (!ready()) return;
+          try { await moveGroup(button.dataset.libraryGroup, action === "move-up" ? -1 : 1); }
+          finally { focusOrderControl(button.dataset.libraryGroup, action); }
         } else if (action === "delete-selected") {
           if (selected.size && ready()) options?.onDeleteSelected?.(selectionScope, [...selected]);
         } else if (action === "analyze-selected" || action === "retry-selected") {
@@ -540,7 +571,7 @@
       return refresh().catch(() => {});
     }
 
-    return {init, refresh, refreshUI, matches, selectionMarkup, badgeMarkup, getGroupName, assign, setFilter,
+    return {init, refresh, refreshUI, matches, selectionMarkup, badgeMarkup, getGroupName, assign, reorder, setFilter,
       forgetSelection: keys => { for (const key of keys) selected.delete(key); if (!selected.size) selectionScope = ""; refreshUI(); changed(); },
       getSelection: scope => selectionScope === scope ? [...selected] : null, isBusy: locked,
       isFiltered: () => !filters.has("*"), getImportGroup: importGroup};

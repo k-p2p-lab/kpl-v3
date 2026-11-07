@@ -30,6 +30,7 @@ var (
 	errLibraryGroupNameExists = errors.New("a group with this name already exists")
 	errLibraryGroupNotFound   = errors.New("library group not found")
 	errLibraryMemberNotFound  = errors.New("a selected item no longer exists; refresh before moving items")
+	errLibraryGroupOrder      = errors.New("group order must contain every current group exactly once")
 )
 
 type libraryGroup struct {
@@ -52,6 +53,7 @@ type libraryGroupsRequest struct {
 	Name     *string  `json:"name,omitempty"`
 	GroupID  *string  `json:"groupId,omitempty"`
 	Keys     []string `json:"keys,omitempty"`
+	IDs      []string `json:"ids,omitempty"`
 	Revision string   `json:"revision"`
 }
 
@@ -189,7 +191,7 @@ func decodeLibraryGroupsRequest(w http.ResponseWriter, r *http.Request, action s
 	}
 	switch action {
 	case "create", "rename":
-		if request.Name == nil || request.GroupID != nil || request.Keys != nil {
+		if request.Name == nil || request.GroupID != nil || request.Keys != nil || request.IDs != nil {
 			return request, errors.New("name and revision are required")
 		}
 		name, err := validateLibraryGroupName(*request.Name)
@@ -198,7 +200,7 @@ func decodeLibraryGroupsRequest(w http.ResponseWriter, r *http.Request, action s
 		}
 		request.Name = &name
 	case "move":
-		if request.Name != nil || request.GroupID == nil || (*request.GroupID != "" && !validScenarioID(*request.GroupID)) || len(request.Keys) == 0 || len(request.Keys) > libraryMoveLimit {
+		if request.Name != nil || request.IDs != nil || request.GroupID == nil || (*request.GroupID != "" && !validScenarioID(*request.GroupID)) || len(request.Keys) == 0 || len(request.Keys) > libraryMoveLimit {
 			return request, fmt.Errorf("groupId and 1 to %d keys are required", libraryMoveLimit)
 		}
 		for _, key := range request.Keys {
@@ -207,8 +209,19 @@ func decodeLibraryGroupsRequest(w http.ResponseWriter, r *http.Request, action s
 			}
 		}
 	case "delete":
-		if request.Name != nil || request.GroupID != nil || request.Keys != nil {
+		if request.Name != nil || request.GroupID != nil || request.Keys != nil || request.IDs != nil {
 			return request, errors.New("only revision is accepted when deleting a group")
+		}
+	case "order":
+		if request.Name != nil || request.GroupID != nil || request.Keys != nil || request.IDs == nil || len(request.IDs) > libraryGroupLimit {
+			return request, errLibraryGroupOrder
+		}
+		seen := make(map[string]bool, len(request.IDs))
+		for _, id := range request.IDs {
+			if !validScenarioID(id) || seen[id] {
+				return request, errLibraryGroupOrder
+			}
+			seen[id] = true
 		}
 	}
 	return request, nil
@@ -237,6 +250,13 @@ func (s *Server) handleLibraryGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		action = "move"
+	case path == "/order":
+		if r.Method != http.MethodPut {
+			w.Header().Set("Allow", "PUT")
+			methodNotAllowed(w)
+			return
+		}
+		action = "order"
 	default:
 		id = strings.TrimPrefix(path, "/")
 		if !validScenarioID(id) {
@@ -275,7 +295,7 @@ func (s *Server) handleLibraryGroups(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 		case errors.Is(err, errLibraryGroupNotFound), errors.Is(err, errLibraryMemberNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, errLibraryGroupsLimit):
+		case errors.Is(err, errLibraryGroupsLimit), errors.Is(err, errLibraryGroupOrder):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			s.logger.Error("access library groups", "action", action, "error", err)
@@ -343,6 +363,25 @@ func (s *Server) changeLibraryGroups(ctx context.Context, action, id string, req
 			}
 		}
 		changed = true
+	case "order":
+		if len(request.IDs) != len(snapshot.Groups) {
+			return libraryGroupsSnapshot{}, errLibraryGroupOrder
+		}
+		remaining := make(map[string]libraryGroup, len(snapshot.Groups))
+		for _, group := range snapshot.Groups {
+			remaining[group.ID] = group
+		}
+		ordered := make([]libraryGroup, len(request.IDs))
+		for i, id := range request.IDs {
+			group, ok := remaining[id]
+			if !ok {
+				return libraryGroupsSnapshot{}, errLibraryGroupOrder
+			}
+			delete(remaining, id)
+			ordered[i] = group
+			changed = changed || snapshot.Groups[i].ID != id
+		}
+		snapshot.Groups = ordered
 	case "move":
 		group := *request.GroupID
 		if group != "" {

@@ -29,9 +29,29 @@ func isArchiveCopyTemporary(name string) bool {
 	return true
 }
 
-// The single NAS worker calls this before creating any copy temporary in the
-// held Run directory. Published manifests cannot reference dot files, and
-// readers never open these reserved temporary names. No Controller lock is held.
+func isArchiveManifestTemporary(name string) bool {
+	const prefix = ".analysis-"
+	const suffix = ".tmp"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	secret := name[len(prefix) : len(name)-len(suffix)]
+	// stageAnalysisJSON uses a 16-byte random nonce encoded as lowercase hex.
+	// Match that reserved format exactly instead of removing user dot files.
+	if len(secret) != 32 {
+		return false
+	}
+	for _, ch := range secret {
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// The single NAS worker calls this before creating copy or manifest-publication
+// temporaries in the held Run directory. Published manifests cannot reference
+// dot files, and readers never open these reserved names. No Controller lock is held.
 func (s *Server) cleanAbandonedArchiveCopies(ctx context.Context, root *os.Root) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -48,7 +68,7 @@ func (s *Server) cleanAbandonedArchiveCopies(ctx context.Context, root *os.Root)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if !isArchiveCopyTemporary(entry.Name()) {
+			if !isArchiveCopyTemporary(entry.Name()) && !isArchiveManifestTemporary(entry.Name()) {
 				continue
 			}
 			info, err := root.Lstat(entry.Name())

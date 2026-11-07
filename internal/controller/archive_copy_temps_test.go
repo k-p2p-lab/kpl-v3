@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,9 +37,9 @@ func TestArchiveRetryReclaimsAbandonedCopyTemporaryFiles(t *testing.T) {
 				}
 			}
 			remote := filepath.Join(s.config.DataDir, archivedRunsDirectory, remoteID)
-			abandoned := archiveCopyTemporaryPrefix + rand.Text()
-			preserved := []string{"user.json", ".user-note", ".incoming-user-note", ".incoming-ABCDEFGHIJKLMNOPQRSTUVWXYZ0"}
-			for _, name := range append(preserved, abandoned) {
+			abandoned := []string{archiveCopyTemporaryPrefix + rand.Text(), ".analysis-" + strings.Repeat("a", 32) + ".tmp"}
+			preserved := []string{"user.json", ".user-note", ".incoming-user-note", ".incoming-ABCDEFGHIJKLMNOPQRSTUVWXYZ0", ".analysis-user-note.tmp", ".analysis-" + strings.Repeat("a", 31) + ".tmp", ".analysis-" + strings.Repeat("G", 32) + ".tmp"}
+			for _, name := range append(preserved, abandoned...) {
 				if err := os.WriteFile(filepath.Join(remote, name), []byte("retained evidence"), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -54,10 +55,20 @@ func TestArchiveRetryReclaimsAbandonedCopyTemporaryFiles(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(remote, directory), 0755); err != nil {
 				t.Fatal(err)
 			}
+			metadataLink := ".analysis-" + strings.Repeat("b", 32) + ".tmp"
+			metadataDirectory := ".analysis-" + strings.Repeat("c", 32) + ".tmp"
+			if err := os.Symlink(target, filepath.Join(remote, metadataLink)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(remote, metadataDirectory), 0755); err != nil {
+				t.Fatal(err)
+			}
 			archiveTestRun(t, s, id)
 			final := filepath.Join(s.config.DataDir, archivedRunsDirectory, id)
-			if _, err := os.Lstat(filepath.Join(final, abandoned)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("archive retry retained abandoned copy bytes: %v", err)
+			for _, name := range abandoned {
+				if _, err := os.Lstat(filepath.Join(final, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("archive retry retained abandoned staging bytes %q: %v", name, err)
+				}
 			}
 			for _, name := range preserved {
 				if data, err := os.ReadFile(filepath.Join(final, name)); err != nil || string(data) != "retained evidence" {
@@ -72,6 +83,12 @@ func TestArchiveRetryReclaimsAbandonedCopyTemporaryFiles(t *testing.T) {
 			}
 			if info, err := os.Stat(filepath.Join(final, directory)); err != nil || !info.IsDir() {
 				t.Fatalf("retry removed reserved-looking directory: %v", err)
+			}
+			if info, err := os.Lstat(filepath.Join(final, metadataLink)); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("retry removed reserved-looking manifest symlink: %v", err)
+			}
+			if info, err := os.Stat(filepath.Join(final, metadataDirectory)); err != nil || !info.IsDir() {
+				t.Fatalf("retry removed reserved-looking manifest directory: %v", err)
 			}
 			if ids := storedEventIDs(t, storageZIP(t, s, id)["events.jsonl"]); len(ids) != 1 || ids[0] != "after interruption" {
 				t.Fatalf("retry damaged published source: %v", ids)

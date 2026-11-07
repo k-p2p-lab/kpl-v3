@@ -39,6 +39,89 @@ function harness(api, configuration={}) {
   return {groups,initialized,items,action,check,master,filter,changes:()=>changes,listeners};
 }
 
+test('group ordering sends a complete revision-aware permutation and updates both selectors after confirmation',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const pending=deferred(),calls=[];
+  const h=harness(async(path,options)=>{
+    calls.push({path,options});
+    return options.method?pending.promise:initial();
+  },{bars});await h.initialized;
+  h.check('scenario:one',true);
+  const update=h.groups.reorder(['g2','g1']);
+  assert.equal(h.groups.isBusy(),true);
+  assert.ok(bars['#scenarioGroupTools'].innerHTML.indexOf('value="g1"')<bars['#scenarioGroupTools'].innerHTML.indexOf('value="g2"'));
+  await assert.rejects(h.groups.reorder(['g1','g2']),/in progress/);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  const write=calls.find(call=>call.options.method);
+  assert.equal(write.path,'/api/v1/library-groups/order');
+  assert.equal(write.options.method,'PUT');
+  assert.deepEqual(JSON.parse(write.options.body),{ids:['g2','g1'],revision:'1'});
+  pending.resolve({...initial(),revision:'2',groups:initial().groups.slice().reverse()});await update;
+  assert.equal(h.groups.isBusy(),false);
+  assert.deepEqual(h.groups.getSelection('scenarios'),['scenario:one']);
+  for(const bar of Object.values(bars)){
+    const ids=[...bar.innerHTML.matchAll(/data-library-group-filter="([^"]*)"/g)].map(match=>match[1]);
+    assert.deepEqual(ids,['*','','g2','g1']);
+  }
+  const move=bars['#scenarioGroupTools'].innerHTML;
+  assert.ok(move.indexOf('value="g2"')<move.indexOf('value="g1"'));
+  assert.match(move,/Group order saved/);
+  h.groups.setFilter('g1');assert.equal(h.groups.matches('scenario:one'),true);assert.equal(h.groups.matches('run:single'),false);
+});
+
+test('incomplete, duplicate and virtual group orders never reach the server',async()=>{
+  let writes=0;
+  const h=harness(async(_path,options)=>{if(options.method)writes++;return initial();});await h.initialized;
+  for(const ids of [null,undefined,[],['g1'],['g1','g1'],['g1','unknown'],['g1','*'],['g1',''],['g1','g2','g3'],'g1,g2']){
+    await assert.rejects(h.groups.reorder(ids),/every current group exactly once/);
+  }
+  assert.equal(writes,0);
+  assert.equal(h.groups.getGroupName('g1'),'Experiment A');
+});
+
+test('a stale order refreshes concurrently created groups without retrying the old order',async()=>{
+  const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  let reads=0,writes=0;
+  const h=harness(async(_path,options)=>{
+    if(options.method){writes++;const error=new Error('stale order');error.status=409;throw error;}
+    reads++;
+    return reads===1?initial():{...initial(),revision:'3',groups:[{id:'g3',name:'Added in another window'},...initial().groups],memberships:{...initial().memberships,'scenario:two':'g3'}};
+  },{bars:{'#scenarioGroupTools':bar}});await h.initialized;
+  await assert.rejects(h.groups.reorder(['g2','g1']),/Review the current groups/);
+  assert.equal(reads,2);assert.equal(writes,1);
+  assert.deepEqual([...bar.innerHTML.matchAll(/data-library-group-filter="([^"]*)"/g)].map(match=>match[1]),['*','','g3','g1','g2']);
+  assert.equal(h.groups.getGroupName('g3'),'Added in another window');
+  h.groups.setFilter('g3');assert.equal(h.groups.matches('scenario:two'),true);
+});
+
+test('an uncertain order save retains the confirmed order and requires a refresh before another write',async()=>{
+  const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
+  let writes=0;
+  const h=harness(async(_path,options)=>{
+    if(options.method){writes++;throw new Error('response lost');}
+    return initial();
+  },{bars:{'#scenarioGroupTools':bar}});await h.initialized;
+  await assert.rejects(h.groups.reorder(['g2','g1']),/response lost/);
+  assert.deepEqual([...bar.innerHTML.matchAll(/data-library-group-filter="([^"]*)"/g)].map(match=>match[1]),['*','','g1','g2']);
+  await assert.rejects(h.groups.reorder(['g2','g1']),/Refresh groups/);
+  assert.equal(writes,1);
+  await h.groups.refresh();
+  await assert.rejects(h.groups.reorder(['g2','g1']),/response lost/);
+  assert.equal(writes,2);
+});
+
+test('order responses share existing snapshot validation and never replace membership with an invalid response',async()=>{
+  let reads=0;
+  const h=harness(async(_path,options)=>{
+    if(!options.method){reads++;return initial();}
+    return {...initial(),revision:'2',groups:initial().groups.slice().reverse(),memberships:{'scenario:one':'missing'}};
+  });await h.initialized;
+  await assert.rejects(h.groups.reorder(['g2','g1']),/invalid/);
+  h.groups.setFilter('g1');assert.equal(h.groups.matches('scenario:one'),true);
+  await assert.rejects(h.groups.reorder(['g2','g1']),/Refresh groups/);
+  assert.equal(reads,1);
+});
+
 test('visible item checkboxes start selection immediately and the final uncheck restores the editor',async()=>{
   let changes=0;
   const h=harness(async()=>initial(),{onSelectionChanged:()=>changes++});await h.initialized;

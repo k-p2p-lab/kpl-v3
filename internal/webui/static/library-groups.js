@@ -295,7 +295,7 @@
             + (scope === "results" && options?.onRetrySelected ? '<button type="button" data-library-action="retry-selected" title="Queue selected failed runs again; completed runs are kept"' + (canDownload ? "" : " disabled") + '>Retry failed runs</button>' : "")
             + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
             + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
-            + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download completed per-Run analysis JSON files in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
+            + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download batch mean JSON for repetition batches and per-Run analysis JSON in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
             + (options?.onDeleteSelected ? '<button class="library-delete-action" type="button" data-library-action="delete-selected"' + (canDownload ? "" : " disabled") + '>Delete selected…</button>' : "")
             + '</span></span>'
             + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";

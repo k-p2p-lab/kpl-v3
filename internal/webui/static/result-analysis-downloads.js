@@ -3,6 +3,7 @@
   const node = typeof module !== "undefined" && module.exports;
   const selection = node ? require("./library-downloads.js") : root.KPLLibraryDownloads;
   const images = node ? require("./result-images.js") : root.KPLResultImages;
+  const batch = node ? require("./batch-analysis.js") : root.KPLBatchAnalysis;
   const research = node ? require("./research-charts.js") : root.KPLResearch;
   const files = node ? require("./research-files.js") : root.KPLResearchFiles;
   const maxArchiveBytes = 128 * 1024 * 1024;
@@ -42,10 +43,32 @@
       } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
     }
 
-    async function loadAnalysis(id, signal, progress) {
-      const path = `/api/v1/analysis-jobs/${encodeURIComponent(id)}`;
+    function selectedAnalyses(scope, keys, results) {
+      if (format !== "json") return selection.selectedIDs(scope, keys, [], results).map(id => ({id, isBatch:false}));
+      // JSON follows the selected result set: one integrated artifact for a
+      // repetition batch, rather than one analysis request per member/attempt.
+      const selected = new Set(keys), known = new Set(), targets = new Map();
+      // Single submissions also have a batchId. Only repetition series use a
+      // batch mean; retain per-Run export for single runs and their retries.
+      const repeated = new Set((results || []).filter(run => run.batchId && run.repetitions > 1).map(run => run.batchId));
+      for (const run of results || []) {
+        const key = run.batchId ? "batch:" + run.batchId : "run:" + run.id;
+        if (!selected.has(key)) continue;
+        known.add(key);
+        const isBatch = Boolean(run.batchId && repeated.has(run.batchId)), id = isBatch ? run.batchId : run.id;
+        const targetKey = (isBatch ? "batch:" : "run:") + id;
+        if (!targets.has(targetKey)) targets.set(targetKey, {id, isBatch});
+      }
+      if (!selected.size || known.size !== selected.size)
+        throw new Error("Some selected items are no longer listed. Refresh the list and select them again.");
+      if (targets.size > 2000) throw new Error("Download up to 2,000 result sets at a time. Select fewer items or batches.");
+      return [...targets.values()];
+    }
+
+    async function loadAnalysis({id, isBatch}, signal, progress) {
+      const path = `/api/v1/${isBatch ? "batch-analysis-jobs" : "analysis-jobs"}/${encodeURIComponent(id)}`;
       const validateJob = job => {
-        if (job?.runId !== id || !["idle", "queued", "running", "completed", "failed", "interrupted", "canceled"].includes(job.state)
+        if ((isBatch ? job?.batchId : job?.runId) !== id || !["idle", "queued", "running", "completed", "failed", "interrupted", "canceled"].includes(job.state)
           || (images.pendingJob(job) || job.state === "completed" || job.state === "idle" && job.stale) && (typeof job.id !== "string" || !job.id))
           throw new Error("Unexpected analysis job response.");
       };
@@ -84,13 +107,14 @@
       progress("Loading completed analysis");
       const source = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${savedID ? "&saved=1" : ""}`, format === "json" ? {responseType:"text"} : {}, signal);
       const data = format === "json" ? JSON.parse(source) : source;
-      images.validateResponse(data, id);
+      if (isBatch) batch.validate(data, id); else images.validateResponse(data, id);
       if (data.analysisId !== analysisID) throw new Error("The saved analysis changed. Download again to capture the current snapshot.");
       return {data, source};
     }
 
-    async function runArchive(id, signal, progress, availableBytes) {
-      const {data, source} = await loadAnalysis(id, signal, progress);
+    async function analysisArchive(target, signal, progress, availableBytes) {
+      const {id, isBatch} = target;
+      const {data, source} = await loadAnalysis(target, signal, progress);
       if (format === "json") {
         checkAbort(signal);
         progress("Preparing analysis JSON");
@@ -98,7 +122,8 @@
         // Preserve the original JSON text, including integers beyond JS precision.
         const bytes = new TextEncoder().encode(source);
         if (bytes.length > availableBytes) throw tooLarge();
-        const name = images.imageZIPFilename(data.result.name, id).replace(/-images\.zip$/, "-analysis.json");
+        const name = images.imageZIPFilename(isBatch ? data.name : data.result.name, id)
+          .replace(/-images\.zip$/, isBatch ? "-batch-analysis.json" : "-analysis.json");
         await pause(signal, 0);
         return {name, data:bytes};
       }
@@ -123,9 +148,9 @@
 
     return async (scope, keys, {signal, onProgress = () => {}} = {}) => {
       if (scope !== "results") throw new Error(`${label} ZIP export is available for saved results only.`);
-      const ids = selection.selectedIDs(scope, keys, [], getResults());
+      const targets = selectedAnalyses(scope, keys, getResults());
       // IDs are also filename components. The server accepts this same alphabet.
-      if (ids.some(id => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) throw new Error("Invalid result identity. Refresh the list and select again.");
+      if (targets.some(({id}) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) throw new Error("Invalid result identity. Refresh the list and select again.");
       const bundle = [], encoder = new TextEncoder();
       let size = 22;
       const controller = new AbortController(), abort = () => controller.abort();
@@ -134,17 +159,18 @@
       if (signal?.aborted) controller.abort();
       let objectURL;
       try {
-        for (const [index, id] of ids.entries()) {
+        for (const [index, target] of targets.entries()) {
           checkAbort(controller.signal);
-          const progress = message => onProgress(`${label} ZIP ${index + 1}/${ids.length} · ${id} · ${message}`);
+          const identity = target.isBatch ? `Batch ${target.id}` : target.id;
+          const progress = message => onProgress(`${label} ZIP ${index + 1}/${targets.length} · ${identity} · ${message}`);
           try {
-            const archive = await runArchive(id, controller.signal, progress, byteLimit - size);
+            const archive = await analysisArchive(target, controller.signal, progress, byteLimit - size);
             size += 76 + 2 * encoder.encode(archive.name).length + archive.data.length;
             if (size > byteLimit) throw tooLarge();
             bundle.push(archive);
           } catch (error) {
             if (error.name === "AbortError") throw error;
-            throw new Error(`${id}: ${error.message}`);
+            throw new Error(`${identity}: ${error.message}`);
           }
         }
         checkAbort(controller.signal);

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -27,8 +28,9 @@ const (
 )
 
 var (
-	errResultNotFound = errors.New("saved result not found")
-	errResultBusy     = errors.New("saved result is still active, queued, finalizing, or being downloaded")
+	errResultNotFound     = errors.New("saved result not found")
+	errResultBusy         = errors.New("saved result is still active, queued, finalizing, or being downloaded")
+	errResultStateChanged = errors.New("saved result no longer has the expected failed state; refresh results before deleting")
 )
 
 type savedResult struct {
@@ -346,10 +348,25 @@ func (s *Server) handleResultAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.deleteSavedResult(id); err != nil {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid result deletion query")
+		return
+	}
+	expectedState := ""
+	if values, exists := query["expectedState"]; exists {
+		if len(values) != 1 || values[0] != "failed" {
+			writeError(w, http.StatusBadRequest, "expectedState must be specified once with value failed")
+			return
+		}
+		expectedState = values[0]
+	}
+	if err := s.deleteSavedResultMatchingState(id, expectedState); err != nil {
 		switch {
 		case errors.Is(err, errResultNotFound):
 			http.NotFound(w, r)
+		case errors.Is(err, errResultStateChanged):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "result-state-changed"})
 		case errors.Is(err, errResultBusy):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
@@ -362,6 +379,10 @@ func (s *Server) handleResultAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSavedResult(id string) (resultErr error) {
+	return s.deleteSavedResultMatchingState(id, "")
+}
+
+func (s *Server) deleteSavedResultMatchingState(id, expectedState string) (resultErr error) {
 	if !validResultID(id) {
 		return errResultNotFound
 	}
@@ -377,8 +398,65 @@ func (s *Server) deleteSavedResult(id string) (resultErr error) {
 	defer s.analysisJobMu.Unlock()
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	if expectedState != "" {
+		if s.resultDeletionBusyLocked(id) {
+			return errResultBusy
+		}
+		if err := s.requireResultStateLocked(id, expectedState); err != nil {
+			return err
+		}
+	}
 	batchID = s.libraryResultBatchID(id)
 	return s.deleteSavedResultLocked(id)
+}
+
+// Caller holds the deletion locks, including persistMu, so a retry admission or
+// a terminal state update cannot change the target between this check and delete.
+func (s *Server) requireResultStateLocked(id, expectedState string) error {
+	deleted, err := s.state.resultDeletedLocked(id)
+	if err != nil || deleted {
+		// A confirmed deletion fence may outlive experiment.json after a partial
+		// filesystem removal. Finishing that deletion cannot remove a new run.
+		return err
+	}
+	s.state.mu.RLock()
+	run, exists := s.state.experiments[id]
+	s.state.mu.RUnlock()
+	if exists {
+		if run.State != expectedState {
+			return errResultStateChanged
+		}
+		return nil
+	}
+	runs, err := s.openResultRuns()
+	if errors.Is(err, os.ErrNotExist) {
+		return errResultNotFound
+	}
+	if err != nil {
+		return err
+	}
+	defer runs.Close()
+	directory, err := openResultDirectory(runs, id)
+	if errors.Is(err, os.ErrNotExist) {
+		return errResultNotFound
+	}
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	file, err := openResultFile(directory, "experiment.json")
+	if err != nil {
+		return fmt.Errorf("verify saved result state: %w", err)
+	}
+	defer file.file.Close()
+	stored, err := readResultMetadata(file, id, false)
+	if err != nil {
+		return err
+	}
+	if stored.State != expectedState {
+		return errResultStateChanged
+	}
+	return nil
 }
 
 // Caller holds cancelMu, analysisJobMu, and state.persistMu in that order.

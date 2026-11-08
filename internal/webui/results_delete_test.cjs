@@ -26,6 +26,20 @@ function fixture(extra = {}) {
   api.showToast = () => {};
   return {api, state, element};
 }
+test('mixed batch and individual actions expose failed-only deletion and preserve ordinary success deletion',()=>{
+  const {api,state,element}=fixture();
+  state.savedResults=[{id:'failure',batchId:'group',name:'Mixed',state:'failed',iteration:1,repetitions:2},
+    {id:'success',batchId:'group',name:'Mixed',state:'completed',iteration:2,repetitions:2}];
+  api.renderSavedResults();let html=element('#savedResultsRows').innerHTML;
+  assert.match(html,/data-delete-failed-batch="group"/);
+  assert.match(html,/data-delete-failed-result="failure"/);
+  assert.match(html,/data-delete-result="success"/);
+  assert.doesNotMatch(html,/data-delete-failed-result="success"/);
+  state.savedResults[1].state='queued';api.renderSavedResults();html=element('#savedResultsRows').innerHTML;
+  assert.match(html,/data-delete-failed-batch="group"[^>]*disabled/);
+  assert.match(html,/data-delete-failed-result="failure"[^>]*disabled/);
+});
+
 test('opening deletion requires no background size request', () => {
   let calls=0;
   const {api,state,element}=fixture({fetch:()=>{calls++;throw new Error('unexpected request');}});

@@ -2,7 +2,7 @@
   "use strict";
 
   const pending = run => run.active || ["queued", "running"].includes(run.state);
-  const started = run => Boolean(run.startedAt && !String(run.startedAt).startsWith("0001-"));
+  const retryable = run => ["failed", "canceled", "interrupted"].includes(run.state);
   const currentRuns = runs => {
     const previous = new Set(runs.flatMap(run => run.previousRunIds || []));
     return runs.filter(run => !run.superseded && !previous.has(run.id));
@@ -53,8 +53,8 @@
       if (seen.has(batchID)) continue;
       const all = batches.get(batchID) || [], current = currentRuns(all);
       if (selectedRun && (!current.some(run => run.id === selectedRun.id)
-          || !(selectedRun.state === "failed" || selectedRun.state === "interrupted" && started(selectedRun)))) {
-        skip(key, selectedRun, "Only current failed or started interrupted attempts can request a retry.");
+          || !retryable(selectedRun))) {
+        skip(key, selectedRun, "Only current failed, canceled or interrupted attempts can request a retry.");
         continue;
       }
       seen.add(batchID);
@@ -65,10 +65,10 @@
           || run.iteration < 1 || run.iteration > expected) || new Set(current.map(run => run.iteration)).size !== current.length) {
         skip(key, sample, "Batch metadata is incomplete or unreadable."); continue;
       }
-      if (!current.some(run => run.state === "failed" || run.state === "interrupted" && started(run))) {
-        skip(key, sample, "This batch has no failed or started interrupted attempt."); continue;
+      if (!current.some(retryable)) {
+        skip(key, sample, "This batch has no failed, canceled or interrupted attempt."); continue;
       }
-      const unfinished = current.filter(run => ["failed", "interrupted", "canceled"].includes(run.state))
+      const unfinished = current.filter(retryable)
         .sort((a, b) => a.iteration - b.iteration);
       entries.push({key: "batch:" + batchID, id: batchID, name: String(sample?.name || batchID),
         url: "/api/v1/result-batches/" + encodeURIComponent(batchID) + "/retry",

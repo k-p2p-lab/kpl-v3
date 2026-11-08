@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -118,6 +119,9 @@ func TestAgentDataOwnerHelper(t *testing.T) {
 	}
 	for {
 		time.Sleep(time.Hour)
+		// This helper does not Run the Server, so keep the lock's os.File
+		// reachable instead of allowing its finalizer to unlock live ownership.
+		runtime.KeepAlive(s)
 	}
 }
 

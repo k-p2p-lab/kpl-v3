@@ -243,6 +243,24 @@ test('checkbox selection honors busy state, canonical keys and the 2000-item lim
   assert.equal(h.groups.getSelection('scenarios').length,2000);
 });
 
+test('failed result deletion is a separate result-only selection action and respects busy state',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  let locked=false;const failed=[],all=[];
+  const h=harness(async()=>initial(),{bars,isExternallyBusy:()=>locked,
+    onDeleteFailedSelected:keys=>failed.push(keys),onDeleteSelected:(scope,keys)=>all.push([scope,keys])});
+  await h.initialized;
+  assert.doesNotMatch(bars['#scenarioGroupTools'].innerHTML,/delete-failed-selected/);
+  assert.match(bars['#resultGroupTools'].innerHTML,/data-library-action="delete-failed-selected" disabled/);
+  await h.action('delete-failed-selected');assert.equal(failed.length,0);
+  h.check('scenario:one',true);await h.action('delete-failed-selected');assert.equal(failed.length,0);
+  h.check('batch:one',true);h.check('run:single',true);
+  await h.action('delete-failed-selected','results');
+  assert.deepEqual(failed,[['batch:one','run:single']]);
+  h.check('run:single',false);assert.deepEqual(failed[0],['batch:one','run:single']);
+  locked=true;await h.action('delete-failed-selected','results');assert.equal(failed.length,1);
+  locked=false;await h.action('delete-selected','results');assert.deepEqual(all,[['results',['batch:one']]]);
+});
+
 test('selection Actions opens deletion confirmation for exactly the checked units',async()=>{
   const requests=[];let locked=false;
   const h=harness(async()=>initial(),{onDeleteSelected:(scope,keys)=>requests.push({scope,keys}),isExternallyBusy:()=>locked});await h.initialized;
@@ -661,10 +679,10 @@ test('selected result actions share the dropdown while scenario controls remain 
   const h=harness(async()=>initial(),{bars:{'#resultGroupTools':resultBar,'#scenarioGroupTools':scenarioBar},
     onAnalyzeSelected:async()=>'',onRetrySelected:async()=>''});
   await h.initialized;h.check('scenario:one',true);
-  assert.doesNotMatch(scenarioBar.innerHTML,/Start analysis|Retry failed runs/);
+  assert.doesNotMatch(scenarioBar.innerHTML,/Start analysis|Retry unfinished runs/);
   h.check('batch:one',true);
   assert.match(resultBar.innerHTML,/data-library-action="analyze-selected"[^>]*>Start analysis/);
-  assert.match(resultBar.innerHTML,/data-library-action="retry-selected"[^>]*>Retry failed runs/);
+  assert.match(resultBar.innerHTML,/data-library-action="retry-selected"[^>]*>Retry unfinished runs/);
 });
 
 test('bulk work freezes selected keys, locks repeat clicks, and preserves the selection after submission',async()=>{

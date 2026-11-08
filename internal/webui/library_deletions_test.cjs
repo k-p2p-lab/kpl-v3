@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {prepareDeletion,createDeletions}=require('./static/library-deletions.js');
+const {prepareDeletion,prepareFailedDeletion,createDeletions}=require('./static/library-deletions.js');
 
 const items=[{key:'scenario:a',name:'<Alpha>'},{key:'scenario:b',name:'Beta'},{key:'batch:group',name:'Group'},{key:'run:solo',name:'Solo'}];
 const results=[{id:'current',batchId:'group'},{id:'previous',batchId:'group'},{id:'solo'}];
@@ -14,6 +14,68 @@ test('deletion plans freeze selected units, preserve batch scope and reject unkn
   for(const keys of [[],['unknown:key'],['scenario:a'],Array.from({length:2001},(_,i)=>'run:'+i)])assert.throws(()=>plan('results',keys));
   assert.throws(()=>plan('scenarios',['run:solo']));
   assert.equal(plan('scenarios',['scenario:a']).entries[0].url,'/api/v1/scenarios/a');
+});
+
+test('failed cleanup expands selected batches to failed Run records and preserves every other state',()=>{
+  const runs=[
+    {id:'failed-current',name:'Failed <current>',batchId:'group',state:'failed'},
+    {id:'failed-previous',batchId:'group',state:'failed',superseded:true},
+    ...['completed','canceled','interrupted','unreadable','running','queued'].map(state=>({id:state,batchId:'group',state})),
+    {id:'solo',state:'failed'},{id:'other-failed',batchId:'unselected',state:'failed'},
+  ];
+  const p=prepareFailedDeletion(['batch:group','run:failed-current','run:solo','batch:group'],items,runs);
+  assert.equal(p.scope,'results');assert.equal(p.mode,'failed');
+  assert.deepEqual(p.entries.map(entry=>entry.id),['failed-current','failed-previous','solo']);
+  assert.ok(p.entries.every(entry=>entry.kind==='run'&&entry.expectedState==='failed'));
+  assert.deepEqual(p.entries.map(entry=>entry.url),[
+    '/api/v1/results/failed-current?expectedState=failed',
+    '/api/v1/results/failed-previous?expectedState=failed',
+    '/api/v1/results/solo?expectedState=failed',
+  ]);
+  assert.deepEqual(p.entries[0].runIDs,['failed-current']);
+  assert.ok(Object.isFrozen(p)&&Object.isFrozen(p.entries)&&p.entries.every(entry=>Object.isFrozen(entry)&&Object.isFrozen(entry.runIDs)));
+  runs[0].state='completed';runs.push({id:'new-failed',batchId:'group',state:'failed'});
+  assert.deepEqual(p.entries.map(entry=>entry.id),['failed-current','failed-previous','solo'],'the confirmed scope must be immutable');
+});
+
+test('failed cleanup permits zero targets but rejects invalid selections and excessive expanded failed Runs',()=>{
+  const successful=[{id:'current',batchId:'group',state:'completed'},{id:'solo',state:'completed',analysis:{state:'failed'}}];
+  assert.deepEqual(prepareFailedDeletion(['batch:group','run:solo'],items,successful).entries,[]);
+  for(const keys of [[],['scenario:a'],['run:missing'],['batch:missing'],Array.from({length:2001},(_,i)=>'run:'+i)]) {
+    assert.throws(()=>prepareFailedDeletion(keys,items,successful));
+  }
+  const many=Array.from({length:2001},(_,i)=>({id:'failed-'+i,batchId:'group',state:'failed'}));
+  assert.throws(()=>prepareFailedDeletion(['batch:group'],items,many),/2,000 failed runs/);
+  many[0].state='completed';
+  assert.equal(prepareFailedDeletion(['batch:group'],items,many).entries.length,2000);
+});
+
+test('failed cleanup submits conditional per-Run deletes, skips changed or busy records and retries only unresolved work',async()=>{
+  const p=prepareFailedDeletion(['batch:group'],items,[
+    {id:'first',batchId:'group',state:'failed'},{id:'second',batchId:'group',state:'failed'},
+    {id:'success',batchId:'group',state:'completed'},
+  ]);
+  const calls=[];let conflict=true;
+  const executor=createDeletions({api:async(path,options)=>{
+    calls.push([path,options.method]);
+    if(path.includes('/first?')&&conflict)throw Object.assign(Error('state changed'),{status:409});
+    return null;
+  }});
+  const report=await executor.execute(p);
+  assert.deepEqual(report.deleted,['run:second']);
+  assert.match(report.failed[0].message,/no longer failed or is busy/);
+  assert.deepEqual(report.deletedItems[0].runIDs,['second']);
+  assert.ok(calls.every(([path,method])=>path.startsWith('/api/v1/results/')&&path.endsWith('?expectedState=failed')&&method==='DELETE'));
+  conflict=false;
+  const retried=await executor.execute({scope:'results',entries:report.failed.map(failure=>failure.entry)});
+  assert.deepEqual(retried.deleted,['run:first']);
+  assert.equal(calls.filter(([path])=>path.includes('/second?')).length,1);
+});
+
+test('failed cleanup makes no requests for completed-only selections',async()=>{
+  const p=prepareFailedDeletion(['batch:group'],items,[{id:'complete',batchId:'group',state:'completed'}]);
+  const report=await createDeletions({api:async()=>{throw Error('must not send a deletion')}}).execute(p);
+  assert.deepEqual(report,{deleted:[],deletedItems:[],failed:[],remaining:[]});
 });
 
 test('confirmed deletion uses existing APIs sequentially and reports server-confirmed batch IDs',async()=>{

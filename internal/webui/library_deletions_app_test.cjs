@@ -28,6 +28,44 @@ function fixture(request) {
   return {app:sandbox,state,element,toasts,removed,selected};
 }
 
+test('failed cleanup previews individual failed runs and never deletes a whole mixed batch',async()=>{
+  const calls=[];const f=fixture(async(path,options)=>{calls.push([path,options.method]);return null});
+  f.state.savedResults=[{id:'one',batchId:'g',state:'completed',name:'Success'},
+    {id:'old',batchId:'g',state:'failed',name:'Old failure'},
+    {id:'canceled',batchId:'g',state:'canceled',name:'Canceled'},
+    {id:'solo',state:'failed',name:'Failure'}];
+  f.app.requestLibraryDeletion('results',['batch:g','run:solo'],true);
+  assert.equal(calls.length,0);assert.equal(f.element('#libraryDeleteDialog').open,true);
+  assert.equal(f.element('#libraryDeleteHeading').textContent,'Delete 2 failed runs?');
+  assert.match(f.element('#libraryDeleteDescription').textContent,/Completed and other runs are kept/);
+  assert.equal(f.element('#cancelLibraryDelete').focused,true);
+  await f.app.confirmLibraryDeletion();
+  assert.deepEqual(calls,[['/api/v1/results/old?expectedState=failed','DELETE'],['/api/v1/results/solo?expectedState=failed','DELETE']]);
+  assert.deepEqual(f.state.savedResults.map(run=>run.id),['one','canceled']);
+  assert.equal(f.state.pendingLibraryDeletion,null);assert.equal(f.element('#libraryDeleteDialog').open,false);
+});
+
+test('failed cleanup retains its guarded plan and a changed successful run after a conflict',async()=>{
+  const f=fixture(async()=>{throw Object.assign(new Error('State changed'),{status:409,code:'result-state-changed'})});
+  f.state.savedResults=[{id:'solo',state:'failed',name:'Failure'}];
+  f.app.requestLibraryDeletion('results',['run:solo'],true);
+  f.state.savedResults[0].state='completed';
+  await f.app.confirmLibraryDeletion();
+  assert.equal(f.state.savedResults[0].state,'completed');assert.equal(f.state.deletedResultIDs.size,0);
+  assert.equal(f.state.pendingLibraryDeletion.mode,'failed');
+  assert.equal(f.state.pendingLibraryDeletion.entries[0].url,'/api/v1/results/solo?expectedState=failed');
+  assert.match(f.element('#libraryDeleteError').textContent,/no longer failed/);
+  assert.equal(f.element('#libraryDeleteDialog').open,true);
+});
+
+test('failed cleanup with no failed runs opens no confirmation and sends no request',()=>{
+  let calls=0;const f=fixture(async()=>{calls++});
+  f.state.savedResults=[{id:'solo',state:'canceled',name:'Canceled'}];
+  assert.equal(f.app.requestLibraryDeletion('results',['run:solo'],true),false);
+  assert.equal(calls,0);assert.equal(f.element('#libraryDeleteDialog').open,false);
+  assert.match(f.toasts.at(-1),/No failed runs/);
+});
+
 test('bulk scenario deletion requires confirmation and preserves the loaded editor draft',async()=>{
   const calls=[];const f=fixture(async(path,options)=>{calls.push([path,options.method]);return null;});
   f.app.requestLibraryDeletion('scenarios',['scenario:a','scenario:b']);
@@ -59,7 +97,7 @@ test('busy batches remain selected, successful units disappear, and retry delete
   await f.app.confirmLibraryDeletion();
   assert.equal(f.element('#libraryDeleteDialog').open,true);
   assert.match(f.element('#libraryDeleteError').textContent,/1 deletion confirmed.*1 failed/);
-  assert.equal(f.element('#confirmLibraryDelete').textContent,'Retry deletion');
+  assert.equal(f.element('#confirmLibraryDelete').textContent,'Retry delete');
   assert.deepEqual(f.state.savedResults.map(run=>run.id),['one','old']);
   assert.equal(f.selected.has('batch:g'),true);assert.equal(f.selected.has('run:solo'),false);
   busy=false;await f.app.confirmLibraryDeletion();

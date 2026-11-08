@@ -28,6 +28,28 @@
     return Object.freeze({scope, entries: Object.freeze(entries)});
   }
 
+  function prepareFailedDeletion(keys, items, results = []) {
+    const runs = new Map((results || []).filter(run => run && typeof run.id === "string" && run.id)
+      .map(run => [run.id, run]));
+    // Expanded batch members have per-Run actions even though the library
+    // checkboxes identify their batch as one selectable unit.
+    const known = [...(items || []), ...[...runs.values()].map(run => ({key: "run:" + run.id, name: run.name || run.id}))];
+    const selected = prepareDeletion("results", keys, known, results);
+    const seen = new Set(), entries = [];
+    for (const item of selected.entries) {
+      for (const id of item.runIDs) {
+        const run = runs.get(id);
+        if (seen.has(id) || run?.state !== "failed") continue;
+        seen.add(id);
+        if (entries.length === 2000) throw new Error("Delete up to 2,000 failed runs at a time. Select fewer results.");
+        entries.push(Object.freeze({key: "run:" + id, id, name: String(run.name || item.name || id), kind: "run",
+          url: "/api/v1/results/" + encodeURIComponent(id) + "?expectedState=failed", expectedState: "failed",
+          runIDs: Object.freeze([id])}));
+      }
+    }
+    return Object.freeze({scope: "results", mode: "failed", entries: Object.freeze(entries)});
+  }
+
   function createDeletions({api, timeoutMs = 30000}) {
     let active = false;
     async function execute(plan, {onDeleted = () => {}, onProgress = () => {}} = {}) {
@@ -54,7 +76,9 @@
           } catch (error) {
             const message = error.name === "AbortError"
               ? "Deletion timed out and may still finish. Refresh or retry to confirm."
-              : error.status === 409 ? "This item or its batch is busy. Wait for its current work to finish."
+              : error.status === 409 ? plan.mode === "failed" || entry.expectedState === "failed"
+                ? "This run is no longer failed or is busy. Refresh results before retrying."
+                : "This item or its batch is busy. Wait for its current work to finish."
               : error.message;
             report.failed.push({entry, message});
             if (error.status !== 409) {
@@ -75,7 +99,7 @@
     return {execute};
   }
 
-  const exported = {prepareDeletion, createDeletions};
+  const exported = {prepareDeletion, prepareFailedDeletion, createDeletions};
   if (typeof module !== "undefined" && module.exports) module.exports = exported;
   else root.KPLLibraryDeletions = exported;
 })(typeof globalThis !== "undefined" ? globalThis : this);

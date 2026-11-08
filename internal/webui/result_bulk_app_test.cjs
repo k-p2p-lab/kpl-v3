@@ -20,10 +20,20 @@ test('bulk preview snapshots selection and cancellation sends no request',async(
   const pending=f.app.requestResultBulkAction('retry',keys);keys.length=0;
   assert.equal(calls,0);assert.equal(f.element('#resultBulkDialog').open,true);
   assert.equal(f.element('#cancelResultBulk').focused,true);
-  assert.match(f.element('#resultBulkDescription').textContent,/1 failed batch with 1 unfinished/);
+  assert.match(f.element('#resultBulkDescription').textContent,/1 batch with 1 failed, canceled or interrupted/);
   assert.equal(f.state.pendingResultBulk.plan.entries[0].id,'b');
   f.app.closeResultBulkAction();assert.equal(calls,0);
   f.state.pendingResultBulk.resolve('Canceled');await pending;
+});
+
+test('a canceled-only selection has an enabled retry preview and names unfinished states',async()=>{
+  let calls=0;const f=fixture(async()=>{calls++});
+  f.state.savedResults[0].state='canceled';f.state.savedResults[0].startedAt='0001-01-01T00:00:00Z';
+  const pending=f.app.requestResultBulkAction('retry',['batch:b']);
+  assert.equal(f.element('#resultBulkHeading').textContent,'Retry selected unfinished runs');
+  assert.equal(f.element('#confirmResultBulk').disabled,false);
+  assert.equal(f.state.pendingResultBulk.plan.entries[0].runIds[0],'a');
+  assert.equal(calls,0);f.state.pendingResultBulk.resolve('Canceled');await pending;
 });
 
 test('retry acceptance adds a new attempt and preserves all previous result states',async()=>{

@@ -35,12 +35,48 @@ test('retry selection targets current failed batches and includes unfinished ite
   assert.equal(prepare('retry',['run:done'],results).entries.length,0);
 });
 
-test('retry excludes canceled-only and active batches but includes a started interrupted attempt',()=>{
+test('retry includes canceled-only and interrupted batches even when they never started',()=>{
   const results=[run('canceled','canceled',{batchId:'c'}),run('interrupted','interrupted',{batchId:'i',startedAt:started}),
-    run('unstarted','interrupted',{batchId:'u'}),run('running','running',{batchId:'r'}),run('solo','failed')];
+    run('unstarted','interrupted',{batchId:'u',startedAt:'0001-01-01T00:00:00Z'}),run('running','running',{batchId:'r'}),run('solo','failed')];
   const plan=prepare('retry',['batch:c','batch:i','batch:u','batch:r','run:solo'],results);
-  assert.deepEqual(plan.entries.map(e=>e.id),['i']);
-  assert.equal(plan.skipped.length,4);
+  assert.deepEqual(plan.entries.map(e=>e.id),['c','i','u']);
+  assert.deepEqual(plan.entries.map(e=>e.runIds),[['canceled'],['interrupted'],['unstarted']]);
+  assert.equal(plan.skipped.length,2);
+});
+
+test('a selected canceled or interrupted Run retries its current unfinished batch and retains completed and prior attempts',()=>{
+  const results=[
+    run('previous','canceled',{batchId:'b',superseded:true}),
+    run('done','completed',{batchId:'b',iteration:1,repetitions:3}),
+    run('cancel','canceled',{batchId:'b',iteration:2,repetitions:3,previousRunIds:['previous'],startedAt:'0001-01-01T00:00:00Z'}),
+    run('interrupt','interrupted',{batchId:'b',iteration:3,repetitions:3}),
+  ];
+  const original=JSON.stringify(results);
+  for(const key of ['run:cancel','run:interrupt']) {
+    const plan=prepare('retry',[key],results);
+    assert.equal(plan.entries.length,1);
+    assert.deepEqual(plan.entries[0].runIds,['cancel','interrupt']);
+    assert.deepEqual(plan.entries[0].knownRunIds,['previous','done','cancel','interrupt']);
+  }
+  for(const key of ['run:done','run:previous']) assert.equal(prepare('retry',[key],results).entries.length,0);
+  assert.equal(JSON.stringify(results),original);
+  results[2].active=true;
+  assert.equal(prepare('retry',['batch:b'],results).entries.length,0,'cleanup or execution ownership still blocks a retry');
+});
+
+test('canceled-only retries keep the guarded attempt snapshot and do not replay confirmed admissions',async()=>{
+  const results=[run('cancel','canceled',{batchId:'b',startedAt:'0001-01-01T00:00:00Z'})];
+  const plan=prepare('retry',['batch:b'],results);let calls=0;
+  results[0].state='completed';
+  const admissions=createAdmissions({api:async(path,options)=>{
+    calls++;
+    assert.equal(path,'/api/v1/result-batches/b/retry');
+    assert.deepEqual(JSON.parse(options.body),{expectedRunIds:['cancel']});
+    return {id:'fresh-canceled-retry',batchId:'b',state:'queued'};
+  }});
+  const report=await admissions.execute(plan);
+  assert.equal(report.accepted.length,1);assert.equal(report.accepted[0].reused,false);
+  await admissions.execute(plan);assert.equal(calls,1);
 });
 
 test('invalid or stale selections reject before sending anything',()=>{

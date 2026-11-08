@@ -1593,6 +1593,7 @@ function savedResultBatch(batch) {
           <span class="action-menu-items">
             ${appendBatchButton(batch, locked)}
             ${retryBatchButton(batch, locked)}
+            ${[...batch.runs, ...(batch.previousRuns || [])].some(run => run.state === "failed") ? `<button type="button" data-delete-failed-batch="${escapeHTML(batch.id)}" title="Delete only failed runs in this batch; completed runs are kept." ${locked || state.deletingResultId ? "disabled" : ""}>Delete failed runs…</button>` : ""}
             ${remaining.length ? `<button type="button" class="secondary-button batch-resume-button" data-resume-batch="${escapeHTML(batch.id)}" title="Continue runs that never started. Previously attempted runs are preserved; failed runs are skipped." aria-label="${escapeHTML(`Continue ${remaining.length} remaining runs: ${batch.name}`)}" ${locked || analyzing || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : `Continue remaining (${remaining.length})`}</button>` : ""}
             <button type="button" class="secondary-button batch-delete-button" data-delete-batch="${escapeHTML(batch.id)}" title="${locked ? "Available after all runs in this batch stop." : "Delete every saved run and the mean analysis in this batch."}" aria-label="${escapeHTML(`Delete result batch: ${batch.name}`)}" ${locked || state.deletingResultId ? "disabled" : ""}>${state.pendingDelete?.isBatch && state.deletingResultId === batch.id ? "Deleting…" : "Delete batch"}</button>
           </span>
@@ -1628,7 +1629,7 @@ function savedResultsMarkup(results) {
 }
 
 function savedResultFocus(control) {
-  const attribute = ["data-library-select-key", "data-action-menu-toggle", "data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
+  const attribute = ["data-library-select-key", "data-action-menu-toggle", "data-result-batch-toggle", "data-append-batch", "data-retry-batch", "data-resume-batch", "data-batch-images", "data-delete-batch", "data-delete-failed-batch", "data-delete-failed-result", "data-result-images", "data-result-note", "data-group-note", "data-result-download", "data-delete-result"].find(name => control?.hasAttribute(name));
   return attribute ? { attribute, id: control.getAttribute(attribute), batch: control.closest("details[data-result-batch]")?.dataset.resultBatch,
     menu: control.closest(".action-menu[data-action-menu]")?.dataset.actionMenu } : null;
 }
@@ -1785,7 +1786,7 @@ function savedResultRow(run, inBatch = false) {
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
-    <td data-label="Actions"><div class="result-actions">${resultImagesButton(run)}${resultDownloadLink(run)}<span class="action-menu" data-action-menu="result:${escapeHTML(run.id)}"><button type="button" class="secondary-button" data-action-menu-toggle="result:${escapeHTML(run.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(run.name || run.id)}</span></button><span class="action-menu-items">${retry}<button class="delete-result-button" type="button" data-delete-result="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : "Delete"}</button></span></span></div></td>
+    <td data-label="Actions"><div class="result-actions">${resultImagesButton(run)}${resultDownloadLink(run)}<span class="action-menu" data-action-menu="result:${escapeHTML(run.id)}"><button type="button" class="secondary-button" data-action-menu-toggle="result:${escapeHTML(run.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(run.name || run.id)}</span></button><span class="action-menu-items">${retry}<button class="delete-result-button" type="button" ${run.state === "failed" ? "data-delete-failed-result" : "data-delete-result"}="${escapeHTML(run.id)}" aria-label="${escapeHTML(`Delete saved result: ${run.name || run.id}`)}" title="${resultLocked(run) ? "Available after this run and its batch have stopped." : "Delete this run's saved result."}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>${state.deletingResultId === run.id ? "Deleting…" : run.state === "failed" ? "Delete failed run…" : "Delete"}</button></span></span></div></td>
   </tr>`;
 }
 
@@ -1878,11 +1879,11 @@ async function requestResultBulkAction(action, keys) {
       || state.pendingResumes?.size || state.pendingAppends?.size) throw new Error("Wait for the current result operation to finish.");
   const plan = globalThis.KPLResultBulkActions.prepare(action, [...keys], state.savedResults || []);
   const previewRuns = plan.entries.reduce((count, entry) => count + entry.runCount, 0);
-  const label = action === "analysis" ? "Start selected analyses" : "Retry selected failed runs";
+  const label = action === "analysis" ? "Start selected analyses" : "Retry selected unfinished runs";
   $("#resultBulkHeading").textContent = label;
   $("#resultBulkDescription").textContent = action === "analysis"
     ? `${plan.entries.length} per-Run ${plan.entries.length === 1 ? "analysis" : "analyses"} can be submitted; ${plan.skipped.length} skipped. Analyses wait behind running experiments. Completed analyses are reused and failed analyses are retried. Batch means are separate.`
-    : `${plan.entries.length} failed batch${plan.entries.length === 1 ? "" : "es"} with ${previewRuns} unfinished run${previewRuns === 1 ? "" : "s"} in this preview; ${plan.skipped.length} skipped. The server rechecks each batch. Completed runs and previous attempts remain saved.`;
+    : `${plan.entries.length} batch${plan.entries.length === 1 ? "" : "es"} with ${previewRuns} failed, canceled or interrupted run${previewRuns === 1 ? "" : "s"} in this preview; ${plan.skipped.length} skipped. The server rechecks each batch. Completed runs and previous attempts remain saved.`;
   $("#resultBulkNames").textContent = plan.entries.slice(0, 12).map(entry => `${entry.name} · ${entry.id}${action === "retry" ? ` · ${entry.runCount} unfinished` : ""}`).join("\n")
     + (plan.entries.length > 12 ? `\n…and ${plan.entries.length - 12} more.` : "")
     + (plan.skipped.length ? "\nSkipped:\n" + plan.skipped.slice(0, 6).map(entry => `${entry.name}: ${entry.reason}`).join("\n") : "");
@@ -1979,8 +1980,10 @@ function closeResultBulkAction() {
 
 function renderLibraryDeletionPlan(plan) {
   const count = plan.entries.length;
-  $("#libraryDeleteHeading").textContent = `Delete ${count} selected ${plan.scope === "scenarios" ? "scenario" : "result item"}${count === 1 ? "" : "s"}?`;
-  $("#libraryDeleteDescription").textContent = plan.scope === "scenarios"
+  $("#libraryDeleteHeading").textContent = plan.mode === "failed" ? `Delete ${count} failed run${count === 1 ? "" : "s"}?` : `Delete ${count} selected ${plan.scope === "scenarios" ? "scenario" : "result item"}${count === 1 ? "" : "s"}?`;
+  $("#libraryDeleteDescription").textContent = plan.mode === "failed"
+    ? "Delete only the failed runs listed below. Completed and other runs are kept. The Controller checks each run is still failed. Deleted run data cannot be recovered, and retrying a deleted iteration may no longer be possible. Archived copies are removed in the background. This cannot be undone."
+    : plan.scope === "scenarios"
     ? "Saved scenarios will be deleted. Experiment results and your current editor draft are retained. This cannot be undone."
     : "Selected batches include all current and previous runs, batch analyses and notes. Local results are deleted now; archived copies are removed by the background worker. This cannot be undone.";
   $("#libraryDeleteNames").textContent = plan.entries.slice(0, 10).map(item => `${item.kind === "batch" ? "Batch: " : ""}${item.name} · ${item.id}`).join("\n")
@@ -1995,19 +1998,26 @@ function focusLibrarySelectionTools(scope) {
   targets.find(target => target && !target.disabled)?.focus({preventScroll: true});
 }
 
-function requestLibraryDeletion(scope, keys) {
+function requestLibraryDeletion(scope, keys, failedOnly = false) {
   if (scenarioOperationBusy() || state.deletingResultId || globalThis.KPLLibraryGroups?.isBusy?.()) {
     showToast("Wait for the current library operation to finish.");
     return;
   }
-  const plan = globalThis.KPLLibraryDeletions.prepareDeletion(scope, keys, libraryGroupItems(), state.savedResults || []);
+  const plan = failedOnly
+    ? globalThis.KPLLibraryDeletions.prepareFailedDeletion(keys, libraryGroupItems(), state.savedResults || [])
+    : globalThis.KPLLibraryDeletions.prepareDeletion(scope, keys, libraryGroupItems(), state.savedResults || []);
+  if (!plan.entries.length) {
+    showToast("No failed runs in the selected results. Other runs are kept.");
+    return false;
+  }
   state.libraryDeleteScope = scope;
   state.pendingLibraryDeletion = plan;
   renderLibraryDeletionPlan(plan);
   $("#libraryDeleteError").textContent = "";
-  $("#confirmLibraryDelete").textContent = "Delete selected";
+  $("#confirmLibraryDelete").textContent = failedOnly ? "Delete runs" : "Delete selected";
   $("#libraryDeleteDialog").showModal();
   $("#cancelLibraryDelete").focus();
+  return true;
 }
 
 function applyLibraryDeletion(entry, runIDs) {
@@ -2048,10 +2058,10 @@ async function confirmLibraryDeletion() {
     if (!report.failed.length && !report.remaining.length) {
       state.pendingLibraryDeletion = null;
       complete = true;
-      showToast(`Deleted ${report.deleted.length} selected item${report.deleted.length === 1 ? "" : "s"}.`);
+      showToast(plan.mode === "failed" ? `Deleted ${report.deleted.length} failed run${report.deleted.length === 1 ? "" : "s"}. Other runs were kept.` : `Deleted ${report.deleted.length} selected item${report.deleted.length === 1 ? "" : "s"}.`);
     } else {
       const completed = new Set(report.deleted);
-      state.pendingLibraryDeletion = {scope: plan.scope, entries: plan.entries.filter(entry => !completed.has(entry.key))};
+      state.pendingLibraryDeletion = {...plan, entries: plan.entries.filter(entry => !completed.has(entry.key))};
       renderLibraryDeletionPlan(state.pendingLibraryDeletion);
       $("#libraryDeleteError").textContent = `${report.deleted.length} deletion${report.deleted.length === 1 ? "" : "s"} confirmed. ${report.failed.length} failed; ${report.remaining.length} not attempted.\n`
         + report.failed.slice(0, 3).map(failure => `${failure.entry.name}: ${failure.message}`).join("\n")
@@ -2064,7 +2074,7 @@ async function confirmLibraryDeletion() {
     state.libraryDeleting = false;
     state.deletingResultId = null;
     $("#confirmLibraryDelete").disabled = false;
-    $("#confirmLibraryDelete").textContent = state.pendingLibraryDeletion ? "Retry deletion" : "Delete selected";
+    $("#confirmLibraryDelete").textContent = state.pendingLibraryDeletion ? "Retry delete" : "Delete selected";
     $("#confirmLibraryDelete").removeAttribute("aria-label");
     $("#cancelLibraryDelete").disabled = false;
     if (complete) $("#libraryDeleteDialog").close();
@@ -2924,6 +2934,18 @@ document.addEventListener("click", async (event) => {
     if (!resumeButton.disabled) await resumeSavedBatch(resumeButton.dataset.resumeBatch);
     return;
   }
+  const deleteFailedButton = event.target.closest("[data-delete-failed-batch], [data-delete-failed-result]");
+  if (deleteFailedButton) {
+    event.preventDefault();
+    if (!deleteFailedButton.disabled) {
+      const batchID = deleteFailedButton.dataset.deleteFailedBatch;
+      const key = batchID ? `batch:${batchID}` : `run:${deleteFailedButton.dataset.deleteFailedResult}`;
+      try {
+        if (requestLibraryDeletion("results", [key], true)) rememberResultDialogFocus("#libraryDeleteDialog", deleteFailedButton);
+      } catch (error) { showToast(error.message); }
+    }
+    return;
+  }
   const deleteBatchButton = event.target.closest("[data-delete-batch]");
   if (deleteBatchButton) {
     event.preventDefault();
@@ -3047,6 +3069,7 @@ globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisible
   onAnalyzeSelected: keys => requestResultBulkAction("analysis", keys),
   onRetrySelected: keys => requestResultBulkAction("retry", keys),
   onDeleteSelected: (scope, keys) => { state.libraryDeleteScope = scope; requestLibraryDeletion(scope, keys); },
+  onDeleteFailedSelected: keys => requestLibraryDeletion("results", keys, true),
   onSelectionChanged: renderScenarioRunControl,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,
     getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),

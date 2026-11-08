@@ -290,11 +290,15 @@
         const allChecked = keys.length > 0 && checkedCount === keys.length, mixed = checkedCount > 0 && !allChecked;
         const disabled = selectedCount && ready() ? "" : " disabled";
         const canDownload = selectedCount && ready();
-        const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected))
+        const retryHint = !selectedCount ? "Select result checkboxes first." : !loaded ? "Wait for groups to load."
+          : needsRefresh ? "Refresh groups to confirm their current state." : locked() ? "Wait for the current library operation to finish."
+          : "Retry failed, canceled or interrupted runs; completed runs are kept.";
+        const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected || options?.onDeleteFailedSelected))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
             + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Actions<span class="visually-hidden"> for selected ' + scope + '</span></button><span class="action-menu-items">'
             + (scope === "results" && options?.onAnalyzeSelected ? '<button type="button" data-library-action="analyze-selected" title="Queue analysis for eligible selected saved runs"' + (canDownload ? "" : " disabled") + '>Start analysis</button>' : "")
-            + (scope === "results" && options?.onRetrySelected ? '<button type="button" data-library-action="retry-selected" title="Queue selected failed runs again; completed runs are kept"' + (canDownload ? "" : " disabled") + '>Retry failed runs</button>' : "")
+            + (scope === "results" && options?.onRetrySelected ? '<button type="button" data-library-action="retry-selected" title="' + escape(retryHint) + '"' + (canDownload ? "" : " disabled") + '>Retry unfinished runs</button>' : "")
+            + (scope === "results" && options?.onDeleteFailedSelected ? '<button type="button" data-library-action="delete-failed-selected"' + (canDownload ? "" : " disabled") + '>Delete failed runs…</button>' : "")
             + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
             + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download one ZIP of per-Run CSV ZIPs, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
             + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download batch mean JSON for repetition batches and per-Run analysis JSON in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
@@ -424,7 +428,7 @@
           analysisDownloadController?.abort();
           return;
         }
-        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "analyze-selected", "retry-selected", "move"].includes(action)) return;
+        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "delete-failed-selected", "analyze-selected", "retry-selected", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -449,13 +453,15 @@
           finally { focusOrderControl(button.dataset.libraryGroup, action); }
         } else if (action === "delete-selected") {
           if (selected.size && ready()) options?.onDeleteSelected?.(selectionScope, [...selected]);
+        } else if (action === "delete-failed-selected") {
+          if (selectionScope === "results" && selected.size && ready()) options?.onDeleteFailedSelected?.([...selected]);
         } else if (action === "analyze-selected" || action === "retry-selected") {
           const operation = action === "analyze-selected" ? options?.onAnalyzeSelected : options?.onRetrySelected;
           if (selectionScope !== "results" || !selected.size || !ready() || !operation) return;
           const keys = [...selected];
           busy = true;
           errorText = "";
-          noticeText = action === "analyze-selected" ? "Queueing selected analyses…" : "Queueing failed runs…";
+          noticeText = action === "analyze-selected" ? "Queueing selected analyses…" : "Queueing unfinished runs…";
           options?.onSelectionChanged?.();
           refreshUI();
           try {

@@ -71,6 +71,53 @@ func completionCandidates(t *testing.T, a *App, out *bytes.Buffer, args ...strin
 	return strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 }
 
+func TestCompletionRestartRepublishOptions(t *testing.T) {
+	a, runner, out := completionFixture(t)
+	for _, tc := range []struct {
+		words []string
+		want  string
+		omit  []string
+	}{
+		{[]string{"swarm", "restart", "--"}, "--republish", []string{"--platforms"}},
+		{[]string{"swarm", "restart", "--workers", "--"}, "--republish", nil},
+		{[]string{"swarm", "restart", "--platforms", "linux/amd64", "--"}, "--republish", []string{"--image", "--platforms"}},
+		{[]string{"swarm", "restart", "--republish", "--"}, "--platforms", []string{"--image", "--republish"}},
+		{[]string{"swarm", "restart", "worker-a", "--republish", "--"}, "--platforms", []string{"--all", "--workers", "--image"}},
+		{[]string{"swarm", "restart", "--republish", "--workers", "--"}, "--platforms", []string{"--image"}},
+		{[]string{"swarm", "restart", "--image", "sha256:" + strings.Repeat("a", 64), "--"}, "--workers", []string{"--republish", "--platforms"}},
+	} {
+		got := completionCandidates(t, a, out, tc.words...)
+		contains := func(value string) bool {
+			for _, candidate := range got {
+				if candidate == value {
+					return true
+				}
+			}
+			return false
+		}
+		if !contains(tc.want) {
+			t.Fatalf("%q missing %s: %q", tc.words, tc.want, got)
+		}
+		for _, value := range tc.omit {
+			if contains(value) {
+				t.Fatalf("%q suggested incompatible %s", tc.words, value)
+			}
+		}
+	}
+	for _, words := range [][]string{
+		{"swarm", "restart", "--republish", "--platforms", "linux/"},
+		{"swarm", "restart", "--platforms", "linux/"},
+		{"swarm", "restart", "--republish", "--platforms=linux/"},
+	} {
+		if got := completionCandidates(t, a, out, words...); len(got) != len(completionPlatforms) {
+			t.Fatalf("republish platform completion %q: %q", words, got)
+		}
+	}
+	if len(runner.calls) != 0 {
+		t.Fatal("republish flag completion contacted Docker")
+	}
+}
+
 func TestCompletionPlatformsAndNodeSelection(t *testing.T) {
 	a, runner, out := completionFixture(t)
 	for _, command := range []string{"publish"} {
@@ -155,7 +202,6 @@ func TestCompletionExcludesRemovedEntrypoints(t *testing.T) {
 		{"build", ""}, {"validate", ""}, {"test-race", ""}, {"swarm-restart", ""},
 		{"controller", ""}, {"config-version", ""}, {"swarm", "configure", "KPL_"},
 		{"swarm", "add-node", "worker"}, {"swarm", "publish", "--platforms", "linux/"},
-		{"swarm", "restart", "--platforms", "linux/"},
 	} {
 		if got := completionCandidates(t, a, out, args...); len(got) != 0 {
 			t.Fatalf("removed entrypoint or build option remained in completion: %q => %q", args, got)

@@ -27,6 +27,7 @@ var swarmDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 type swarmOptions struct {
 	name, selector, platforms, image, component, tail, logContext string
 	nodes                                                         []string
+	republish                                                     bool
 }
 
 type swarm struct {
@@ -109,11 +110,15 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		key, value, supplied := strings.Cut(arg, "=")
-		if key == "--image" || key == "--platforms" {
-			if key == "--platforms" && name == "restart" {
-				return bad("restart pulls the configured registry image; use kpl image publish --platforms CSV to build and publish first")
+		if key == "--republish" {
+			if name != "restart" || supplied || o.republish {
+				return bad("--republish is a restart-only flag and may be specified only once without a value")
 			}
-			if key == "--image" && name != "deploy" && name != "restart" || key == "--platforms" && name != "publish" {
+			o.republish = true
+			continue
+		}
+		if key == "--image" || key == "--platforms" {
+			if key == "--image" && name != "deploy" && name != "restart" || key == "--platforms" && name != "publish" && name != "restart" {
 				return bad("unsupported option for " + name + ": " + key)
 			}
 			if !supplied {
@@ -168,6 +173,12 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 	}
 	if o.image != "" && o.platforms != "" {
 		return bad("--image and --platforms cannot be combined; selecting a digest reuses an existing image")
+	}
+	if o.republish && o.image != "" {
+		return bad("--republish and --image cannot be combined; publishing requires the configured mutable image tag")
+	}
+	if name == "restart" && o.platforms != "" && !o.republish {
+		return bad("restart pulls the configured registry image; use --republish or kpl image publish --platforms CSV to build and publish first")
 	}
 	if (name == "add-node" || name == "remove-node") && o.selector == "" && len(o.nodes) == 0 {
 		return bad(name + " requires nodes or a selector")
@@ -237,8 +248,8 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 		}
 		config["KPL_IMAGE"] = image
 	}
-	if name == "restart" && o.platforms != "" && strings.Contains(config["KPL_IMAGE"], "@") {
-		return usageError("--platforms cannot be used with a configured image digest; configure a mutable tag to build an image")
+	if o.republish && strings.Contains(config["KPL_IMAGE"], "@") {
+		return usageError("--republish requires a configured mutable image tag; change KPL_IMAGE from a digest to a tag first")
 	}
 	s := &swarm{a: a.WithConfig(config), config: config, configuredImage: configuredImage, options: o, stack: config["KPL_STACK_NAME"], network: config["KPL_PEER_NETWORK"], present: make(map[string]bool)}
 	s.label = "kpl." + s.stack + ".agent"
@@ -292,6 +303,9 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 		fmt.Fprintf(a.Stdout, "\nAgent placement label: %s=true\n", s.label)
 		return s.run(ctx, "node", "ls", "--filter", "node.label="+s.label+"=true")
 	case "deploy", "restart":
+		if o.republish {
+			return s.restartRepublish(ctx)
+		}
 		return s.deploy(ctx)
 	case "add-node":
 		return s.addNodes(ctx)

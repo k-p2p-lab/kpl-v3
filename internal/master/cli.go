@@ -510,6 +510,7 @@ Remove the stack first with kpl swarm remove. Persistent data volumes are retain
 
   deploy [--image REF] [NODE...|SELECTOR]  Deploy or update services
   restart [--image REF] [NODE...|SELECTOR] Pull the registry image, then restart
+          --republish [--platforms CSV]  Remove, build/publish, then deploy the latest tag
   status | check | access                 Inspect deployment and access URLs
   logs [COMPONENT] [--tail N|all] [--context NAME]
   node list                              List Swarm nodes
@@ -525,6 +526,11 @@ Without a digest, deploy/restart pull the configured tag's latest registry versi
 on every invocation. A pinned digest selects that exact image. Build and publish
 source changes separately with kpl image publish [--platforms CSV].
 Restart verifies Controller, Agent and remaining service shutdown before redeployment.
+With --republish, restart instead removes the stack, publishes the configured mutable
+tag and deploys its latest registry digest. Existing Agent nodes are reused unless
+selected explicitly. --image cannot be combined with --republish. --platforms is
+accepted on restart only with --republish. Build/push/deploy failure after removal
+leaves the stack down or partially deployed; it is not automatically restored.
 Removal retains data volumes. Network reset requires an unused owned overlay.
 Log components: controller, agent, network-manager, resource-monitor, prometheus,
 grafana, access, auth. --context applies only to access/auth file reads.

@@ -219,9 +219,18 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				return printCandidates(a.Stdout, nil, prefix)
 			}
 			if words[len(words)-1] == "--platforms" || strings.HasPrefix(prefix, "--platforms=") {
-				return printCandidates(a.Stdout, nil, prefix)
+				if words[1] == "restart" && !separated {
+					if strings.HasPrefix(prefix, "--platforms=") {
+						for _, value := range completionPlatforms {
+							candidates = append(candidates, "--platforms="+value)
+						}
+					} else {
+						candidates = append(candidates, completionPlatforms...)
+					}
+				}
+				return printCandidates(a.Stdout, candidates, prefix)
 			}
-			selected, platforms, image := false, false, false
+			selected, platforms, image, republish := false, false, false, false
 			var nodes []string
 			for i := 2; i < len(words); i++ {
 				switch words[i] {
@@ -230,6 +239,8 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 				case "--platforms":
 					platforms = true
 					i++
+				case "--republish":
+					republish = true
 				case "--image":
 					image = true
 					i++
@@ -251,8 +262,15 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 					candidates = append(candidates, a.completionNodes(ctx, nodes)...)
 				}
 			}
-			if !separated && (words[1] == "deploy" || words[1] == "restart") && !platforms && !image && !selected && len(nodes) == 0 {
+			if !separated && (words[1] == "deploy" || words[1] == "restart") && !platforms && !image && !republish && !selected && len(nodes) == 0 {
 				candidates = append(candidates, "--image")
+			}
+			if !separated && words[1] == "restart" && !image && (!selected && len(nodes) == 0 || strings.HasPrefix(prefix, "-")) {
+				if republish && !platforms {
+					candidates = append(candidates, "--platforms")
+				} else if !republish {
+					candidates = append(candidates, "--republish")
+				}
 			}
 		case "logs":
 			if len(words) == 2 {

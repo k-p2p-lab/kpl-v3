@@ -11,6 +11,7 @@
   function position(menu) {
     const panel = panelFor(menu), trigger = triggerFor(menu);
     if (!panel || !trigger || !menu.isConnected) return;
+    const scrollTop = panel.scrollTop, scrollLeft = panel.scrollLeft;
     const rect = trigger.getBoundingClientRect();
     const gap = 8, width = document.documentElement.clientWidth, height = window.innerHeight;
     panel.style.maxWidth = Math.max(0, width - gap * 2) + "px";
@@ -21,6 +22,10 @@
     const placeAbove = bounds.height > below && above > below;
     panel.style.maxHeight = Math.max(0, placeAbove ? above : below) + "px";
     panel.style.top = (placeAbove ? Math.max(gap, rect.top - Math.min(bounds.height, above) - gap) : rect.bottom + gap) + "px";
+    // Measuring with the viewport's full height can temporarily enlarge the
+    // panel and clamp its scroll range. Restore after the final size is applied.
+    panel.scrollTop = scrollTop;
+    panel.scrollLeft = scrollLeft;
   }
 
   function close(menu, focus = false) {

@@ -892,6 +892,17 @@ function searchSavedScenarios(query) {
   $("#scenarioLibraryList").scrollTop = 0;
 }
 
+function renderScenarioRunControl() {
+  const runSelection = globalThis.KPLLibraryGroups?.getSelection?.("scenarios");
+  $("#runScenario").disabled = scenarioOperationBusy() || Boolean(globalThis.KPLLibraryGroups?.isBusy?.()) || runSelection?.length === 0;
+  $("#runScenario").textContent = state.scenarioSubmitting
+    ? state.scenarioRunProgress ? `${state.scenarioRunProgress.accepted + 1}/${state.scenarioRunProgress.total}…` : "Submitting…"
+    : runSelection ? "Run selected" : "Run";
+  $("#runScenario").setAttribute("aria-label", state.scenarioSubmitting && state.scenarioRunProgress
+    ? `Submitting scenario ${state.scenarioRunProgress.accepted + 1} of ${state.scenarioRunProgress.total}`
+    : runSelection ? `Run ${runSelection.length} selected scenarios` : "Run editor scenario");
+}
+
 function renderSavedScenarios() {
   renderScenarioValidation();
   renderScenarioImportReview();
@@ -913,14 +924,7 @@ function renderSavedScenarios() {
   $("#scenarioName").disabled = busy;
   $("#scenarioText").disabled = busy;
   $("#runRepetitions").disabled = busy;
-  const runSelection = globalThis.KPLLibraryGroups?.getSelection?.("scenarios");
-  $("#runScenario").disabled = busy || Boolean(globalThis.KPLLibraryGroups?.isBusy?.()) || runSelection?.length === 0;
-  $("#runScenario").textContent = state.scenarioSubmitting
-    ? state.scenarioRunProgress ? `${state.scenarioRunProgress.accepted + 1}/${state.scenarioRunProgress.total}…` : "Submitting…"
-    : runSelection ? "Run selected" : "Run";
-  $("#runScenario").setAttribute("aria-label", state.scenarioSubmitting && state.scenarioRunProgress
-    ? `Submitting scenario ${state.scenarioRunProgress.accepted + 1} of ${state.scenarioRunProgress.total}`
-    : runSelection ? `Run ${runSelection.length} selected scenarios` : "Run editor scenario");
+  renderScenarioRunControl();
   $("#scenarioLibraryError").textContent = state.scenarioActionScope === "library" ? "" : state.scenarioActionError;
   $("#scenarioListError").textContent = state.scenarioActionScope === "library" ? state.scenarioActionError : "";
   $("#scenarioListError").hidden = !$("#scenarioListError").textContent;
@@ -1110,7 +1114,7 @@ function renderScenarioImportReview() {
       + '</strong><small>' + escapeHTML(row.filename) + '</small></span></label><span class="scenario-import-status">'
       + labels[row.status] + '</span>' + (row.error ? '<p role="' + (row.status === "uncertain" ? "alert" : "status") + '">' + escapeHTML(row.error) + "</p>" : "") + "</li>";
   }).join(""));
-  if (focusedIndex != null) $('[data-scenario-import-select="' + focusedIndex + '"]')?.focus();
+  if (focusedIndex != null) $('[data-scenario-import-select="' + focusedIndex + '"]')?.focus({preventScroll: true});
 }
 
 async function importScenarioFiles(files) {
@@ -3043,7 +3047,7 @@ globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisible
   onAnalyzeSelected: keys => requestResultBulkAction("analysis", keys),
   onRetrySelected: keys => requestResultBulkAction("retry", keys),
   onDeleteSelected: (scope, keys) => { state.libraryDeleteScope = scope; requestLibraryDeletion(scope, keys); },
-  onSelectionChanged: renderSavedScenarios,
+  onSelectionChanged: renderScenarioRunControl,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,
     getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),
   downloadCSV: globalThis.KPLResultAnalysisDownloads?.createDownloads({api,

@@ -249,7 +249,7 @@
       selected = next;
       selectionScope = selected.size ? scope : "";
       refreshUI();
-      changed();
+      options?.onSelectionChanged?.();
     }
 
     function selectionMarkup(key, label) {
@@ -274,6 +274,7 @@
     }
 
     function renderBars(allItems) {
+      const restoreControls = [];
       for (const scope of ["scenarios", "results"]) {
         const container = document?.querySelector(scope === "scenarios" ? "#scenarioGroupTools" : "#resultGroupTools");
         if (!container) continue;
@@ -284,10 +285,11 @@
           counts.set("*", counts.get("*") + 1);
         }
         const selecting = selectionScope === scope;
+        const selectedCount = selecting ? selected.size : 0;
         const keys = visibleKeys(scope, allItems), checkedCount = selecting ? keys.filter(key => selected.has(key)).length : 0;
         const allChecked = keys.length > 0 && checkedCount === keys.length, mixed = checkedCount > 0 && !allChecked;
-        const disabled = ready() ? "" : " disabled";
-        const canDownload = selected.size && ready();
+        const disabled = selectedCount && ready() ? "" : " disabled";
+        const canDownload = selectedCount && ready();
         const downloadControls = (options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
             + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Actions<span class="visually-hidden"> for selected ' + scope + '</span></button><span class="action-menu-items">'
@@ -300,7 +302,7 @@
             + '</span></span>'
             + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
         const html = '<div class="library-group-toolbar"><label class="library-select-all" data-library-select><input type="checkbox" data-library-select-visible data-library-scope="' + scope + '" aria-label="Select visible ' + scope + '"' + (allChecked ? " checked" : "") + (mixed ? ' data-library-mixed="true"' : "") + (!keys.length || !ready() ? " disabled" : "") + '><span>Select visible</span><span class="library-filter-count">' + keys.length + '</span></label><div class="library-group-actions">' + filterMarkup(scope, counts) + '<button class="secondary-button" type="button" data-library-action="manage" aria-label="Manage shared groups">Manage</button></div></div>' +
-          (selecting ? '<div class="library-group-selection"><div class="library-selection-count"><span role="status" aria-live="polite">' + selected.size + ' selected' + (selected.size > checkedCount ? ' · ' + (selected.size - checkedCount) + ' hidden' : '') + '</span><button class="library-text-button" type="button" data-library-action="clear"' + (locked() ? " disabled" : "") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(targetGroup) + '</select><button class="secondary-button" type="button" data-library-action="move"' + (selected.size && ready() ? "" : " disabled") + '>Move</button>' + downloadControls + '</div>' : "") +
+          '<div class="library-group-selection"><div class="library-selection-count"><span role="status" aria-live="polite" title="' + selectedCount + ' selected' + (selectedCount > checkedCount ? ' · ' + (selectedCount - checkedCount) + ' hidden' : '') + '">' + selectedCount + ' selected' + (selectedCount > checkedCount ? ' · ' + (selectedCount - checkedCount) + ' hidden' : '') + '</span><button class="library-text-button" type="button" data-library-action="clear"' + (!selectedCount || locked() ? " disabled" : "") + '>Clear</button></div><label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(selecting ? targetGroup : importGroup()) + '</select><button class="secondary-button" type="button" data-library-action="move"' + disabled + '>Move</button>' + downloadControls + '</div>' +
           (errorText ? '<p class="library-group-status" role="alert">' + escape(errorText) + ' <button class="library-text-button" type="button" data-library-action="refresh"' + (locked() ? " disabled" : "") + '>Refresh groups</button></p>' : noticeText ? '<p class="library-group-status" role="status">' + escape(noticeText) + "</p>" : !loaded ? '<p class="library-group-status" role="status">Loading groups…</p>' : "");
         const active = document.activeElement;
         const focusKind = container.contains(active) ? active?.hasAttribute("data-library-select-visible") ? "[data-library-select-visible]" : active?.hasAttribute("data-library-move-target") ? "[data-library-move-target]" : active?.dataset?.libraryAction ? '[data-library-action="' + active.dataset.libraryAction + '"]' : active?.hasAttribute("data-action-menu-toggle") ? '[data-action-menu-toggle="' + active.dataset.actionMenuToggle + '"]' : "" : "";
@@ -312,11 +314,16 @@
           if (filterOpen) {
             const menu = container.querySelector("[data-library-filter-menu]");
             menu?.classList.add("is-open");
-            const panel = menu?.querySelector(".action-menu-items");
-            if (panel) panel.scrollTop = filterScroll;
           }
-          if (focusKind) container.querySelector(focusKind)?.focus({preventScroll: true});
-          if (filterFocus != null) [...(container.querySelectorAll?.("[data-library-group-filter]") || [])].find(input => input.getAttribute("data-library-group-filter") === filterFocus)?.focus({preventScroll: true});
+          restoreControls.push(() => {
+            if (focusKind) {
+              const target = container.querySelector(focusKind);
+              (target && !target.disabled ? target : container.querySelector("[data-library-select-visible]:not(:disabled)"))?.focus({preventScroll: true});
+            }
+            if (filterFocus != null) [...(container.querySelectorAll?.("[data-library-group-filter]") || [])].find(input => input.getAttribute("data-library-group-filter") === filterFocus)?.focus({preventScroll: true});
+            const panel = container.querySelector("[data-library-filter-menu] .action-menu-items");
+            if (filterOpen && panel) panel.scrollTop = filterScroll;
+          });
         }
         const master = container.querySelector("[data-library-select-visible]");
         if (master) { master.checked = allChecked; master.indeterminate = mixed; }
@@ -327,6 +334,9 @@
         }
       }
       environment.KPLActionMenus?.refresh();
+      // Position rebuilt popovers before restoring their scroll offsets: an
+      // unconstrained panel has no scroll range and would clamp the offset to 0.
+      for (const restore of restoreControls) restore();
     }
 
     function ensureDialog() {
@@ -432,7 +442,7 @@
           selected.clear();
           selectionScope = "";
           refreshUI();
-          changed();
+          options?.onSelectionChanged?.();
         } else if (action === "move-up" || action === "move-down") {
           if (!ready()) return;
           try { await moveGroup(button.dataset.libraryGroup, action === "move-up" ? -1 : 1); }

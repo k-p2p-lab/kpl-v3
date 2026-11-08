@@ -455,6 +455,7 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .scenario-save-row .dialog-error { margin-right: auto; overflow-wrap: anywhere; }
 .run-repetitions { display: flex; align-items: center; gap: 0.5rem; }
 .run-repetitions input { width: 4.6rem; }
+#scenarioForm > footer > #runScenario { min-width: 8rem; }
 .dialog-help { color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
 .dialog-error { color: var(--red); font-size: 0.8rem; }
 .delete-result-name { font-weight: 650; overflow-wrap: anywhere; }

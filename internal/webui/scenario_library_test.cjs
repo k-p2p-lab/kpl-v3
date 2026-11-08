@@ -672,6 +672,22 @@ test('new unsaved runs omit scenarioId even while viewing a group', async () => 
   assert.equal(elements.get('#scenarioError').textContent,'');
 });
 
+test('selection-only updates preserve list contents and scroll while updating the Run action',()=>{
+  const {api,state,elements}=fixture();let selection=null,locked=false;
+  api.KPLLibraryGroups={getSelection:()=>selection,isBusy:()=>locked};
+  const list=elements.get('#scenarioLibraryList');list.innerHTML='<li>Existing row</li>';list.scrollTop=240;
+  let rebuilds=0;Object.defineProperty(list,'innerHTML',{get:()=>'<li>Existing row</li>',set(){rebuilds++}});
+  for(const selected of [['scenario:a'],['scenario:a','scenario:b'],null]){
+    selection=selected;api.renderScenarioRunControl();
+    assert.equal(elements.get('#runScenario').textContent,selected?'Run selected':'Run');
+    assert.equal(elements.get('#runScenario').disabled,false);
+    assert.equal(list.scrollTop,240);assert.equal(rebuilds,0);
+  }
+  locked=true;api.renderScenarioRunControl();assert.equal(elements.get('#runScenario').disabled,true);
+  locked=false;state.scenarioSubmitting=true;api.renderScenarioRunControl();
+  assert.equal(elements.get('#runScenario').disabled,true);
+});
+
 test('Run selected uses saved YAML and applies Runs to every selected scenario in library order', async () => {
   const requests=[],refreshes=[];
   const {api,state,elements}=fixture(async(url,options)=>{
@@ -1027,6 +1043,22 @@ test('multiple file selection opens a review with file-based names and preserves
   assert.equal(elements.get('#scenarioText').value, yaml);
   assert.equal(elements.get('#runScenario').disabled, false);
   assert.match(markup, /id="scenarioFile"[^>]*\bmultiple\b/);
+});
+
+test('import review restores the changed checkbox without scrolling its list or editor', async () => {
+  const { api, state, elements } = fixture(async () => { throw new Error('Unexpected request'); });
+  await api.importScenarioFiles([scenarioFile('first.yaml', 'name: first\n'), scenarioFile('second.yaml', 'name: second\n')]);
+  const selector = '[data-scenario-import-select="1"]';
+  const replacement = element();
+  let focusOptions;
+  replacement.focus = options => { replacement.focused = true; focusOptions = options; };
+  elements.set(selector, replacement);
+  api.document.activeElement = {getAttribute: name => name === 'data-scenario-import-select' ? '1' : null};
+  state.scenarioImportBatch.rows[1].selected = false;
+  api.renderScenarioImportReview();
+  assert.equal(replacement.focused, true, 'the same import row keeps keyboard focus after rendering');
+  assert.equal(focusOptions?.preventScroll, true, 'native focus must preserve nested list and editor scroll offsets');
+  assert.match(elements.get('#scenarioImportSummary').textContent, /1 selected/);
 });
 
 test('file selection dispatches one file to the existing draft editor and cancellation changes nothing', async () => {

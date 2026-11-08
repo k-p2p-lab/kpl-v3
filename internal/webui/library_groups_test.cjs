@@ -137,6 +137,52 @@ test('visible item checkboxes start selection immediately and the final uncheck 
   assert.equal(changes,3);
 });
 
+test('selection tools stay present and inactive scopes never inherit another list selection',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const h=harness(async()=>initial(),{bars,download:async()=>{}});await h.initialized;
+  const disabled = scope => {
+    const html=bars[scope==='scenarios'?'#scenarioGroupTools':'#resultGroupTools'].innerHTML;
+    assert.match(html,/class="library-group-selection"/);
+    assert.match(html,/>0 selected<\/span>/);
+    for(const action of ['clear','move']) assert.match(html,new RegExp('data-library-action="'+action+'" disabled'));
+    assert.match(html,/data-library-move-target disabled/);
+    assert.match(html,new RegExp('data-action-menu-toggle="library-download:'+scope+'"[^>]* disabled'));
+  };
+  disabled('scenarios');disabled('results');
+  h.check('scenario:one',true);disabled('results');
+  assert.match(bars['#scenarioGroupTools'].innerHTML,/>1 selected<\/span>/);
+  h.check('batch:one',true);disabled('scenarios');
+  assert.match(bars['#resultGroupTools'].innerHTML,/>1 selected<\/span>/);
+  h.check('batch:one',false);disabled('scenarios');disabled('results');
+});
+
+test('checkbox, Select visible and Clear update selection without requesting a list rebuild',async()=>{
+  let selections=0;
+  const h=harness(async()=>initial(),{onSelectionChanged:()=>selections++});await h.initialized;
+  const renders=h.changes();
+  h.check('scenario:one',true);h.master('scenarios',true);await h.action('clear');
+  assert.equal(selections,3);assert.equal(h.changes(),renders);
+  assert.equal(h.groups.getSelection('scenarios'),null);
+  h.filter('g1',false);
+  assert.equal(h.changes(),renders+1,'a real group filter change must still rebuild its contents');
+});
+
+test('group popup offsets are restored after its rebuilt panel is sized',async()=>{
+  let panel,menu,positioned=false;
+  const bar={contains:()=>false,querySelector(selector){
+    return selector==='[data-library-filter-menu]' ? menu : selector==='[data-library-filter-menu] .action-menu-items' ? panel : null;
+  }};
+  Object.defineProperty(bar,'innerHTML',{set(value){
+    this.html=value;positioned=false;let offset=0;
+    panel={get scrollTop(){return offset},set scrollTop(value){offset=positioned?value:0}};
+    menu={classList:{contains:()=>true,add(){}},querySelector:()=>panel};
+  },get(){return this.html}});
+  const h=harness(async()=>initial(),{bars:{'#scenarioGroupTools':bar},actionMenus:{refresh(){positioned=true}}});
+  await h.initialized;panel.scrollTop=700;
+  h.filter('g1',false);
+  assert.equal(panel.scrollTop,700,'an unbounded replacement panel must not clamp the retained offset');
+});
+
 test('master checkbox reflects partial selection and toggles only visible search matches',async()=>{
   const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};
   let visible=['scenario:one','scenario:two'];
@@ -560,7 +606,7 @@ test('one Download dropdown offers the three result formats and only YAML for sc
   const h=harness(async()=>initial(),{bars,download:async()=>{},downloadCSV:async()=>{},downloadJSON:async()=>{},actionMenus:{refresh(){refreshes++}}});
   await h.initialized;
   let html=bars['#resultGroupTools'].innerHTML;
-  assert.doesNotMatch(html,/data-action-menu-toggle="library-download:results"/);
+  assert.match(html,/data-action-menu-toggle="library-download:results"[^>]* disabled>Actions/);
   h.check('batch:one',true);html=bars['#resultGroupTools'].innerHTML;
   assert.match(html,/class="action-menu" data-action-menu="library-download:results"/);
   assert.equal((html.match(/data-action-menu-toggle="library-download:/g)||[]).length,1);

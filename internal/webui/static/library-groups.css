@@ -13,8 +13,9 @@
 .library-group-toolbar select, .library-group-selection select, .library-group-dialog input { min-height: var(--control-height); border: 1px solid var(--line); border-radius: .45rem; background: var(--surface); color: var(--text); padding: .4rem .6rem; font: inherit; }
 .library-group-toolbar select, .library-group-selection select { font-size: .8rem; }
 .library-group-selection { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .55rem; margin-top: .75rem; padding: .7rem; border: 1px solid color-mix(in srgb, var(--cyan) 30%, var(--line)); border-radius: .65rem; background: color-mix(in srgb, var(--cyan) 5%, var(--surface)); }
-.library-selection-count { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .85rem; min-width: 0; font-size: .78rem; }
-.library-selection-count > span { margin-right: auto; color: var(--cyan); font-weight: 650; font-variant-numeric: tabular-nums; }
+.library-selection-count { grid-column: 1 / -1; display: flex; align-items: center; gap: .35rem .85rem; min-width: 0; font-size: .78rem; }
+.library-selection-count > span { min-width: 0; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cyan); font-weight: 650; font-variant-numeric: tabular-nums; }
+.library-selection-count > button { flex: 0 0 auto; }
 .library-group-selection select { min-width: 0; width: 100%; }
 .library-selection-downloads { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: .55rem; min-width: 0; }
 .library-selection-downloads > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
@@ -124,8 +125,8 @@
 
 .library-group-selection > button { min-width: 0; padding-inline: .65rem; white-space: nowrap; }
 @container library-tools (max-width: 22rem) {
-  .library-group-selection { grid-template-columns: minmax(0, 1fr) auto; }
-  .library-selection-downloads { grid-column: 1 / -1; }
-  .library-selection-downloads > button, .library-selection-downloads > .action-menu { flex: 1 1 auto; }
+  .library-group-selection { gap: .5rem .4rem; padding: .55rem; }
+  .library-group-selection > button, .library-selection-downloads .secondary-button { padding-inline: .5rem; font-size: .75rem; }
+  .library-group-selection select { padding-inline: .4rem; }
   .library-selection-downloads > .action-menu > button { width: 100%; }
 }

@@ -69,6 +69,11 @@ func (s *state) setHostRebootFence(nodeID string, fence *hostRebootFence) error 
 	} else {
 		delete(values, nodeID)
 	}
+	return s.saveHostRebootFencesLocked(values)
+}
+
+// Caller holds agentSettingsMu.
+func (s *state) saveHostRebootFencesLocked(values map[string]hostRebootFence) error {
 	if err := os.MkdirAll(s.dataDir, 0700); err != nil {
 		return err
 	}

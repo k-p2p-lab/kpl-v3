@@ -35,10 +35,15 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 		return err
 	}
 	s.state.persistMu.Lock()
-	if _, err := os.Lstat(filepath.Join(s.config.DataDir, currentRunsDirectory, id, journalPendingFile)); err == nil {
+	deleted, err := s.state.resultWriteFencedLocked(id)
+	if err != nil {
+		s.state.persistMu.Unlock()
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(s.config.DataDir, currentRunsDirectory, id, journalPendingFile)); !deleted && err == nil {
 		s.state.persistMu.Unlock()
 		return errors.New("Run still has an uncommitted telemetry append")
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !deleted && !errors.Is(err, os.ErrNotExist) {
 		s.state.persistMu.Unlock()
 		return err
 	}
@@ -70,7 +75,11 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 		}
 	}
 	s.state.mu.RUnlock()
-	summary, hasSummary := s.state.workerMetricSummary(id)
+	var summary runWorkerSummary
+	hasSummary := false
+	if !deleted {
+		summary, hasSummary = s.state.workerMetricSummary(id)
+	}
 	if len(final) > 0 && !hasSummary {
 		s.state.persistMu.Unlock()
 		return errors.New("worker omitted its durable metric summary")
@@ -141,6 +150,9 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 		}
 	}
 	s.state.cacheRetiredRunLocked(id)
+	if deleted {
+		delete(s.state.workerSummaries, id)
+	}
 	if hasSummary {
 		s.state.workerSummaries[id] = summary
 	}

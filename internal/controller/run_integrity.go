@@ -430,7 +430,7 @@ func (s *Server) retryFailedRunWrites() {
 	}
 	s.state.mu.RUnlock()
 	for _, id := range ids {
-		if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+		if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 			continue
 		}
 		s.state.mu.RLock()

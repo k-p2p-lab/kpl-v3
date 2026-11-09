@@ -136,6 +136,24 @@ test("closing an analysis releases its data and message controls", async () => {
   }
 });
 
+test('saved-only batch preview keeps charts and JSON available without missing-source reanalysis',async()=>{
+ const data={version:1,analysisId:'saved',batchId:'b',name:'Saved mean',aggregation:'equal-run-mean-v1',expectedRuns:2,missingRuns:0,excluded:[],summary:{},
+  runs:['a','b'].map(id=>({...sample(id),result:{...sample(id).result,batchId:'b'},analysisId:'analysis-'+id}))};
+ const calls=[];
+ const {ui,element}=fixture(async(path,options)=>{
+  calls.push([path,options.method]);
+  if(path.includes('/result?'))return data;
+  return {batchId:'b',state:'idle',id:'saved',stale:true};
+ });
+ await ui.openBatch('b',{savedOnly:true});
+ assert.deepEqual(calls,[['/api/v1/batch-analysis-jobs/b',undefined],['/api/v1/batch-analysis-jobs/b/result?jobId=saved&saved=1',undefined]]);
+ assert.equal(element('refreshResultImages').hidden,true);
+ assert.equal(element('downloadResultAnalysis').hidden,false);
+ assert.match(element('resultImagesGrid').innerHTML,/Run Mean/);
+ assert.match(element('resultImagesStatus').textContent,/Original result data is unavailable/);
+ element('resultImagesDialog').close();
+});
+
 test("dashboard has one per-result image dialog and no comparison workspace", () => {
   const html = fs.readFileSync(__dirname + "/static/index.html", "utf8");
   assert.match(html, /<dialog[^>]+id="resultImagesDialog"/);

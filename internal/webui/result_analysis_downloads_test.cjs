@@ -45,6 +45,23 @@ function completed(path,options) {
   return {runId:id,id:'saved-'+id,state:'completed'};
 }
 
+test('all-missing repetition JSON exports its saved batch artifact without reanalysis',async()=>{
+ const calls=[];
+ const results=[{id:'missing-one',batchId:'b',repetitions:3,state:'missing',missing:true},
+  {id:'missing-two',batchId:'b',repetitions:3,state:'missing',missing:true}];
+ const f=fixture(async(path,options)=>{
+  calls.push([path,options.method]);
+  if(path.includes('/result?'))return batchArtifact('b','previous');
+  return {batchId:'b',id:'previous',state:'idle',stale:true};
+ },results);
+ await f.download('results',['batch:b']);
+ assert.deepEqual(calls,[['/api/v1/batch-analysis-jobs/b',undefined],['/api/v1/batch-analysis-jobs/b/result?jobId=previous&saved=1',undefined]]);
+ assert.equal(f.downloads.length,1);
+ const none=fixture(async(path,options)=>{assert.equal(options.method,undefined);return {batchId:'b',state:'idle'}},results);
+ await assert.rejects(none.download('results',['batch:b']),/no completed analysis snapshot/);
+ assert.equal(none.downloads.length,0);
+});
+
 test('JSON ZIP keeps repeated batches whole and preserves full original JSON bytes without chart generation',async()=>{
   const calls=[];
   const f=fixture(async(path,options)=>{calls.push({path,options});return completed(path,options)},

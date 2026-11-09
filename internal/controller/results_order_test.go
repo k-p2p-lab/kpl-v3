@@ -37,6 +37,9 @@ func TestSavedResultsOrderQueuedIterationsNumerically(t *testing.T) {
 	}
 	var ids []string
 	for _, run := range results {
+		if run.Missing {
+			continue
+		}
 		ids = append(ids, run.ID)
 	}
 	want := []string{"running", "completed", "z-two", "m-three", "a-ten", "y-two", "b-ten"}

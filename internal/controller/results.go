@@ -35,6 +35,9 @@ var (
 )
 
 type savedResult struct {
+	Missing           bool   `json:"missing,omitempty"`
+	RetryUnavailable  string `json:"retryUnavailable,omitempty"`
+	missingUnknownID  bool
 	StopRequested     bool          `json:"stopRequested,omitempty"`
 	ControllerVersion string        `json:"controllerVersion,omitempty"`
 	CleanupState      string        `json:"cleanupState,omitempty"`
@@ -231,6 +234,10 @@ func (s *Server) openResultRuns() (*os.Root, error) {
 // The marker survives Controller restarts. Persistence callers hold persistMu
 // so a late Agent batch cannot recreate a directory after its deletion.
 func (s *state) resultDeletedLocked(id string) (bool, error) {
+	return s.resultMarkerLocked(id, ".deleted-results")
+}
+
+func (s *state) resultMarkerLocked(id, directory string) (bool, error) {
 	if !validResultID(id) {
 		return false, errors.New("invalid result id")
 	}
@@ -242,7 +249,7 @@ func (s *state) resultDeletedLocked(id string) (bool, error) {
 		return false, err
 	}
 	defer data.Close()
-	markers, err := openResultDirectory(data, ".deleted-results")
+	markers, err := openResultDirectory(data, directory)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -264,15 +271,19 @@ func (s *state) resultDeletedLocked(id string) (bool, error) {
 }
 
 func (s *Server) markResultDeletedLocked(id string) error {
+	return s.markResultMarkerLocked(id, ".deleted-results", "deletedAt")
+}
+
+func (s *Server) markResultMarkerLocked(id, directory, timestamp string) error {
 	data, err := os.OpenRoot(s.config.DataDir)
 	if err != nil {
 		return err
 	}
 	defer data.Close()
-	if err := data.Mkdir(".deleted-results", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := data.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
-	markers, err := openResultDirectory(data, ".deleted-results")
+	markers, err := openResultDirectory(data, directory)
 	if err != nil {
 		return err
 	}
@@ -287,7 +298,7 @@ func (s *Server) markResultDeletedLocked(id string) error {
 		}
 		file, err = existing.file, nil
 	} else if err == nil {
-		err = json.NewEncoder(file).Encode(map[string]any{"id": id, "deletedAt": time.Now().UTC()})
+		err = json.NewEncoder(file).Encode(map[string]any{"id": id, timestamp: time.Now().UTC()})
 	}
 	if file != nil {
 		err = errors.Join(err, file.Sync(), file.Close())
@@ -621,6 +632,12 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		if err := r.Context().Err(); err != nil {
 			return
 		}
+	}
+	results, err = s.withMissingSavedResults(r.Context(), results)
+	if err != nil {
+		s.logger.Warn("list missing saved runs", "error", err)
+		writeError(w, http.StatusInternalServerError, "cannot read saved batch recovery metadata")
+		return
 	}
 	sort.Slice(results, func(i, j int) bool {
 		a, b := results[i], results[j]

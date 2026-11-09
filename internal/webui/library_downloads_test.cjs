@@ -2,6 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {selectedIDs, createDownloads} = require('./static/library-downloads.js');
 
+test('raw selections exclude missing placeholders and explain an entirely missing selection',()=>{
+ const results=[{id:'saved',batchId:'b'},{id:'missing-slot',batchId:'b',state:'missing',missing:true},
+  {id:'missing-all',batchId:'gone',state:'missing',missing:true}];
+ assert.deepEqual(selectedIDs('results',['batch:b'],[],results),['saved']);
+ assert.throws(()=>selectedIDs('results',['batch:gone'],[],results),/data is missing/);
+});
+
 test('selected result batches include every Run and previous attempt, without unrelated groups', () => {
  const results=[{id:'first',batchId:'batch'}, {id:'retry',batchId:'batch'}, {id:'single'}, {id:'other',batchId:'other'}, {id:'first',batchId:'batch'}];
  assert.deepEqual(selectedIDs('results',['batch:batch','run:single'],[],results),['first','retry','single']);

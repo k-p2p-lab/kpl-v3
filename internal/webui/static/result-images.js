@@ -851,6 +851,7 @@
     const dialog = $("resultImagesDialog");
     let currentID = "",
       currentBatch = false,
+      currentSavedOnly = false,
       reconnectOnly = false,
       controller = null,
       revision = 0,
@@ -1096,7 +1097,7 @@
         signal.removeEventListener("abort", abort);
       }
     }
-    async function open(id, { refresh = false, retry = false, isBatch = false } = {}) {
+    async function open(id, { refresh = false, retry = false, isBatch = false, savedOnly = false } = {}) {
       if (!id || (currentID === id && currentBatch === isBatch && controller)) return;
       const readOnlyRetry = reconnectOnly && currentID === id && currentBatch === isBatch && !refresh;
       if (currentID !== id || currentBatch !== isBatch) reconnectOnly = false;
@@ -1105,6 +1106,7 @@
       cancel(preserve);
       currentID = id;
       currentBatch = isBatch;
+      currentSavedOnly = savedOnly;
       if (!preserve) {
         if ($("batchAnalysisSummary")) $("batchAnalysisSummary").hidden = true;
         currentData = null;
@@ -1133,7 +1135,7 @@
         download.download = `${id}${isBatch ? "-batch" : ""}-analysis.json`;
         download.hidden = false;
         refreshButton.hidden = false;
-        const suffix = saved ? " · Saved analysis; checking for updates" : job.reused ? " · Source unchanged; saved analysis reused" : "";
+        const suffix = saved ? savedOnly ? " · Saved analysis; original result data is unavailable" : " · Saved analysis; checking for updates" : job.reused ? " · Source unchanged; saved analysis reused" : "";
         if (isBatch) {
           $("resultImagesName").textContent = `${data.name || id} · Batch mean`;
           $("resultImagesDate").textContent = `${batch.description(data)} · Computed ${timeLabel(data.asOf)}${suffix}`;
@@ -1185,6 +1187,13 @@
         const needsUpdate = !readOnlyRetry && (refresh || job.stale || job.state === "idle" ||
           (retry && ["failed", "interrupted", "canceled"].includes(job.state)));
         const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
+        if (savedOnly) {
+          if (!savedID) throw new Error("No completed analysis snapshot remains. Retry the missing runs before requesting a new analysis.");
+          await showAnalysis(job, savedID, true);
+          refreshButton.hidden = true;
+          status("Showing saved analysis. Original result data is unavailable; retry the missing runs before analyzing new observations.");
+          return;
+        }
         if (savedID && (needsUpdate || job.state !== "completed")) {
           try {
             await showAnalysis(job, savedID, true);
@@ -1259,14 +1268,14 @@
     $("closeResultImages").addEventListener("click", () => dialog.close());
     dialog.addEventListener("close", cancel);
     $("retryResultImages").addEventListener("click", () => {
-      void open(currentID, { retry: true, isBatch: currentBatch });
+      void open(currentID, { retry: true, isBatch: currentBatch, savedOnly: currentSavedOnly });
     });
     $("refreshResultImages").addEventListener("click", () => {
-      void open(currentID, { refresh: true, isBatch: currentBatch });
+      void open(currentID, { refresh: true, isBatch: currentBatch, savedOnly: currentSavedOnly });
     });
     return {
       open,
-      openBatch: (id) => open(id, { isBatch: true }),
+      openBatch: (id, options = {}) => open(id, { ...options, isBatch: true }),
       remove: (id) => {
         if (currentID === id) {
           cancel();
@@ -1296,7 +1305,7 @@
       ui = createUI(options);
     },
     open: (id) => ui?.open(id),
-    openBatch: (id) => ui?.openBatch(id),
+    openBatch: (id, options) => ui?.openBatch(id, options),
     remove: (id) => ui?.remove(id),
   };
   if (typeof module !== "undefined" && module.exports)

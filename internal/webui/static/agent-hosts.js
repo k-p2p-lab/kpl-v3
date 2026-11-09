@@ -182,7 +182,7 @@
       text("agentHostDialogStatus",(uncertain?"The response was not confirmed. Refresh status or retry this exact request; a new reboot request will not be generated."
         : job?.state==="queued"?"Queued behind earlier experiments and analysis."
         : job?.state==="running"?"Reboot work is running. A request acknowledgment does not confirm a completed reboot."
-        : job?"Only a changed host boot identity and a new Agent report confirm a reboot. Unknown outcomes require checking the host."
+        : job?"New reboot requests automatically restore previous participation settings after a verified host return. Review any host errors; unknown outcomes stay excluded and require checking the host."
         : selectionError() || "The Controller will check the selected host identities again before requesting reboot.")+(job?.error?" "+String(job.error):""));
       const confirm=element("confirmAgentHostReboot");
       if(confirm){confirm.hidden=!!inspection||!!job&&!uncertain;confirm.disabled=submitting||!uncertain&&!job&&!!selectionError();confirm.textContent=submitting?"Submitting…":uncertain?"Retry same request":"Queue reboot";}

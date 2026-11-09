@@ -20,6 +20,7 @@ import (
 type verifiedHostRebootProof struct {
 	proof      model.HostRebootProof
 	receivedAt time.Time
+	identities map[string]*verifiedHostRebootProof
 }
 
 func dataForRebootRequest(request model.HostRebootRequest) []byte {
@@ -88,11 +89,13 @@ func (s *Server) rebootProofCandidates(host hostRebootHostStatus, target hostReb
 	return agents
 }
 
-func (s *Server) confirmRebootProofs(ctx context.Context, status *hostRebootStatus) {
+func (s *Server) confirmRebootProofs(ctx context.Context, status *hostRebootStatus) error {
 	var workers sync.WaitGroup
+	var failuresMu sync.Mutex
+	var failures []error
 	limit := make(chan struct{}, 4)
 	for i, host := range status.Hosts {
-		if (host.State != "requested" && host.State != "unknown") || host.RequestedAt == nil {
+		if host.State != "rejected" && ((host.State != "requested" && host.State != "unknown") || host.RequestedAt == nil) {
 			continue
 		}
 		workers.Add(1)
@@ -104,15 +107,46 @@ func (s *Server) confirmRebootProofs(ctx context.Context, status *hostRebootStat
 			case <-ctx.Done():
 				return
 			}
-			fence := hostRebootFence{BootID: host.BootID, AgentStartedAt: status.Targets[i].AgentStartedAt, RequestedAt: *host.RequestedAt}
-			for _, agent := range s.rebootProofCandidates(host, status.Targets[i]) {
+			requested := status.CreatedAt
+			if host.RequestedAt != nil {
+				requested = *host.RequestedAt
+			}
+			fence := hostRebootFence{BootID: host.BootID, AgentStartedAt: status.Targets[i].AgentStartedAt, RequestedAt: requested}
+			candidates := s.rebootProofCandidates(host, status.Targets[i])
+			if host.State == "rejected" {
+				// A durably rejected request never committed a reboot. A fresh,
+				// ready proof of the unchanged boot can therefore restore its hold.
+				s.state.mu.RLock()
+				for _, agent := range s.state.agents {
+					if agentHostNodeID(agent) == host.NodeID && agentIsOnline(agent, time.Now()) && agent.Host != nil && agent.Host.BootID == host.BootID && !agent.StartedAt.Before(status.Targets[i].AgentStartedAt) {
+						candidates = append(candidates, cloneAgentHost(agent))
+					}
+				}
+				s.state.mu.RUnlock()
+			}
+			for _, agent := range candidates {
 				proof, err := s.requestHostRebootProof(ctx, agent)
-				if err == nil && proofShowsNewBoot(proof, host.NodeID, fence) {
-					status.Hosts[i].State, status.Hosts[i].Error = "rebooted", ""
+				readyRefusal := err == nil && host.State == "rejected" && proof.proof.BootID == host.BootID && proof.proof.StartupReconciled && !proof.proof.RebootPending
+				if err == nil && (proofShowsNewBoot(proof, host.NodeID, fence) || readyRefusal) {
+					err := s.verifyHostRebootParticipationIdentities(ctx, status.ID, host.NodeID, proof)
+					if err == nil {
+						err = s.restoreHostRebootParticipation(*status, i, agent, proof)
+					}
+					if err != nil {
+						status.Hosts[i].Error = "Host return verified, but participation restoration failed: " + err.Error()
+						failuresMu.Lock()
+						failures = append(failures, err)
+						failuresMu.Unlock()
+						return
+					}
+					if host.State != "rejected" {
+						status.Hosts[i].State, status.Hosts[i].Error = "rebooted", ""
+					}
 					return
 				}
 			}
 		}()
 	}
 	workers.Wait()
+	return errors.Join(failures...)
 }

@@ -106,7 +106,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	defer s.journalBuildMu.Unlock()
 	path := filepath.Join(s.config.DataDir, currentRunsDirectory, id)
 	s.state.persistMu.Lock()
-	if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		s.state.persistMu.Unlock()
 		return err
 	}
@@ -142,7 +142,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	// A staging bucket is never used for admission until the captured source
 	// revision is revalidated and the worker has been completely reaped.
 	s.state.persistMu.Lock()
-	if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		s.state.persistMu.Unlock()
 		return errors.Join(err, errResultNotFound)
 	}
@@ -188,7 +188,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 		}
 		s.state.persistMu.Lock()
 		defer s.state.persistMu.Unlock()
-		if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+		if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 			return
 		}
 		root, db, err := openJournalIndex(path)
@@ -216,7 +216,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 		}
 		s.state.persistMu.Lock()
 		defer s.state.persistMu.Unlock()
-		if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+		if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 			return nil, errors.Join(err, errResultNotFound)
 		}
 		root, db, err := openJournalIndex(path)
@@ -260,7 +260,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	}
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		return err
 	}
 	root, db, err = openJournalIndex(path)

@@ -1677,7 +1677,7 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 	}
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(runID); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(runID); err != nil || deleted {
 		if err != nil {
 			s.logger.Warn("check deleted experiment", "run", runID, "error", err)
 		}
@@ -1711,6 +1711,9 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 }
 
 func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error {
+	if fenced, err := s.state.resultWriteFencedLocked(experiment.ID); err != nil || fenced {
+		return err
+	}
 	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, safeName(experiment.ID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create run directory: %w", err)
@@ -1723,6 +1726,9 @@ func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error 
 }
 
 func (s *Server) persistExperiment(experiment model.Experiment) error {
+	if fenced, err := s.state.resultWriteFencedLocked(experiment.ID); err != nil || fenced {
+		return err
+	}
 	// Position belongs to this Controller's live scheduler, not saved results.
 	experiment.QueuePosition = 0
 	dir := filepath.Join(s.config.DataDir, currentRunsDirectory, safeName(experiment.ID))

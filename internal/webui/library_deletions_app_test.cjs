@@ -45,6 +45,16 @@ test('failed cleanup previews individual failed runs and never deletes a whole m
   assert.equal(f.state.pendingLibraryDeletion,null);assert.equal(f.element('#libraryDeleteDialog').open,false);
 });
 
+test('batch deletion forgets missing placeholders even when no saved Run IDs remain',async()=>{
+ const calls=[];const f=fixture(async(path)=>{calls.push(path);return {deletedIds:[]}});
+ f.state.savedResults=[{id:'missing-slot',batchId:'g',name:'Gone',state:'missing',missing:true}];
+ f.app.requestLibraryDeletion('results',['batch:g']);
+ await f.app.confirmLibraryDeletion();
+ assert.deepEqual(calls,['/api/v1/result-batches/g']);
+ assert.equal(f.state.savedResults.length,0);
+ assert.ok(f.state.deletedResultIDs.has('missing-slot'));
+});
+
 test('failed cleanup retains its guarded plan and a changed successful run after a conflict',async()=>{
   const f=fixture(async()=>{throw Object.assign(new Error('State changed'),{status:409,code:'result-state-changed'})});
   f.state.savedResults=[{id:'solo',state:'failed',name:'Failure'}];

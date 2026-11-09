@@ -69,6 +69,11 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	rebootRecoveryDone := make(chan struct{})
+	go func() {
+		defer close(rebootRecoveryDone)
+		s.runHostRebootRecoveryLoop(runCtx)
+	}()
 	// Do not wait for filesystem syscalls on a disconnected NAS during shutdown.
 	// Local logs and the archive manifest make unfinished transfers restartable.
 	archiveCtx, cancelArchive := context.WithCancel(ctx)
@@ -131,6 +136,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	// is still available. Swarm removes the Agent services only after we exit.
 	s.runs.Wait()
 	s.workWorkers.Wait()
+	<-rebootRecoveryDone
 	cleanupErr := s.cleanupAgents()
 	s.analysisWorkers.Wait()
 	<-analysisDone

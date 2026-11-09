@@ -615,6 +615,16 @@ func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {
 		case http.MethodGet:
 			var members []savedResult
 			members, err = s.allBatchMembers(r.Context(), id)
+			if errors.Is(err, errResultNotFound) {
+				// A saved batch artifact and replay inputs can outlive every raw
+				// result. Keep its last completed snapshot downloadable.
+				record, readErr := s.readBatchExtension(id)
+				if readErr != nil {
+					err = readErr
+				} else if record != nil && len(record.Current) > 0 {
+					err = nil
+				}
+			}
 			if err == nil {
 				status, err = s.batchAnalysisStatus(id)
 				if err == nil && status.State == "completed" && (status.Membership != batchMembership(members) || !reusableSourceHash(status.SourceHash) || status.AnalysisVersion != currentAnalysisVersion) {

@@ -227,6 +227,22 @@ test('group checkbox menu combines groups and Ungrouped and clears hidden select
   assert.equal(h.groups.isFiltered(),false);
 });
 
+test('clearing All groups first keeps both shared filter menus persistent through page resizing',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const h=harness(async()=>initial(),{bars});await h.initialized;
+  h.filter('*',false);
+  for(const bar of Object.values(bars)){
+    assert.match(bar.innerHTML,/data-library-filter-menu data-action-menu-follow-scroll/);
+    assert.match(bar.innerHTML,/>No groups</);
+    assert.doesNotMatch(bar.innerHTML,/data-library-group-filter="[^"]*"[^>]* checked/);
+  }
+  assert.equal(h.groups.matches('scenario:one'),false);
+  assert.equal(h.groups.matches('batch:one'),false);
+  h.filter('g1',true);
+  assert.equal(h.groups.matches('scenario:one'),true);
+  assert.equal(h.groups.matches('batch:one'),true);
+});
+
 test('checkbox selection honors busy state, canonical keys and the 2000-item limit',async()=>{
   let busy=false;
   const h=harness(async()=>initial(),{isExternallyBusy:()=>busy});await h.initialized;

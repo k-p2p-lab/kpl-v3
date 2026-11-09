@@ -121,7 +121,7 @@ func (s *state) recordAnalysisObservation(runID string, now time.Time, contexts 
 	}
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	deleted, err := s.resultDeletedLocked(runID)
+	deleted, err := s.resultWriteFencedLocked(runID)
 	if err != nil || deleted {
 		return err
 	}

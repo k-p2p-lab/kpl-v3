@@ -24,8 +24,13 @@ const hostRebootRequestTimeout = 100 * time.Second
 func (s *Server) updateHostReboot(job *hostRebootJob, update func(*hostRebootStatus)) error {
 	s.hostRebootMu.Lock()
 	defer s.hostRebootMu.Unlock()
-	update(&job.status)
-	return s.persistHostReboot(job.status)
+	status := cloneHostRebootStatus(job.status)
+	update(&status)
+	if err := s.persistHostReboot(status); err != nil {
+		return err
+	}
+	job.status = status
+	return nil
 }
 
 func (s *Server) copyHostReboot(job *hostRebootJob) hostRebootStatus {
@@ -71,12 +76,12 @@ func (s *Server) runHostReboot(ctx context.Context, job *hostRebootJob) {
 		s.cancelMu.Unlock()
 		s.updateWorkStatus(job.slot.id, "Preparing Linux host reboot", 0)
 		// Hold all targets durably before dispatch, including future registrations
-		// under different Agent IDs. Explicit Enable releases these holds later.
+		// under different Agent IDs. Verified return restores their previous state.
 		for _, target := range job.status.Targets {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := s.state.setHostDisabled(target.NodeID, true); err != nil {
+			if err := s.state.acquireHostRebootHold(target.NodeID, job.status.ID); err != nil {
 				return err
 			}
 		}
@@ -128,6 +133,8 @@ func (s *Server) runHostReboot(ctx context.Context, job *hostRebootJob) {
 		}
 	}); persistErr != nil {
 		s.logger.Error("persist host reboot outcome", "operation", job.status.ID, "error", persistErr)
+	} else {
+		s.cleanupRestoredHostRebootHolds(s.copyHostReboot(job))
 	}
 }
 
@@ -232,7 +239,7 @@ func (s *Server) confirmHostReboots(ctx context.Context, job *hostRebootJob, tim
 	defer ticker.Stop()
 	for {
 		status := s.copyHostReboot(job)
-		s.confirmRebootProofs(ctx, &status)
+		proofErr := s.confirmRebootProofs(ctx, &status)
 		confirmed, pending := 0, 0
 		for _, host := range status.Hosts {
 			if host.State == "rebooted" {
@@ -243,6 +250,9 @@ func (s *Server) confirmHostReboots(ctx context.Context, job *hostRebootJob, tim
 		}
 		if err := s.updateHostReboot(job, func(current *hostRebootStatus) { current.Hosts = status.Hosts }); err != nil {
 			return err
+		}
+		if proofErr != nil {
+			return proofErr
 		}
 		s.updateWorkStatus(job.slot.id, fmt.Sprintf("Waiting for host boot confirmation · %d/%d", confirmed, len(status.Hosts)), 100*float64(confirmed)/float64(len(status.Hosts)))
 		if confirmed == len(status.Hosts) {

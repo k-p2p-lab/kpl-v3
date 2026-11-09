@@ -28,9 +28,29 @@ func (s *Server) commitBatchAdmissionLocked(ctx context.Context, id string, pend
 		record.Current = map[int]string{}
 	}
 	for _, member := range currentBatchMembers(members) {
-		if record.Current[member.Iteration] == "" {
+		if record.Current[member.Iteration] == "" && !member.Missing {
 			record.Current[member.Iteration] = member.ID
 		}
+	}
+	actual := make([]savedResult, 0, len(members))
+	for _, member := range members {
+		if !member.Missing {
+			actual = append(actual, member)
+		}
+	}
+	inputs, err := s.batchReplayInputs(ctx, id, actual)
+	if err != nil {
+		return err
+	}
+	seeds := make([]model.Experiment, 0, len(inputs.Seeds)+len(pending))
+	for iteration, seed := range inputs.Seeds {
+		if iteration <= record.Repetitions {
+			seeds = append(seeds, model.Experiment{BatchID: id, Iteration: iteration, Seed: seed})
+		}
+	}
+	seeds = append(seeds, pending...)
+	if err = s.retainBatchReplayLocked(id, raw, seeds, record.Repetitions); err != nil {
+		return err
 	}
 	record.PendingTotal, record.Before = total, before
 	for _, run := range pending {
@@ -160,9 +180,36 @@ func (s *Server) retainBatchCurrentLocked(runs *os.Root, id string) error {
 	}
 	result, err := readResultMetadata(file, id, false)
 	file.close()
-	dir.Close()
 	if err != nil || result.BatchID == "" {
+		dir.Close()
 		return err
+	}
+	metadata, err := readResumeFile(dir, "experiment.json", resultMetadataLimit)
+	if err != nil {
+		dir.Close()
+		return err
+	}
+	raw, err := readResumeFile(dir, "scenario.yaml", scenarioYAMLLimit)
+	dir.Close()
+	if err != nil {
+		// Deleting a damaged result remains possible. Prefer its independently
+		// retained input; an old result with no saved YAML cannot provide one.
+		replay, readErr := s.readBatchReplay(result.BatchID)
+		if readErr == nil && replay != nil {
+			raw, err = []byte(replay.ScenarioYAML), nil
+		} else {
+			s.logger.Warn("cannot retain deleted result replay scenario", "run", id, "error", errors.Join(err, readErr))
+			raw = nil
+		}
+	}
+	var original model.Experiment
+	if err = json.Unmarshal(metadata, &original); err != nil {
+		return err
+	}
+	if len(raw) > 0 {
+		if err = s.retainBatchReplayLocked(result.BatchID, raw, []model.Experiment{original}, result.Repetitions); err != nil {
+			return err
+		}
 	}
 	record, err := s.readBatchExtension(result.BatchID)
 	if err != nil {

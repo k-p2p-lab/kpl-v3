@@ -33,7 +33,7 @@ func (s *state) appendJournalEvents(runID string, events []model.TraceEvent) (re
 	if runID != "" && !validResultID(runID) {
 		return errors.New("invalid journal Run identity")
 	}
-	if deleted, err := s.resultDeletedLocked(runID); err != nil || deleted {
+	if deleted, err := s.resultWriteFencedLocked(runID); err != nil || deleted {
 		return err
 	}
 	if runID == "" {
@@ -78,7 +78,7 @@ func (s *state) publishJournalEvents(runID string, accepted []model.TraceEvent) 
 func (s *Server) publishWorkerSummary(summary runWorkerSummary) error {
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(summary.RunID); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(summary.RunID); err != nil || deleted {
 		return err
 	}
 	root, err := os.OpenRoot(filepath.Join(s.config.DataDir, currentRunsDirectory, summary.RunID))

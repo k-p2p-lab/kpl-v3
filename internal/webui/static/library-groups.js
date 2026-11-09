@@ -270,7 +270,7 @@
       const all = filters.has("*");
       const summary = all ? "All groups" : filters.size === 1 ? (getGroupName([...filters][0]) || "Ungrouped") : filters.size ? filters.size + " groups" : "No groups";
       const checkbox = (id, name) => '<label class="library-filter-option"><input type="checkbox" data-library-group-filter="' + escape(id) + '" aria-label="Show ' + escape(name) + '"' + (all || filters.has(id) ? " checked" : "") + (id === "*" && !all && filters.size ? ' data-library-mixed="true"' : "") + (loaded && !locked() ? "" : " disabled") + '><span>' + escape(name) + '</span><span class="library-filter-count">' + (counts.get(id) || 0) + '</span></label>';
-      return '<span class="action-menu library-filter-menu" data-library-filter-menu data-action-menu="library-filter:' + scope + '"><button class="secondary-button" type="button" data-action-menu-toggle="library-filter:' + scope + '" aria-expanded="false" aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>Groups <span class="library-filter-summary">' + escape(summary) + '</span></button><span class="action-menu-items library-filter-options" role="group" aria-label="Filter ' + scope + ' by group">' + checkbox("*", "All groups") + checkbox("", "Ungrouped") + snapshot.groups.map(group => checkbox(group.id, group.name)).join("") + '</span></span>';
+      return '<span class="action-menu library-filter-menu" data-library-filter-menu data-action-menu-follow-scroll data-action-menu="library-filter:' + scope + '"><button class="secondary-button" type="button" data-action-menu-toggle="library-filter:' + scope + '" aria-expanded="false" aria-label="Filter ' + scope + ' by group"' + (loaded && !locked() ? "" : " disabled") + '>Groups <span class="library-filter-summary">' + escape(summary) + '</span></button><span class="action-menu-items library-filter-options" role="group" aria-label="Filter ' + scope + ' by group">' + checkbox("*", "All groups") + checkbox("", "Ungrouped") + snapshot.groups.map(group => checkbox(group.id, group.name)).join("") + '</span></span>';
     }
 
     function renderBars(allItems) {
@@ -292,7 +292,7 @@
         const canDownload = selectedCount && ready();
         const retryHint = !selectedCount ? "Select result checkboxes first." : !loaded ? "Wait for groups to load."
           : needsRefresh ? "Refresh groups to confirm their current state." : locked() ? "Wait for the current library operation to finish."
-          : "Retry failed, canceled or interrupted runs; completed runs are kept.";
+          : "Retry failed, canceled, interrupted or missing runs using saved inputs; available completed results are kept.";
         const moveControls = '<label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(selecting ? targetGroup : importGroup()) + '</select><button class="secondary-button" type="button" data-library-action="move"' + disabled + '>Move</button>';
         const downloadControls = (scope === "scenarios" || options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected || options?.onDeleteFailedSelected))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'

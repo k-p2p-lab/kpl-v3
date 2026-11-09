@@ -496,7 +496,7 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 	defer accumulator.dataMu.Unlock()
 	defer s.persistMu.Unlock()
 	if runID != "" {
-		if deleted, err := s.resultDeletedLocked(runID); err != nil || deleted {
+		if deleted, err := s.resultWriteFencedLocked(runID); err != nil || deleted {
 			return err
 		}
 	}
@@ -549,7 +549,7 @@ func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (result
 func (s *state) persistEvents(runID string, events []model.TraceEvent) error {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	if deleted, err := s.resultDeletedLocked(runID); err != nil || deleted {
+	if deleted, err := s.resultWriteFencedLocked(runID); err != nil || deleted {
 		return err
 	}
 	return s.persistEventsLocked(runID, events)

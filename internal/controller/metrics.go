@@ -41,7 +41,7 @@ func newControllerMetrics(s *state) *controllerMetrics {
 		registry:      prometheus.NewRegistry(),
 		state:         s,
 		counterRunIDs: make(map[string]bool),
-		resultDeleted: s.resultDeletedLocked,
+		resultDeleted: s.resultWriteFencedLocked,
 		events: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "kpl_events_total", Help: "Telemetry and Controller events recorded for each Run.",
 		}, []string{"run_id", "agent_id", "event_type", "topic"}),

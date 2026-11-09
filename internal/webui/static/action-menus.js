@@ -123,7 +123,11 @@
   });
   document.addEventListener("dashboard:tab-change", () => close(active));
   document.addEventListener("scroll", event => {
-    if (active && !panelFor(active)?.contains(event.target)) close(active);
+    if (!active || panelFor(active)?.contains(event.target)) return;
+    // Filtering can shrink the page and make the browser adjust its scroll
+    // position. Keep persistent selection menus anchored through that change.
+    if (active.hasAttribute("data-action-menu-follow-scroll")) position(active);
+    else close(active);
   }, true);
   window.addEventListener("resize", () => { if (active) position(active); });
   window.KPLActionMenus = { refresh };

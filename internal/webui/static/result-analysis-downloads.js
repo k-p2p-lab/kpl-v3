@@ -56,16 +56,20 @@
         if (!selected.has(key)) continue;
         known.add(key);
         const isBatch = Boolean(run.batchId && repeated.has(run.batchId)), id = isBatch ? run.batchId : run.id;
+        const missing = run.missing || run.state === "missing";
+        if (missing && !isBatch) continue;
         const targetKey = (isBatch ? "batch:" : "run:") + id;
-        if (!targets.has(targetKey)) targets.set(targetKey, {id, isBatch});
+        if (!targets.has(targetKey)) targets.set(targetKey, {id, isBatch, ...(missing ? {savedOnly:true} : {})});
+        else if (!missing) delete targets.get(targetKey).savedOnly;
       }
       if (!selected.size || known.size !== selected.size)
         throw new Error("Some selected items are no longer listed. Refresh the list and select them again.");
+      if (!targets.size) throw new Error("The selected result data is missing. Retry the missing runs before requesting analysis downloads.");
       if (targets.size > 2000) throw new Error("Download up to 2,000 result sets at a time. Select fewer items or batches.");
       return [...targets.values()];
     }
 
-    async function loadAnalysis({id, isBatch}, signal, progress) {
+    async function loadAnalysis({id, isBatch, savedOnly}, signal, progress) {
       const path = `/api/v1/${isBatch ? "batch-analysis-jobs" : "analysis-jobs"}/${encodeURIComponent(id)}`;
       const validateJob = job => {
         if ((isBatch ? job?.batchId : job?.runId) !== id || !["idle", "queued", "running", "completed", "failed", "interrupted", "canceled"].includes(job.state)
@@ -79,6 +83,7 @@
       const savedID = job.state === "completed" || job.state === "idle" && job.stale ? job.id : job.savedAnalysisId;
       let analysisID = savedID;
       if (!analysisID) {
+        if (savedOnly) throw new Error("This batch's result data is missing and no completed analysis snapshot remains. Retry the missing runs before requesting a new analysis.");
         if (!images.pendingJob(job)) {
           try {
             job = await request(path, {method:"POST", headers:{"Content-Type":"application/json"},

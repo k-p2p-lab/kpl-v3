@@ -162,7 +162,7 @@ func (b *runWorkerBroker) newObservationStage(info workerObservationInfo) (*work
 	s := b.server
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(b.runID); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(b.runID); err != nil || deleted {
 		return nil, errors.Join(err, errors.New("observation Run is deleted"))
 	}
 	parent, err := s.openResultRuns()
@@ -230,7 +230,7 @@ func (b *runWorkerBroker) commitObservationStage(ctx context.Context, stage *wor
 	s := b.server
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(b.runID); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(b.runID); err != nil || deleted {
 		return errors.Join(err, errors.New("observation Run is deleted"))
 	}
 	if err := ctx.Err(); err != nil {
@@ -326,7 +326,7 @@ func isRunWorkerStageTemporary(name string) bool {
 func (s *Server) cleanupRunWorkerStages(ctx context.Context, id string) (resultErr error) {
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
-	if deleted, err := s.state.resultDeletedLocked(id); err != nil || deleted {
+	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		return err
 	}
 	parent, err := s.openResultRuns()

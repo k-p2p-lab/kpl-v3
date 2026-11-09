@@ -230,6 +230,7 @@ func TestHostRebootSharesFIFOWithExperimentsAndAnalysis(t *testing.T) {
 	if status.State != "completed" || status.Hosts[0].State != "rebooted" || f.requests.Load() != 1 {
 		t.Fatalf("reboot was not confirmed exactly once: %+v requests=%d", status, f.requests.Load())
 	}
+	assertHostRebootDisabled(t, f.server, replacement.ID, false)
 	select {
 	case <-tail.entered:
 		t.Fatal("later experiment overlapped analysis")

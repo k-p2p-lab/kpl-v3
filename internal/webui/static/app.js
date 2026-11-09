@@ -1525,7 +1525,7 @@ function remainingBatchRuns(batch) {
 function retryBatchRuns(batch) {
   if (batch.active || batch.runs.some(run => !Number.isInteger(run.iteration) || run.iteration < 1 || run.iteration > batch.expected || run.state === "unreadable")) return [];
   if (new Set(batch.runs.map(run => run.iteration)).size !== batch.runs.length) return [];
-  return batch.runs.filter(run => ["failed", "interrupted", "canceled"].includes(run.state)).sort((a, b) => a.iteration - b.iteration);
+  return batch.runs.filter(run => ["failed", "interrupted", "canceled", "missing"].includes(run.state)).sort((a, b) => a.iteration - b.iteration);
 }
 
 function canAppendBatch(batch) {
@@ -1549,7 +1549,9 @@ function retryBatchButton(batch, locked = false) {
   const resuming = state.pendingResumes?.has(batch.id);
   const analyzing = ["queued", "running"].includes(batch.job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
   const label = batch.expected > 1 ? `Retry from run ${runs[0].iteration} (${runs.length})` : "Retry experiment";
-  return `<button type="button" class="secondary-button batch-resume-button" data-retry-batch="${escapeHTML(batch.id)}" title="Clean up previous Peers, then restart unfinished runs from their first phase. Completed runs are kept. Previous attempts remain downloadable." aria-label="${escapeHTML(`${label}: ${batch.name}`)}" ${locked || analyzing || resuming || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : label}</button>`;
+  const unavailable = runs.find(run => run.retryUnavailable)?.retryUnavailable;
+  const hint = unavailable || "Clean up previous Peers, then restart failed, canceled, interrupted or missing runs using saved inputs. Available completed results are kept. Missing result data is not restored.";
+  return `<button type="button" class="secondary-button batch-resume-button" data-retry-batch="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`${label}: ${batch.name}`)}" ${locked || unavailable || analyzing || resuming || state.deletingResultId ? "disabled" : ""}>${resuming ? "Continuing…" : label}</button>`;
 }
 
 async function resumeSavedBatch(id, retry = false) {
@@ -1557,6 +1559,7 @@ async function resumeSavedBatch(id, retry = false) {
   const batch = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === id);
   const remaining = batch ? (retry ? retryBatchRuns(batch) : remainingBatchRuns(batch)) : [];
   if (!remaining.length) return;
+  if (retry && remaining.some(run => run.retryUnavailable)) { showToast(remaining.find(run => run.retryUnavailable).retryUnavailable); return; }
   state.pendingResumes.add(id);
   renderSavedResults();
   try {
@@ -1613,12 +1616,14 @@ function savedResultTable(runs, key, label = "Saved experiment results") {
 
 function savedResultBatch(batch) {
   const job = batch.job;
-  const label = ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : job.phase?.includes("checking-sources") ? "Checking" : `${Math.floor(job.progress || 0)}%`}`
+  const savedOnly = batch.completed < 2 && !batch.active && Boolean(job?.savedAnalysisId || (job?.state === "completed" || job?.state === "idle" && job?.stale) && job?.id);
+  const label = savedOnly ? "Batch mean · Saved" : ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : job.phase?.includes("checking-sources") ? "Checking" : `${Math.floor(job.progress || 0)}%`}`
     : job?.stale ? "Batch mean · Check" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
-  const excluded = batch.runs.length - batch.completed;
-  const missing = Math.max(0, batch.expected - batch.runs.length);
-  const canAnalyze = batch.completed >= 2 || batch.active && batch.expected >= 2;
-  const hint = batch.active ? "Queue analysis after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
+  const missing = batch.runs.filter(run => run.missing || run.state === "missing").length + Math.max(0, batch.expected - batch.runs.length);
+  const available = batch.runs.filter(run => !run.missing && run.state !== "missing").length;
+  const excluded = available - batch.completed;
+  const canAnalyze = savedOnly || batch.completed >= 2 || batch.active && batch.expected >= 2;
+  const hint = savedOnly ? "View the last completed batch analysis. Missing result data is not reanalyzed." : batch.active ? "Queue analysis after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
   const resuming = state.pendingResumes?.has(batch.id);
   const remaining = remainingBatchRuns(batch);
   const analyzing = ["queued", "running"].includes(job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));
@@ -1626,10 +1631,10 @@ function savedResultBatch(batch) {
   return `<details class="saved-batch" data-result-batch="${escapeHTML(batch.id)}">
     <summary data-result-batch-toggle="${escapeHTML(batch.id)}">
       <svg class="saved-batch-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5 5 5-5 5"/></svg>
-      <span class="saved-batch-heading"><span class="result-item-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong></span>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${batch.runs.length} ${batch.runs.length === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
+      <span class="saved-batch-heading"><span class="result-item-heading">${globalThis.KPLLibraryGroups?.selectionMarkup(`batch:${batch.id}`, batch.name) || ""}<strong>${escapeHTML(batch.name)}</strong></span>${globalThis.KPLLibraryGroups?.badgeMarkup(`batch:${batch.id}`) || ""}<span class="result-id">Batch ${escapeHTML(batch.id)}</span><span class="result-id">${available} ${available === 1 ? "run" : "runs"} · ${batch.completed} / ${batch.expected} completed · ${batch.active ? "Batch still running" : `${excluded} excluded · ${missing} missing/unreadable`}</span>${resultNoteMarkup(batch, true)}</span>
       <span class="saved-batch-disclosure" aria-hidden="true"><span class="saved-batch-show">Show runs</span><span class="saved-batch-hide">Hide runs</span></span>
       <span class="saved-batch-actions">
-        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`Analyze batch mean: ${batch.name}`)}" ${!canAnalyze || resuming || state.deletingResultId ? "disabled" : ""}>${label}</button>
+        <button type="button" class="secondary-button batch-images-button" data-batch-images="${escapeHTML(batch.id)}" data-batch-analysis-saved-only="${savedOnly}" title="${escapeHTML(hint)}" aria-label="${escapeHTML(`${savedOnly ? "View saved" : "Analyze"} batch mean: ${batch.name}`)}" ${!canAnalyze || resuming || state.deletingResultId ? "disabled" : ""}>${label}</button>
         <span class="action-menu" data-action-menu="batch:${escapeHTML(batch.id)}">
           <button type="button" class="secondary-button" data-action-menu-toggle="batch:${escapeHTML(batch.id)}" aria-expanded="false">More<span class="visually-hidden"> actions for ${escapeHTML(batch.name)}</span></button>
           <span class="action-menu-items">
@@ -1731,7 +1736,7 @@ function filterSavedResults(results, query = "", status = "all") {
     const statusMatches = status === "all"
       || status === "active" && current.some(isPendingRun)
       || status === "completed" && current.length > 0 && current.every(run => run.state === "completed")
-      || status === "attention" && current.some(run => ["failed", "interrupted", "canceled", "unreadable"].includes(run.state));
+      || status === "attention" && current.some(run => ["failed", "interrupted", "canceled", "missing", "unreadable"].includes(run.state));
     if (textMatches && statusMatches) matches.add(id);
   }
   // Keep complete batch membership for progress, retry, delete, and analysis.
@@ -1822,6 +1827,10 @@ function resultIntegrityMarkup(run) {
 function savedResultRow(run, inBatch = false) {
   const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
   const retry = singleBatch && !singleBatch.previousRuns.length ? appendBatchButton(singleBatch, resultLocked(run)) + retryBatchButton(singleBatch, resultLocked(run)) : "";
+  if (run.missing || run.state === "missing") {
+    const hint = run.retryUnavailable || "The saved result is unavailable. Retry uses the saved scenario and seed to create a new run; it does not restore the missing data.";
+    return `<tr><td class="result-name" data-label="Experiment"><span class="result-item-heading">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong></span><span class="result-id">${escapeHTML(run.id)}</span><span class="result-id">Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)} · Result data unavailable</span></td><td data-label="State"><span class="status-pill" title="${escapeHTML(hint)}">missing</span><span class="result-integrity">${escapeHTML(hint)}</span></td><td data-label="Started">—</td><td data-label="Finished">—</td><td data-label="Actions"><div class="result-actions">${retry}${!inBatch && singleBatch ? `<button type="button" class="secondary-button" data-delete-batch="${escapeHTML(singleBatch.id)}" ${resultLocked(run) || state.deletingResultId ? "disabled" : ""}>Delete batch</button>` : ""}</div></td></tr>`;
+  }
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
@@ -1835,7 +1844,7 @@ function savedResultRow(run, inBatch = false) {
 
 function requestResultDeletion(id, isBatch = false) {
   if (state.deletingResultId) return;
-  const run = isBatch ? savedResultBatches(state.savedResults || []).find(batch => batch.id === id)
+  const run = isBatch ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === id)
     : (state.savedResults || []).find((result) => result.id === id);
   if (!run || (isBatch ? run.runs.some(resultLocked) : resultLocked(run))) return;
   state.pendingDelete = isBatch ? { ...run, isBatch: true } : run;
@@ -1884,7 +1893,10 @@ async function confirmResultDeletion() {
       state.deletedResultIDs.add(id);
       globalThis.KPLResultImages?.remove(id);
     }
-    if (run.isBatch) globalThis.KPLResultImages?.remove(run.id);
+    if (run.isBatch) {
+      globalThis.KPLResultImages?.remove(run.id);
+      for (const result of state.savedResults || []) { if (result.batchId === run.id && (result.missing || result.state === "missing")) state.deletedResultIDs.add(result.id); }
+    }
     state.savedResults = (state.savedResults || []).filter((result) => !state.deletedResultIDs.has(result.id));
     state.pendingDelete = null;
     $("#deleteResultDialog").close();
@@ -1926,7 +1938,7 @@ async function requestResultBulkAction(action, keys) {
   $("#resultBulkHeading").textContent = label;
   $("#resultBulkDescription").textContent = action === "analysis"
     ? `${plan.entries.length} per-Run ${plan.entries.length === 1 ? "analysis" : "analyses"} can be submitted; ${plan.skipped.length} skipped. Analyses wait behind running experiments. Completed analyses are reused and failed analyses are retried. Batch means are separate.`
-    : `${plan.entries.length} batch${plan.entries.length === 1 ? "" : "es"} with ${previewRuns} failed, canceled or interrupted run${previewRuns === 1 ? "" : "s"} in this preview; ${plan.skipped.length} skipped. The server rechecks each batch. Completed runs and previous attempts remain saved.`;
+    : `${plan.entries.length} batch${plan.entries.length === 1 ? "" : "es"} with ${previewRuns} failed, canceled, interrupted or missing run${previewRuns === 1 ? "" : "s"} in this preview; ${plan.skipped.length} skipped. The server rechecks each batch. Available completed runs and previous attempts remain saved; missing data is not restored.`;
   $("#resultBulkNames").textContent = plan.entries.slice(0, 12).map(entry => `${entry.name} · ${entry.id}${action === "retry" ? ` · ${entry.runCount} unfinished` : ""}`).join("\n")
     + (plan.entries.length > 12 ? `\n…and ${plan.entries.length - 12} more.` : "")
     + (plan.skipped.length ? "\nSkipped:\n" + plan.skipped.slice(0, 6).map(entry => `${entry.name}: ${entry.reason}`).join("\n") : "");
@@ -2075,7 +2087,10 @@ function applyLibraryDeletion(entry, runIDs) {
     state.deletedResultIDs.add(id);
     globalThis.KPLResultImages?.remove?.(id);
   }
-  if (entry.kind === "batch") globalThis.KPLResultImages?.remove?.(entry.id);
+  if (entry.kind === "batch") {
+    globalThis.KPLResultImages?.remove?.(entry.id);
+    for (const run of state.savedResults || []) { if (run.batchId === entry.id && (run.missing || run.state === "missing")) state.deletedResultIDs.add(run.id); }
+  }
 }
 
 async function confirmLibraryDeletion() {
@@ -3011,7 +3026,7 @@ document.addEventListener("click", async (event) => {
     event.preventDefault(); // Analyze without toggling the surrounding summary.
     if (!batchImagesButton.disabled) {
       rememberResultDialogFocus("#resultImagesDialog", batchImagesButton);
-      globalThis.KPLResultImages?.openBatch(batchImagesButton.dataset.batchImages);
+      globalThis.KPLResultImages?.openBatch(batchImagesButton.dataset.batchImages, {savedOnly: batchImagesButton.dataset.batchAnalysisSavedOnly === "true"});
     }
     return;
   }

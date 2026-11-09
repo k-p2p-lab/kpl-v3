@@ -2,7 +2,7 @@
   "use strict";
 
   const pending = run => run.active || ["queued", "running"].includes(run.state);
-  const retryable = run => ["failed", "canceled", "interrupted"].includes(run.state);
+  const retryable = run => ["failed", "canceled", "interrupted", "missing"].includes(run.state);
   const currentRuns = runs => {
     const previous = new Set(runs.flatMap(run => run.previousRunIds || []));
     return runs.filter(run => !run.superseded && !previous.has(run.id));
@@ -37,8 +37,8 @@
         for (const run of members) {
           if (seen.has(run.id)) continue;
           seen.add(run.id);
-          if (run.state === "unreadable") {
-            skip("run:" + run.id, run, "Saved metadata is unreadable.");
+          if (run.state === "unreadable" || run.missing || run.state === "missing") {
+            skip("run:" + run.id, run, run.missing || run.state === "missing" ? "Result data is missing; retry creates a new run, not an analysis of the lost data." : "Saved metadata is unreadable.");
             continue;
           }
           entries.push({key: "run:" + run.id, id: run.id, name: String(run.name || run.id),
@@ -54,7 +54,7 @@
       const all = batches.get(batchID) || [], current = currentRuns(all);
       if (selectedRun && (!current.some(run => run.id === selectedRun.id)
           || !retryable(selectedRun))) {
-        skip(key, selectedRun, "Only current failed, canceled or interrupted attempts can request a retry.");
+        skip(key, selectedRun, "Only current failed, canceled, interrupted or missing runs can request a retry.");
         continue;
       }
       seen.add(batchID);
@@ -65,8 +65,10 @@
           || run.iteration < 1 || run.iteration > expected) || new Set(current.map(run => run.iteration)).size !== current.length) {
         skip(key, sample, "Batch metadata is incomplete or unreadable."); continue;
       }
+      const unavailable = current.find(run => retryable(run) && run.retryUnavailable);
+      if (unavailable) { skip(key, sample, unavailable.retryUnavailable); continue; }
       if (!current.some(retryable)) {
-        skip(key, sample, "This batch has no failed, canceled or interrupted attempt."); continue;
+        skip(key, sample, "This batch has no failed, canceled, interrupted or missing run."); continue;
       }
       const unfinished = current.filter(retryable)
         .sort((a, b) => a.iteration - b.iteration);

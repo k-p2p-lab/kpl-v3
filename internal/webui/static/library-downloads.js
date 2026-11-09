@@ -13,11 +13,15 @@
       // attempts, even when search/status filters match only some members.
       for (const run of results || []) {
         const key = run.batchId ? "batch:" + run.batchId : "run:" + run.id;
-        if (selected.has(key)) { known.add(key); ids.push(run.id); }
+        if (selected.has(key)) {
+          known.add(key);
+          if (!run.missing && run.state !== "missing") ids.push(run.id);
+        }
       }
     } else throw new Error("Unknown download selection.");
     if (!selected.size || known.size !== selected.size) throw new Error("Some selected items are no longer listed. Refresh the list and select them again.");
     const unique = [...new Set(ids)];
+    if (!unique.length) throw new Error("The selected result data is missing. Retry the missing runs to create new results before downloading.");
     if (unique.length > 2000) throw new Error("Download up to 2,000 scenarios or runs at a time. Select fewer items or batches.");
     return unique;
   }

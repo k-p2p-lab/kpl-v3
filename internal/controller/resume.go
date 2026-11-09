@@ -124,20 +124,40 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 		return model.Experiment{}, recoveryErr
 	}
 	allMembers, err := s.allBatchMembers(parent, id)
-	if err != nil {
+	if err != nil && !(retry && errors.Is(err, errResultNotFound)) {
 		return model.Experiment{}, err
+	}
+	if retry {
+		missing, err := s.missingBatchMembers(parent, id, allMembers)
+		if err != nil {
+			return model.Experiment{}, err
+		}
+		allMembers = append(allMembers, missing...)
+		if len(allMembers) == 0 {
+			return model.Experiment{}, errResultNotFound
+		}
 	}
 	members := currentBatchMembers(allMembers)
 	sort.Slice(members, func(i, j int) bool { return members[i].Iteration < members[j].Iteration })
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
+	// A lost manifest can hide an active member from the filesystem listing,
+	// including legacy groups without a durable Current ID for that slot.
+	s.state.mu.RLock()
+	for runID, live := range s.state.experiments {
+		if live.BatchID == id && (live.State == "running" || live.State == "queued" || s.cancels[runID] != nil || s.repeatBatches[runID] != nil) {
+			s.state.mu.RUnlock()
+			return model.Experiment{}, errResultBusy
+		}
+	}
+	s.state.mu.RUnlock()
 	if retry && expectedRunIDs != nil {
 		// File descriptors captured while listing can precede a final state
 		// write. Under persistMu, use the live state where available so a just
 		// completed iteration is neither part of the precondition nor retried.
 		s.state.mu.RLock()
 		for i := range allMembers {
-			if live, exists := s.state.experiments[allMembers[i].ID]; exists && live.BatchID == id {
+			if live, exists := s.state.experiments[allMembers[i].ID]; exists && live.BatchID == id && !allMembers[i].Missing {
 				allMembers[i].State = live.State
 			}
 		}
@@ -174,8 +194,10 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 		if job := s.analysisJobs[member.ID]; job != nil && (job.status.State == "queued" || job.status.State == "running") {
 			return model.Experiment{}, fmt.Errorf("%w: run analysis is still active", errResultBusy)
 		}
-		batch.members = append(batch.members, member.ID)
-		if member.State != "completed" && (!member.StartedAt.IsZero() || member.State == "failed" || retry) {
+		if !member.missingUnknownID {
+			batch.members = append(batch.members, member.ID)
+		}
+		if !member.missingUnknownID && member.State != "completed" && (!member.StartedAt.IsZero() || member.State == "failed" || retry) {
 			batch.cleanupRuns = append(batch.cleanupRuns, member.ID)
 		}
 		// Keep cleanup ancestry even when an older attempt's result is deleted.
@@ -219,60 +241,121 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 		}
 	}()
 	var raw []byte
+	var replay *batchReplay
+	for _, member := range members {
+		if member.Missing {
+			if member.RetryUnavailable != "" {
+				return model.Experiment{}, fmt.Errorf("%w: %s", errBatchNotResumable, member.RetryUnavailable)
+			}
+		}
+	}
+	for _, member := range members {
+		if member.Missing {
+			actual := make([]savedResult, 0, len(allMembers))
+			for _, run := range allMembers {
+				if !run.Missing {
+					actual = append(actual, run)
+				}
+			}
+			replay, err = s.batchReplayInputs(parent, id, actual)
+			if err != nil {
+				return model.Experiment{}, fmt.Errorf("%w: %v", errBatchNotResumable, err)
+			}
+			break
+		}
+	}
 	for _, member := range members {
 		if retry {
 			if member.State == "completed" {
 				continue
 			}
-			if member.State != "failed" && member.State != "canceled" && member.State != "interrupted" {
+			if member.State != "failed" && member.State != "canceled" && member.State != "interrupted" && member.State != "missing" {
 				return model.Experiment{}, errBatchNotResumable
 			}
 		} else if member.Iteration <= lastAttempt || !member.StartedAt.IsZero() || (member.State != "canceled" && member.State != "interrupted") {
 			continue
 		}
-		root, err := openResultDirectory(runs, member.ID)
-		if err != nil {
-			return model.Experiment{}, err
-		}
-		roots = append(roots, root)
-		metadata, err := readResumeFile(root, "experiment.json", resultMetadataLimit)
-		if err != nil {
-			return model.Experiment{}, err
-		}
-		var original model.Experiment
-		if err := json.Unmarshal(metadata, &original); err != nil {
-			return model.Experiment{}, err
-		}
-		logical := savedResult{ID: original.ID, BatchID: original.BatchID, Repetitions: original.Repetitions}
-		if err := s.applyBatchExtension(&logical); err != nil {
-			return model.Experiment{}, err
-		}
-		original.Repetitions = logical.Repetitions
-		if original.ID != member.ID || original.BatchID != id || original.Iteration != member.Iteration || original.Repetitions != expected || !retry && !original.StartedAt.IsZero() {
-			return model.Experiment{}, errBatchNotResumable
-		}
 		if !retry {
-			manifest, err := readRunArchive(root, member.ID)
+			fenced, err := s.state.resultWriteFencedLocked(member.ID)
 			if err != nil {
 				return model.Experiment{}, err
 			}
-			for _, name := range []string{"events.jsonl", "observations.jsonl"} {
-				file, err := captureRunSource(root, manifest, name)
-				if errors.Is(err, os.ErrNotExist) {
+			if fenced {
+				return model.Experiment{}, fmt.Errorf("%w: run %s rejects runtime writes; use Retry to allocate a fresh Run ID", errBatchNotResumable, member.ID)
+			}
+		}
+		var original model.Experiment
+		var yaml []byte
+		if member.Missing {
+			yaml = []byte(replay.ScenarioYAML)
+			spec, err := scenario.Parse(yaml)
+			if err != nil {
+				return model.Experiment{}, fmt.Errorf("%w: saved scenario: %v", errBatchNotResumable, err)
+			}
+			seed, known := replay.Seeds[member.Iteration]
+			if !known {
+				if spec.Seed == 0 {
+					return model.Experiment{}, fmt.Errorf("%w: missing generated seed for iteration %d", errBatchNotResumable, member.Iteration)
+				}
+				seed = spec.Seed
+			}
+			original = model.Experiment{ID: member.ID, BatchID: id, Iteration: member.Iteration, Repetitions: expected, Name: spec.Name, Seed: seed, TotalPhases: len(spec.Phases)}
+			previous := map[string]bool{}
+			for _, run := range allMembers {
+				if run.Iteration != member.Iteration || run.ID == member.ID || run.Missing {
 					continue
 				}
+				for _, old := range append(append([]string{}, run.PreviousRunIDs...), run.ID) {
+					if !previous[old] {
+						original.PreviousRunIDs = append(original.PreviousRunIDs, old)
+						previous[old] = true
+					}
+				}
+			}
+		} else {
+			root, err := openResultDirectory(runs, member.ID)
+			if err != nil {
+				return model.Experiment{}, err
+			}
+			roots = append(roots, root)
+			metadata, err := readResumeFile(root, "experiment.json", resultMetadataLimit)
+			if err != nil {
+				return model.Experiment{}, err
+			}
+			if err := json.Unmarshal(metadata, &original); err != nil {
+				return model.Experiment{}, err
+			}
+			logical := savedResult{ID: original.ID, BatchID: original.BatchID, Repetitions: original.Repetitions}
+			if err := s.applyBatchExtension(&logical); err != nil {
+				return model.Experiment{}, err
+			}
+			original.Repetitions = logical.Repetitions
+			if original.ID != member.ID || original.BatchID != id || original.Iteration != member.Iteration || original.Repetitions != expected || !retry && !original.StartedAt.IsZero() {
+				return model.Experiment{}, errBatchNotResumable
+			}
+			if !retry {
+				manifest, err := readRunArchive(root, member.ID)
 				if err != nil {
 					return model.Experiment{}, err
 				}
-				file.close()
-				if file.size != 0 {
-					return model.Experiment{}, fmt.Errorf("%w: run %s already has observations", errBatchNotResumable, member.ID)
+				for _, name := range []string{"events.jsonl", "observations.jsonl"} {
+					file, err := captureRunSource(root, manifest, name)
+					if errors.Is(err, os.ErrNotExist) {
+						continue
+					}
+					if err != nil {
+						return model.Experiment{}, err
+					}
+					file.close()
+					if file.size != 0 {
+						return model.Experiment{}, fmt.Errorf("%w: run %s already has observations", errBatchNotResumable, member.ID)
+					}
 				}
 			}
-		}
-		yaml, err := readResumeFile(root, "scenario.yaml", scenarioYAMLLimit)
-		if err != nil {
-			return model.Experiment{}, err
+			yaml, err = readResumeFile(root, "scenario.yaml", scenarioYAMLLimit)
+			if err != nil {
+				return model.Experiment{}, err
+			}
 		}
 		if raw == nil {
 			raw = yaml
@@ -295,9 +378,11 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 				return model.Experiment{}, err
 			}
 			next.ID = fmt.Sprintf("run-%s-%x", time.Now().UTC().Format("20060102T150405Z"), nonce)
-			next.PreviousRunIDs = append(append([]string{}, original.PreviousRunIDs...), original.ID)
+			next.PreviousRunIDs = append([]string{}, original.PreviousRunIDs...)
+			if !member.missingUnknownID {
+				next.PreviousRunIDs = append(next.PreviousRunIDs, original.ID)
+			}
 		}
-		next.ScenarioYAML = string(yaml)
 		originals, pending = append(originals, original), append(pending, next)
 	}
 	if len(pending) == 0 {
@@ -307,12 +392,33 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 	if err != nil {
 		return model.Experiment{}, fmt.Errorf("%w: saved scenario: %v", errBatchNotResumable, err)
 	}
+	sharedScenario := string(raw)
+	for i := range pending {
+		pending[i].ScenarioYAML = sharedScenario
+	}
 	if err := parent.Err(); err != nil {
 		return model.Experiment{}, err
 	}
 	before := originals
 	if retry {
 		before = nil
+	}
+	for _, member := range members {
+		if member.Missing && !member.missingUnknownID {
+			absent, err := s.missingResultSourceAbsent(member.ID)
+			if err != nil {
+				return model.Experiment{}, fmt.Errorf("%w: inspect missing result: %v", errBatchNotResumable, err)
+			}
+			if !absent {
+				return model.Experiment{}, errBatchAttemptsChanged
+			}
+			// The old result is unavailable. Fence late ingress without creating
+			// replacement metadata, journals, or scientific summaries for it.
+			// Existing partial files remain untouched; the retry has a fresh ID.
+			if err := s.markResultWriteFencedLocked(member.ID); err != nil {
+				return model.Experiment{}, err
+			}
+		}
 	}
 	if err := s.commitBatchAdmissionLocked(parent, id, pending, raw, expected, members, before); err != nil {
 		return model.Experiment{}, err
@@ -377,6 +483,19 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			return err
 		}
 		cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
+		participants, participantErr := s.cleanupParticipants(runID)
+		if participantErr == nil && len(participants) == 0 {
+			for _, phase := range spec.Phases {
+				if phase.Action == "join" {
+					participantErr = errors.New("cannot verify previous Peer cleanup before Agents reconnect")
+					break
+				}
+			}
+		}
+		if participantErr != nil {
+			cancel()
+			return fmt.Errorf("cleanup previous run %s: %w", runID, participantErr)
+		}
 		// Attempted run IDs will never run again. Fence every possible generation,
 		// including generations whose state was lost in a Controller restart.
 		err := s.stopRunGeneration(cleanupCtx, runID, ^uint64(0))
@@ -397,7 +516,22 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		// A successful strict drain ACK resolves delivery debt. Preserve the
 		// earlier scientific failure; terminal Peer evidence is checked below.
 		if s.config.RunWorkers {
-			s.updateExperiment(runID, func(run *model.Experiment) { run.TelemetryPending = false })
+			s.state.persistMu.Lock()
+			deleted, fenceErr := s.state.resultWriteFencedLocked(runID)
+			s.state.persistMu.Unlock()
+			if fenceErr != nil {
+				return fenceErr
+			}
+			if deleted {
+				s.state.mu.Lock()
+				if run, exists := s.state.experiments[runID]; exists {
+					run.TelemetryPending = false
+					s.state.experiments[runID] = run
+				}
+				s.state.mu.Unlock()
+			} else {
+				s.updateExperiment(runID, func(run *model.Experiment) { run.TelemetryPending = false })
+			}
 		}
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -411,7 +545,7 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 				return err
 			}
 			s.state.persistMu.Lock()
-			deleted, err := s.state.resultDeletedLocked(id)
+			deleted, err := s.state.resultWriteFencedLocked(id)
 			s.state.persistMu.Unlock()
 			if err != nil {
 				return err

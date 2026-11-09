@@ -20,7 +20,7 @@ test('bulk preview snapshots selection and cancellation sends no request',async(
   const pending=f.app.requestResultBulkAction('retry',keys);keys.length=0;
   assert.equal(calls,0);assert.equal(f.element('#resultBulkDialog').open,true);
   assert.equal(f.element('#cancelResultBulk').focused,true);
-  assert.match(f.element('#resultBulkDescription').textContent,/1 batch with 1 failed, canceled or interrupted/);
+  assert.match(f.element('#resultBulkDescription').textContent,/1 batch with 1 failed, canceled, interrupted or missing/);
   assert.equal(f.state.pendingResultBulk.plan.entries[0].id,'b');
   f.app.closeResultBulkAction();assert.equal(calls,0);
   f.state.pendingResultBulk.resolve('Canceled');await pending;

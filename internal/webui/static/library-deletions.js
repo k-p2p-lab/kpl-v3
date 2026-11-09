@@ -20,6 +20,9 @@
       }
       const id = key.slice(prefix.length + 1);
       if (!id) throw new Error("Invalid deletion selection.");
+      if (prefix === "run" && results.some(run => run.id === id && (run.missing || run.state === "missing"))) {
+        throw new Error("This result data is already missing. Delete its batch to remove the saved retry inputs.");
+      }
       const endpoint = prefix === "scenario" ? "scenarios" : prefix === "batch" ? "result-batches" : "results";
       const runIDs = prefix === "batch" ? batches.get(id) || [] : prefix === "run" ? [id] : [];
       return Object.freeze({key, id, name: String(item.name || id), kind: prefix,

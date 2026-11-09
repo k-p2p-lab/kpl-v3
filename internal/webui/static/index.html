@@ -484,7 +484,7 @@
           <div class="results-filter-meta"><p id="resultFilterSummary" role="status" aria-live="polite"></p><p id="resultFilterHint">Matching batches stay together.</p></div>
           <details class="results-guide"><summary>About results, retries, and downloads</summary>
             <p>Results remain available after a Controller restart. Use <strong>Retry from run</strong> to restart unfinished runs, or <strong>Continue remaining</strong> to skip failed attempts. Running downloads are snapshots. Source sizes show original files at the last refresh. Expand a batch to see its runs in execution order.</p>
-            <p>Select results, then use <strong>Actions → Start analysis</strong> for per-Run analyses, including retrying failed analyses. <strong>Retry failed runs</strong> reviews current failed batches and retries their unfinished iterations. Accepted work uses the shared execution queue. Large selections may be submitted partially when the analysis queue is full.</p>
+            <p>Select results, then use <strong>Actions → Start analysis</strong> for per-Run analyses, including retrying failed analyses. <strong>Retry unfinished runs</strong> includes failed, canceled, interrupted and missing iterations with verified saved inputs. Missing data is not restored; retries create new results. Accepted work uses the shared execution queue. Large selections may be submitted partially when the analysis queue is full.</p>
           </details>
           <div class="results-storage-controls">
             <p class="results-storage-status" id="resultStorageStatus" role="status" aria-live="polite"></p>
@@ -574,7 +574,7 @@
       <header><h2 id="agentHostDialogHeading">Reboot Linux hosts</h2></header>
       <div class="agent-host-dialog-body">
         <p id="agentHostDialogSummary" class="dialog-help"></p>
-        <p id="agentHostDialogHelp" class="dialog-help">This reboots the selected host servers. Work queues behind experiments and analysis. Target hosts are excluded from new Peer placement and remain excluded until you enable them after reboot.</p>
+        <p id="agentHostDialogHelp" class="dialog-help">This reboots the selected host servers. Work queues behind experiments and analysis. Target hosts are excluded from new Peer placement until their return is verified, then their previous enabled or disabled settings are restored automatically. Unconfirmed returns stay excluded.</p>
         <ul id="agentHostTargets" class="agent-host-targets" aria-label="Selected host outcomes"></ul>
         <p class="dialog-help" id="agentHostDialogStatus" role="status" aria-live="polite"></p>
         <p class="dialog-help">Canceling queue work stops unsent requests and waiting only. A reboot already requested on a host cannot be canceled here.</p>

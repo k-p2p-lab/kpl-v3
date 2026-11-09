@@ -6,6 +6,24 @@ const run = (id, state='completed', extra={}) => ({id,name:id,state,iteration:1,
 const started = '2026-11-07T00:00:00Z';
 const queued = id => ({id:'analysis-'+id,runId:id,state:'queued'});
 
+test('missing slots join guarded retries in iteration order and never enter individual analysis',()=>{
+  const results=[run('missing-last','missing',{batchId:'b',iteration:3,repetitions:4,missing:true}),
+    run('done','completed',{batchId:'b',iteration:1,repetitions:4}),
+    run('cancel','canceled',{batchId:'b',iteration:4,repetitions:4}),
+    run('missing-middle','missing',{batchId:'b',iteration:2,repetitions:4,missing:true})];
+  const plan=prepare('retry',['batch:b','run:missing-last'],results);
+  assert.equal(plan.entries.length,1);
+  assert.deepEqual(plan.entries[0].runIds,['missing-middle','missing-last','cancel']);
+  assert.equal(plan.entries[0].runCount,3);
+  const analysis=prepare('analysis',['batch:b'],results);
+  assert.deepEqual(analysis.entries.map(entry=>entry.id),['done','cancel']);
+  assert.equal(analysis.skipped.length,2);
+  results[0].retryUnavailable='Cannot retry missing run: generated seed was not retained.';
+  const blocked=prepare('retry',['batch:b'],results);
+  assert.equal(blocked.entries.length,0);
+  assert.match(blocked.skipped[0].reason,/generated seed/);
+});
+
 test('analysis selection expands complete batches, de-duplicates children, and reserves running runs',async()=>{
   const results=[run('done','completed',{batchId:'b'}),run('old','failed',{batchId:'b',superseded:true}),
     run('live','running',{batchId:'b',active:true}),run('unreadable','unreadable',{batchId:'b'})];

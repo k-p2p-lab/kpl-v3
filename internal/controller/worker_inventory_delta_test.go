@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -247,6 +246,6 @@ func TestWorkerInventoryDeltaNeverRevivesTerminalHeartbeat(t *testing.T) {
 	state := server.state.nodes[node.ID].State
 	server.state.mu.RUnlock()
 	if state != model.NodeStopped {
-		t.Fatal(fmt.Sprintf("terminal Peer revived as %s", state))
+		t.Fatalf("terminal Peer revived as %s", state)
 	}
 }

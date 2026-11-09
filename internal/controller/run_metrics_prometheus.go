@@ -259,6 +259,16 @@ func (c *runMetricsCollector) collectWorkerSummaries(ch chan<- prometheus.Metric
 		}
 	}
 	c.state.mu.RUnlock()
+	if err := c.state.historicalPropagation(func(runID, agentID, topic string) error {
+		if zeros[runID] == nil {
+			zeros[runID] = make(map[propagationSeriesKey]bool)
+		}
+		zeros[runID][propagationSeriesKey{agentID, topic}] = true
+		return nil
+	}); err != nil {
+		ch <- prometheus.NewInvalidMetric(c.expected, err)
+		return
+	}
 	err := c.state.visitWorkerSummaries(func(summary runWorkerSummary) error {
 		result := summary.Metrics
 		if result.Definition == sessionWindowDefinition {

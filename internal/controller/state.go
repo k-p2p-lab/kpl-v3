@@ -34,6 +34,7 @@ type state struct {
 	closedRuns              map[string]bool
 	closedRunOrder          []string
 	retiredLookup           func(string) (bool, error)
+	terminalHistory         *terminalNodeHistory
 	resultsRevision         atomic.Uint64
 	failedRunWrites         map[string]bool
 	archiveQueueMu          sync.Mutex
@@ -53,6 +54,9 @@ type state struct {
 	agentAvailabilityErr    error
 	agents                  map[string]model.Agent
 	nodes                   map[string]model.Node
+	nodeVersions            map[string]uint64
+	nodeRevision            uint64
+	nodeRemovalRevision     uint64
 	activeNodeIDs           map[string]struct{}
 	reservations            map[string]string
 	uncertainCreates        map[string]uncertainCreate
@@ -110,6 +114,7 @@ func (s *state) setNodeLocked(node model.Node) {
 			}
 		}
 	}
+	s.markNodeVersionLocked(node.ID)
 	s.nodes[node.ID] = node
 	if nodeHasLiveState(node) {
 		s.activeNodeIDs[node.ID] = struct{}{}
@@ -227,6 +232,10 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 			retired[node.RunID] = closed
 		}
 	}
+	historical, err := s.prepareHistoricalHeartbeat(h, retired)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	previous, ok := s.agents[h.Agent.ID]
@@ -250,6 +259,16 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		retained := h.Nodes[:0]
 		for _, node := range h.Nodes {
 			old, exists := s.nodes[node.ID]
+			if frozen, stored := historical[node.ID]; stored {
+				if exists && (nodeHasLiveState(old) || old.Metadata["cleanupComplete"] != "true") {
+					// Apply the immutable terminal evidence before dropping a
+					// previously unresolved local projection on a later report.
+					node = frozen
+				} else {
+					s.deleteNodeLocked(node.ID)
+					continue
+				}
+			}
 			if retired[node.RunID] && (node.State == model.NodeStopped || node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") && (!exists || !nodeHasLiveState(old) && old.Metadata["cleanupComplete"] == "true") {
 				continue
 			}
@@ -260,8 +279,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	for _, node := range h.Nodes {
 		_, duplicate := seen[node.ID]
 		owner := s.nodes[node.ID].AgentID
+		previousRun := s.nodes[node.ID].RunID
 		reservation := s.reservations[node.ID]
-		if node.ID == "" || duplicate || owner != "" && owner != h.Agent.ID || reservation != "" && reservation != h.Agent.ID {
+		if node.ID == "" || duplicate || owner != "" && owner != h.Agent.ID || previousRun != "" && node.RunID != "" && previousRun != node.RunID || reservation != "" && reservation != h.Agent.ID {
 			s.mu.Unlock()
 			return fmt.Errorf("agent %q heartbeat contains an empty, duplicate, or foreign node %q", h.Agent.ID, node.ID)
 		}
@@ -314,6 +334,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		// status/creation merges, but normalize its age for topology freshness.
 		s.nodeReportTimes[node.ID] = topologyReportTime(now, reportedAt, node.LastSeen)
 		node.AgentID = h.Agent.ID
+		if node.RunID == "" {
+			node.RunID = s.nodes[node.ID].RunID
+		}
 		if node.LastSeen.IsZero() {
 			node.LastSeen = now
 		}

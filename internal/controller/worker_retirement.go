@@ -158,9 +158,7 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	}
 	for nodeID, node := range s.state.nodes {
 		if node.RunID == id {
-			delete(s.state.nodes, nodeID)
-			delete(s.state.nodeReportTimes, nodeID)
-			delete(s.state.activeNodeIDs, nodeID)
+			s.state.deleteNodeLocked(nodeID)
 		}
 	}
 	delete(s.state.runMetrics, id)

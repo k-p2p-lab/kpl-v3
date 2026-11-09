@@ -23,13 +23,26 @@ type workerInventoryRequest struct {
 	Lease   string `json:"lease,omitempty"`
 	Next    int    `json:"next,omitempty"`
 	Release bool   `json:"release,omitempty"`
+	Since   uint64 `json:"since,omitempty"`
 }
 type workerInventoryPage struct {
-	Lease string            `json:"lease"`
-	Next  int               `json:"next"`
-	Done  bool              `json:"done"`
-	Items []json.RawMessage `json:"items"`
+	Lease    string            `json:"lease"`
+	Next     int               `json:"next"`
+	Done     bool              `json:"done"`
+	Items    []json.RawMessage `json:"items"`
+	Revision uint64            `json:"revision"`
+	Full     bool              `json:"full"`
 }
+
+// Every lease captures one revision. The first transfer and any deletion are
+// complete inventories; steady polling transfers only replaced Node values.
+// Agent capacity/readiness and the experiment remain complete on every poll.
+type workerInventoryUpdate struct {
+	workerInventory
+	revision uint64
+	full     bool
+}
+
 type workerInventoryItem struct {
 	Experiment *model.Experiment `json:"experiment,omitempty"`
 	Agent      *model.Agent      `json:"agent,omitempty"`
@@ -44,6 +57,9 @@ type workerInventoryItem struct {
 type workerInventoryLease struct {
 	token    string
 	snapshot workerInventory
+	revision uint64
+	full     bool
+	since    uint64
 	next     int
 	timer    *time.Timer
 }
@@ -57,12 +73,16 @@ func (b *runWorkerBroker) clearInventoryLeaseLocked() {
 func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInventoryRequest) (workerInventoryPage, error) {
 	// authorizeAgent takes state.mu before b.mu. Capture the borrowed values
 	// before acquiring b.mu as well, avoiding an RWMutex writer inversion.
-	var candidate workerInventory
+	var candidate workerInventoryUpdate
 	if !request.Release && request.Lease == "" && request.Next == 0 {
 		if err := ctx.Err(); err != nil {
 			return workerInventoryPage{}, err
 		}
-		candidate = b.inventory()
+		var err error
+		candidate, err = b.inventorySince(request.Since)
+		if err != nil {
+			return workerInventoryPage{}, err
+		}
 		sort.Slice(candidate.Agents, func(i, j int) bool { return candidate.Agents[i].ID < candidate.Agents[j].ID })
 		sort.Slice(candidate.Nodes, func(i, j int) bool { return candidate.Nodes[i].ID < candidate.Nodes[j].ID })
 	}
@@ -87,7 +107,7 @@ func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInven
 		if candidate.Experiment.ID != b.runID {
 			return workerInventoryPage{}, errors.New("inventory Run identity mismatch")
 		}
-		lease := &workerInventoryLease{token: rand.Text(), snapshot: candidate}
+		lease := &workerInventoryLease{token: rand.Text(), snapshot: candidate.workerInventory, revision: candidate.revision, full: candidate.full, since: request.Since}
 		b.inventoryLease = lease
 		lease.timer = time.AfterFunc(workerInventoryLeaseDuration, func() {
 			b.mu.Lock()
@@ -96,11 +116,11 @@ func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInven
 				b.inventoryLease = nil
 			}
 		})
-	} else if b.inventoryLease == nil || b.inventoryLease.token != request.Lease || b.inventoryLease.next != request.Next {
+	} else if b.inventoryLease == nil || b.inventoryLease.token != request.Lease || b.inventoryLease.next != request.Next || b.inventoryLease.since != request.Since {
 		return workerInventoryPage{}, errors.New("inventory lease expired or cursor does not match")
 	}
 	lease := b.inventoryLease
-	page := workerInventoryPage{Lease: lease.token, Next: lease.next}
+	page := workerInventoryPage{Lease: lease.token, Next: lease.next, Revision: lease.revision, Full: lease.full}
 	total := 1 + len(lease.snapshot.Agents) + len(lease.snapshot.Nodes)
 	bytes := 0
 	for page.Next < total {
@@ -147,9 +167,9 @@ func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInven
 	return page, nil
 }
 
-func (c *runWorkerClient) readInventory(ctx context.Context) (workerInventory, error) {
-	snapshot := workerInventory{ReportTimes: make(map[string]time.Time)}
-	request := workerInventoryRequest{}
+func (c *runWorkerClient) readInventory(ctx context.Context) (workerInventoryUpdate, error) {
+	snapshot := workerInventoryUpdate{workerInventory: workerInventory{ReportTimes: make(map[string]time.Time)}}
+	request := workerInventoryRequest{Since: c.inventoryRevision}
 	complete := false
 	defer func() {
 		if !complete && request.Lease != "" {
@@ -163,44 +183,50 @@ func (c *runWorkerClient) readInventory(ctx context.Context) (workerInventory, e
 	for {
 		var page workerInventoryPage
 		if err := c.call(ctx, "inventory", request, &page); err != nil {
-			return workerInventory{}, err
+			return workerInventoryUpdate{}, err
 		}
 		if page.Lease == "" || request.Lease != "" && request.Lease != page.Lease || page.Next != request.Next+len(page.Items) || len(page.Items) == 0 {
-			return workerInventory{}, errors.New("invalid inventory page identity or progress")
+			return workerInventoryUpdate{}, errors.New("invalid inventory page identity or progress")
+		}
+		if page.Revision < request.Since || request.Since == 0 && !page.Full || request.Lease != "" && (page.Revision != snapshot.revision || page.Full != snapshot.full) {
+			return workerInventoryUpdate{}, errors.New("inventory revision changed within its lease")
+		}
+		if request.Lease == "" {
+			snapshot.revision, snapshot.full = page.Revision, page.Full
 		}
 		request.Lease = page.Lease
 		for _, raw := range page.Items {
 			var item workerInventoryItem
 			if err := json.Unmarshal(raw, &item); err != nil {
-				return workerInventory{}, err
+				return workerInventoryUpdate{}, err
 			}
 			switch {
 			case item.Experiment != nil && item.Agent == nil && item.Node == nil:
 				if snapshot.Experiment.ID != "" || item.Experiment.ID != c.runID {
-					return workerInventory{}, errors.New("inventory experiment identity mismatch")
+					return workerInventoryUpdate{}, errors.New("inventory experiment identity mismatch")
 				}
 				snapshot.Experiment = *item.Experiment
 			case item.Agent != nil && item.Experiment == nil && item.Node == nil:
 				if item.Agent.ID == "" || seenAgents[item.Agent.ID] {
-					return workerInventory{}, errors.New("duplicate inventory Agent")
+					return workerInventoryUpdate{}, errors.New("duplicate inventory Agent")
 				}
 				seenAgents[item.Agent.ID] = true
 				snapshot.Agents = append(snapshot.Agents, *item.Agent)
 			case item.Node != nil && item.Experiment == nil && item.Agent == nil:
 				if item.Node.RunID != c.runID || item.Node.ID == "" || seenNodes[item.Node.ID] {
-					return workerInventory{}, errors.New("inventory Peer identity mismatch")
+					return workerInventoryUpdate{}, errors.New("inventory Peer identity mismatch")
 				}
 				seenNodes[item.Node.ID] = true
 				snapshot.Nodes = append(snapshot.Nodes, *item.Node)
 				snapshot.ReportTimes[item.Node.ID] = item.ReportedAt
 			default:
-				return workerInventory{}, errors.New("invalid inventory record")
+				return workerInventoryUpdate{}, errors.New("invalid inventory record")
 			}
 		}
 		request.Next = page.Next
 		if page.Done {
 			if snapshot.Experiment.ID != c.runID {
-				return workerInventory{}, errors.New("inventory omitted its experiment")
+				return workerInventoryUpdate{}, errors.New("inventory omitted its experiment")
 			}
 			complete = true
 			return snapshot, nil

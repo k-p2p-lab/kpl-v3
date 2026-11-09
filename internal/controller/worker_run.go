@@ -111,20 +111,21 @@ type runWorkerSummary struct {
 }
 
 type runWorkerClient struct {
-	peer            *workerproc.Peer
-	server          *Server
-	runID           string
-	ctx             context.Context
-	syncMu          sync.Mutex
-	journalMu       sync.Mutex
-	journal         *os.File
-	journalInfo     os.FileInfo
-	offset          int64
-	accumulator     *runMetricAccumulator
-	placementMu     sync.Mutex
-	placementRNG    map[string]*rand.Rand
-	observationOnce sync.Once
-	observationSlot chan struct{}
+	peer              *workerproc.Peer
+	server            *Server
+	runID             string
+	ctx               context.Context
+	syncMu            sync.Mutex
+	inventoryRevision uint64
+	journalMu         sync.Mutex
+	journal           *os.File
+	journalInfo       os.FileInfo
+	offset            int64
+	accumulator       *runMetricAccumulator
+	placementMu       sync.Mutex
+	placementRNG      map[string]*rand.Rand
+	observationOnce   sync.Once
+	observationSlot   chan struct{}
 }
 
 // WorkerFactory is reached only through workerproc's inherited private pipes.
@@ -299,7 +300,7 @@ func (c *runWorkerClient) call(ctx context.Context, method string, input, output
 	}
 	var reply workerReply
 	if err := c.peer.Call(ctx, method, input, &reply); err != nil {
-		return err
+		return &workerCallTransportError{err}
 	}
 	if reply.Error != nil {
 		return reply.Error.decode()
@@ -329,14 +330,19 @@ func (c *runWorkerClient) syncInventory(ctx context.Context) error {
 	for _, agent := range snapshot.Agents {
 		s.agents[agent.ID] = agent
 	}
-	s.nodes = make(map[string]model.Node, len(snapshot.Nodes))
-	s.activeNodeIDs = nil
+	if snapshot.full {
+		s.nodes = make(map[string]model.Node, len(snapshot.Nodes))
+		s.activeNodeIDs = nil
+		s.nodeVersions = nil
+		s.nodeReportTimes = make(map[string]time.Time, len(snapshot.ReportTimes))
+	}
 	for _, node := range snapshot.Nodes {
 		s.setNodeLocked(node)
+		s.nodeReportTimes[node.ID] = snapshot.ReportTimes[node.ID]
 	}
-	s.nodeReportTimes = snapshot.ReportTimes
 	s.experiments[c.runID] = snapshot.Experiment
 	s.mu.Unlock()
+	c.inventoryRevision = snapshot.revision
 	return nil
 }
 
@@ -358,6 +364,9 @@ func (c *runWorkerClient) update(runID string, update func(*model.Experiment)) {
 }
 
 func (c *runWorkerClient) callAgent(ctx context.Context, baseURL, method, path string, input, output any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var raw json.RawMessage
 	if input != nil {
 		data, err := json.Marshal(input)
@@ -368,6 +377,9 @@ func (c *runWorkerClient) callAgent(ctx context.Context, baseURL, method, path s
 	}
 	var result json.RawMessage
 	if err := c.call(ctx, "agent", workerAgentCall{BaseURL: baseURL, Method: method, Path: path, Input: raw, Output: output != nil}, &result); err != nil {
+		if method == http.MethodPost && path == "/api/v1/nodes" {
+			return classifyWorkerCreateTransport(err)
+		}
 		return err
 	}
 	if output != nil && len(result) > 0 {
@@ -640,6 +652,8 @@ type runWorkerBroker struct {
 	drained            bool
 	final              *model.Experiment
 	inventoryLease     *workerInventoryLease
+	createLeases       map[string]*workerCreateLease
+	createFenced       bool
 	observationMu      sync.Mutex
 	observationStage   *workerObservationStage
 }
@@ -647,6 +661,7 @@ type runWorkerBroker struct {
 func (b *runWorkerBroker) close() error {
 	b.mu.Lock()
 	b.closed = true
+	b.createLeases = nil
 	b.clearInventoryLeaseLocked()
 	b.mu.Unlock()
 	return b.closeObservationStage()
@@ -669,20 +684,30 @@ func (b *runWorkerBroker) handle(ctx context.Context, method string, raw json.Ra
 	return reply, nil
 }
 func (b *runWorkerBroker) inventory() workerInventory {
+	snapshot, _ := b.inventorySince(0)
+	return snapshot.workerInventory
+}
+
+func (b *runWorkerBroker) inventorySince(since uint64) (workerInventoryUpdate, error) {
 	s := b.server.state
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := workerInventory{Experiment: s.experiments[b.runID], ReportTimes: make(map[string]time.Time)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reconcileNodeVersionsLocked()
+	if since > s.nodeRevision {
+		return workerInventoryUpdate{}, errors.New("inventory revision is ahead of the current state")
+	}
+	full := since == 0 || s.nodeRemovalRevision > since
+	result := workerInventoryUpdate{workerInventory: workerInventory{Experiment: s.experiments[b.runID], ReportTimes: make(map[string]time.Time)}, revision: s.nodeRevision, full: full}
 	for _, agent := range s.agents {
 		result.Agents = append(result.Agents, agent)
 	}
 	for _, node := range s.nodes {
-		if node.RunID == b.runID {
+		if node.RunID == b.runID && (full || s.nodeVersions[node.ID] > since) {
 			result.Nodes = append(result.Nodes, node)
 			result.ReportTimes[node.ID] = s.nodeReportTimes[node.ID]
 		}
 	}
-	return result
+	return result, nil
 }
 func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	s := b.server
@@ -703,6 +728,9 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if !strings.HasPrefix(r.NodeID, b.runID+"-") {
 			return nil, errors.New("foreign reservation")
 		}
+		if err := b.checkCreateReservation(r.NodeID); err != nil {
+			return nil, err
+		}
 		var rng *rand.Rand
 		source := &workerPlacementSource{ctx: ctx, process: b.process, nodeID: r.NodeID}
 		if r.Random {
@@ -712,6 +740,12 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if source.err != nil {
 			s.releaseReservation(r.NodeID)
 			return nil, errors.Join(err, source.err)
+		}
+		if err == nil {
+			if err = b.bindCreateReservation(r.NodeID, agent); err != nil {
+				s.releaseReservation(r.NodeID)
+				return nil, err
+			}
 		}
 		return agent, err
 	case "release":
@@ -723,6 +757,7 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 			return nil, errors.New("foreign reservation")
 		}
 		s.releaseReservation(id)
+		b.releaseCreateLease(id)
 		return nil, nil
 	case "uncertain":
 		var r workerCreated
@@ -773,6 +808,9 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 			return nil, errors.New("foreign create acknowledgement")
 		}
 		accepted := s.recordCreatedNode(r.Request, r.AgentID, r.Node, r.Expected...)
+		if accepted {
+			b.releaseCreateLease(r.Request.ID)
+		}
 		s.state.mu.RLock()
 		node := s.state.nodes[r.Request.ID]
 		at := s.state.nodeReportTimes[r.Request.ID]
@@ -827,6 +865,8 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 			b.mu.Lock()
 			b.generation = max(b.generation, r.Generation+1)
 			b.fenced = true
+			b.createFenced = b.createFenced || r.Generation == ^uint64(0)
+			b.createLeases = nil
 			b.mu.Unlock()
 		}
 		return nil, err
@@ -836,6 +876,9 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		err := s.drainRunTelemetry(ctx, b.runID)
 		b.mu.Lock()
 		b.drained = err == nil
+		if err == nil {
+			b.createLeases = nil
+		}
 		b.mu.Unlock()
 		return nil, err
 	case "flush":
@@ -885,26 +928,17 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if err := json.Unmarshal(raw, &call); err != nil {
 			return nil, err
 		}
-		if err := b.authorizeAgent(call); err != nil {
-			return nil, err
-		}
-		var output json.RawMessage
-		var target any
-		if call.Output {
-			target = &output
-		}
-		var input any
-		if len(call.Input) > 0 {
-			input = call.Input
-		}
-		err := s.callAgent(ctx, call.BaseURL, call.Method, call.Path, input, target)
-		return output, err
+		return b.dispatchAgent(ctx, call)
 	default:
 		return nil, errors.New("unknown Run broker method")
 	}
 }
 
 func (b *runWorkerBroker) authorizeAgent(call workerAgentCall) error {
+	route, _, _ := strings.Cut(call.Path, "?")
+	if call.Method == http.MethodPost && route == "/api/v1/nodes" {
+		return b.authorizeCreateAgent(call)
+	}
 	s := b.server.state
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -920,25 +954,7 @@ func (b *runWorkerBroker) authorizeAgent(call workerAgentCall) error {
 	if !found {
 		return errors.New("unregistered Agent target")
 	}
-	route, _, _ := strings.Cut(call.Path, "?")
 	if call.Method == http.MethodGet && route == "/api/v1/status" {
-		return nil
-	}
-	if call.Method == http.MethodPost && route == "/api/v1/nodes" {
-		var request model.CreateNodeRequest
-		if err := json.Unmarshal(call.Input, &request); err != nil {
-			return err
-		}
-		b.mu.Lock()
-		generation := b.generation
-		drained := b.drained
-		b.mu.Unlock()
-		if request.RunID != b.runID || request.Generation != generation || !owner.RunProcesses || !owner.RunDrain || owner.Disabled || !agentIsOnline(owner, time.Now()) || s.reservations[request.ID] != owner.ID || drained || s.experiments[b.runID].StopRequested {
-			return errors.New("create outside the active Run reservation")
-		}
-		b.mu.Lock()
-		b.fenced = false
-		b.mu.Unlock()
 		return nil
 	}
 	prefix := "/api/v1/nodes/"

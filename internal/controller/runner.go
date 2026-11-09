@@ -205,6 +205,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	}
 	if config.RunWorkers {
 		server.state.retiredLookup = server.isRuntimeRetired
+		server.state.terminalHistory = newTerminalNodeHistory(config.DataDir)
 	}
 	return server
 }

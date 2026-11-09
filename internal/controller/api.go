@@ -375,7 +375,12 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.state.snapshot())
+	snapshot := s.state.snapshot()
+	if s.state.terminalHistory != nil {
+		s.writeHistoricalInventory(w, r, snapshot.Nodes, snapshot.GeneratedAt, snapshotWithoutHistoricalNodes(snapshot))
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +433,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.state.inventory().Nodes)
+	inventory := s.state.inventory()
+	if s.state.terminalHistory != nil {
+		s.writeHistoricalInventory(w, r, inventory.Nodes, inventory.GeneratedAt, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, inventory.Nodes)
 }
 
 func (s *Server) handleNetwork(w http.ResponseWriter, r *http.Request) {
@@ -437,6 +447,10 @@ func (s *Server) handleNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot := s.state.snapshot()
+	if s.state.terminalHistory != nil {
+		s.writeHistoricalInventory(w, r, snapshot.Nodes, snapshot.GeneratedAt, map[string]any{"generatedAt": snapshot.GeneratedAt, "edges": snapshot.Edges, "metrics": snapshot.Metrics})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"generatedAt": snapshot.GeneratedAt,
 		"nodes":       snapshot.Nodes,

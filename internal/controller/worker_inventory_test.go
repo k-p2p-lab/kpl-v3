@@ -24,6 +24,7 @@ type workerInventoryTestProof struct {
 	CompleteScores int
 	Error          string
 	Preserved      bool
+	Revision       uint64
 }
 
 func inventoryDigest(snapshot workerInventory) string {
@@ -42,10 +43,7 @@ func TestControllerInventoryWorkerHelper(t *testing.T) {
 			if method != "execute" {
 				return nil, fmt.Errorf("invalid test operation")
 			}
-			if err := client.syncInventory(callCtx); err != nil {
-				_, preserved := server.state.nodes["sentinel"]
-				return workerInventoryTestProof{Error: err.Error(), Preserved: preserved}, nil
-			}
+			syncErr := client.syncInventory(callCtx)
 			snapshot := workerInventory{Experiment: server.state.experiments[peer.RunID()], ReportTimes: server.state.nodeReportTimes}
 			for _, agent := range server.state.agents {
 				snapshot.Agents = append(snapshot.Agents, agent)
@@ -55,7 +53,11 @@ func TestControllerInventoryWorkerHelper(t *testing.T) {
 			}
 			sort.Slice(snapshot.Agents, func(i, j int) bool { return snapshot.Agents[i].ID < snapshot.Agents[j].ID })
 			sort.Slice(snapshot.Nodes, func(i, j int) bool { return snapshot.Nodes[i].ID < snapshot.Nodes[j].ID })
-			proof := workerInventoryTestProof{Digest: inventoryDigest(snapshot), Nodes: len(snapshot.Nodes)}
+			proof := workerInventoryTestProof{Digest: inventoryDigest(snapshot), Nodes: len(snapshot.Nodes), Revision: client.inventoryRevision}
+			if syncErr != nil {
+				_, proof.Preserved = server.state.nodes["sentinel"]
+				proof.Error = syncErr.Error()
+			}
 			for _, node := range snapshot.Nodes {
 				if len(node.MeshPeers) == 16 && len(node.PeerScores) == 900 && node.ScoreSample != nil && node.ScoreSample.Valid() {
 					proof.CompleteScores++

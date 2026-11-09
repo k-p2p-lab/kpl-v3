@@ -280,7 +280,9 @@ func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
 		agents = append(agents, agent)
 	}
 	nodes := make([]nodeMetricLabels, 0, len(c.state.nodes))
+	hotIDs := make(map[string]bool, len(c.state.nodes))
 	for _, node := range c.state.nodes {
+		hotIDs[node.ID] = true
 		nodes = append(nodes, nodeMetricLabels{node.RunID, node.AgentID, node.Group, node.Role, node.Type, node.State})
 	}
 	experiments := make([]model.Experiment, 0, len(c.state.experiments))
@@ -306,6 +308,10 @@ func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
 	counts := make(map[nodeMetricLabels]int, len(nodes))
 	for _, node := range nodes {
 		counts[node]++
+	}
+	if err := c.state.historicalMetricCounts(hotIDs, func(labels nodeMetricLabels, count int) error { counts[labels] += count; return nil }); err != nil {
+		ch <- prometheus.NewInvalidMetric(c.nodes, err)
+		return
 	}
 	for labels, count := range counts {
 		ch <- prometheus.MustNewConstMetric(c.nodes, prometheus.GaugeValue, float64(count), labels.runID, labels.agentID, labels.group, labels.role, labels.nodeType, labels.state)

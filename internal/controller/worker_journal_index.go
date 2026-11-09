@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,12 +35,46 @@ func journalDataChecksum(data []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// The caller already encoded and size-checked this bounded intent. Persist
+// those exact bytes instead of base64-encoding the raw journal a second time.
+func writeJournalIntent(root *os.Root, encoded []byte) error {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	staged := &stagedAnalysisJSON{root: root, temp: ".analysis-" + hex.EncodeToString(nonce[:]) + ".tmp"}
+	defer staged.discard()
+	file, err := root.OpenFile(staged.temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	data := append(encoded, '\n')
+	if n, writeErr := file.Write(data); writeErr != nil {
+		err = writeErr
+	} else if n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if err = errors.Join(err, file.Close()); err != nil {
+		return err
+	}
+	return staged.publish(journalPendingFile)
+}
+
 // Every accepted identity is disk backed. The pending transaction is a bounded
 // write-ahead record for one ingress batch, bridging raw-log fsync and index
 // commit without replaying the complete journal in the persistent service.
 func openJournalIndex(directory string) (*os.Root, *bolt.DB, error) {
-	if err := os.MkdirAll(directory, 0755); err != nil {
-		return nil, nil, err
+	return openJournalIndexMode(directory, false)
+}
+
+func openJournalIndexMode(directory string, readOnly bool) (*os.Root, *bolt.DB, error) {
+	if !readOnly {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return nil, nil, err
+		}
 	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
@@ -52,17 +87,19 @@ func openJournalIndex(directory string) (*os.Root, *bolt.DB, error) {
 		root.Close()
 		return nil, nil, err
 	}
-	db, err := bolt.Open(filepath.Join(directory, journalIndexFile), 0600, &bolt.Options{Timeout: time.Second, OpenFile: func(_ string, flag int, mode os.FileMode) (*os.File, error) {
+	db, err := bolt.Open(filepath.Join(directory, journalIndexFile), 0600, &bolt.Options{Timeout: time.Second, ReadOnly: readOnly, OpenFile: func(_ string, flag int, mode os.FileMode) (*os.File, error) {
 		return root.OpenFile(journalIndexFile, flag, mode)
 	}})
 	if err != nil {
 		root.Close()
 		return nil, nil, err
 	}
-	if err := syncRunDirectory(root); err != nil {
-		db.Close()
-		root.Close()
-		return nil, nil, err
+	if !readOnly {
+		if err := syncRunDirectory(root); err != nil {
+			db.Close()
+			root.Close()
+			return nil, nil, err
+		}
 	}
 	return root, db, nil
 }
@@ -187,37 +224,47 @@ func recoverJournalAppend(root *os.Root, db *bolt.DB) ([]model.TraceEvent, error
 		}
 		events = append(events, event)
 	}
+	if err := commitJournalAppend(root, db, pending, fileIntent); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// The intent must already be durable. Normal ingress retains the decoded
+// events; crash recovery validates and decodes the saved intent before using
+// this same raw-log, index-commit and intent-removal boundary.
+func commitJournalAppend(root *os.Root, db *bolt.DB, pending pendingJournalAppend, fileIntent bool) error {
 	file, err := root.OpenFile("events.jsonl", os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !info.Mode().IsRegular() || info.Size() < pending.Offset || info.Size() > pending.Offset+int64(len(pending.Data)) {
-		return nil, errors.New("pending telemetry source boundary changed")
+		return errors.New("pending telemetry source boundary changed")
 	}
 	length := info.Size() - pending.Offset
 	if length != 0 {
 		present := make([]byte, int(length))
 		if _, err := file.ReadAt(present, pending.Offset); err != nil || !bytes.Equal(present, pending.Data[:length]) {
-			return nil, errors.New("pending telemetry prefix differs from its durable intent")
+			return errors.New("pending telemetry prefix differs from its durable intent")
 		}
 	}
 	if length < int64(len(pending.Data)) {
 		if n, err := file.WriteAt(pending.Data[length:], info.Size()); err != nil {
-			return nil, err
+			return err
 		} else if n != len(pending.Data)-int(length) {
-			return nil, io.ErrShortWrite
+			return io.ErrShortWrite
 		}
 	}
 	if err := errors.Join(file.Sync(), syncRunDirectory(root)); err != nil {
-		return nil, err
+		return err
 	}
 	if err := file.Close(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
 		bucket := journalActiveBucket(tx)
@@ -234,17 +281,17 @@ func recoverJournalAppend(root *os.Root, db *bolt.DB) ([]model.TraceEvent, error
 		}
 		return tx.Bucket([]byte("meta")).Delete([]byte("pending"))
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	if fileIntent {
 		if err := root.Remove(journalPendingFile); err != nil {
-			return nil, err
+			return err
 		}
 		if err := syncRunDirectory(root); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return events, nil
+	return nil
 }
 
 func (s *state) appendIndexedJournalLocked(id string, events []model.TraceEvent) ([]model.TraceEvent, error) {
@@ -290,6 +337,9 @@ func (s *state) appendIndexedJournalLocked(id string, events []model.TraceEvent)
 	}
 	offset := int64(0)
 	if info, err := root.Stat("events.jsonl"); err == nil {
+		if !info.Mode().IsRegular() {
+			return recovered, errors.New("telemetry source is not a regular file")
+		}
 		offset = info.Size()
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return recovered, err
@@ -302,14 +352,14 @@ func (s *state) appendIndexedJournalLocked(id string, events []model.TraceEvent)
 	if len(encoded) >= journalPendingLimit {
 		return recovered, errors.New("telemetry append intent exceeds its bounded batch limit")
 	}
-	if err := writeAnalysisJSON(root, journalPendingFile, pending); err != nil {
+	if err := writeJournalIntent(root, encoded); err != nil {
 		return recovered, fmt.Errorf("persist telemetry append intent: %w", err)
 	}
-	committed, err := recoverJournalAppend(root, db)
-	if err == nil {
-		s.markRunArchiveDirty(id)
+	if err := commitJournalAppend(root, db, pending, true); err != nil {
+		return recovered, err
 	}
-	return append(recovered, committed...), err
+	s.markRunArchiveDirty(id)
+	return append(recovered, accepted...), nil
 }
 
 // Caller holds persistMu. Archive rotation and worker cursors call this before
@@ -325,6 +375,28 @@ func (s *state) recoverPendingJournalLocked(id string) error {
 		return nil
 	} else if err != nil {
 		return err
+	}
+	if _, pendingErr := os.Lstat(filepath.Join(path, journalPendingFile)); errors.Is(pendingErr, os.ErrNotExist) {
+		// A cursor or snapshot read normally has no transaction to recover.
+		// Read-only bbolt opens neither rebuild its freelist nor sync the Run
+		// directory. Still inspect the old in-database intent for compatibility.
+		root, db, err := openJournalIndexMode(path, true)
+		if err != nil {
+			return err
+		}
+		legacyPending := false
+		err = db.View(func(tx *bolt.Tx) error {
+			if meta := tx.Bucket([]byte("meta")); meta != nil {
+				legacyPending = len(meta.Get([]byte("pending"))) != 0
+			}
+			return nil
+		})
+		err = errors.Join(err, db.Close(), root.Close())
+		if err != nil || !legacyPending {
+			return err
+		}
+	} else if pendingErr != nil {
+		return pendingErr
 	}
 	root, db, err := openJournalIndex(path)
 	if err != nil {

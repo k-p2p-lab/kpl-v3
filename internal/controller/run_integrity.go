@@ -79,6 +79,10 @@ func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, p
 	return nil
 }
 func (s *Server) cleanupParticipants(id string) ([]model.Agent, error) {
+	return s.cleanupParticipantsChecked(id, false)
+}
+
+func (s *Server) cleanupParticipantsChecked(id string, requireRecordedDrain bool) ([]model.Agent, error) {
 	var owned []model.Agent
 	data, err := os.ReadFile(filepath.Join(s.config.DataDir, ownershipDirectory, id+".json"))
 	if err == nil {
@@ -100,6 +104,9 @@ func (s *Server) cleanupParticipants(id string) ([]model.Agent, error) {
 	unique := map[string]model.Agent{}
 	for _, agent := range owned {
 		if current, ok := known[agent.ID]; ok && (current.URL == agent.URL || (!agent.StartedAt.IsZero() && current.StartedAt.Equal(agent.StartedAt)) || (current.StartupReconciled && current.StartedAt.After(agent.StartedAt) && sameAgentHost(current, agent))) {
+			if requireRecordedDrain && agent.RunDrain && !current.RunDrain {
+				return nil, fmt.Errorf("Agent %s no longer supports the recorded final telemetry drain; delivery cannot be confirmed", agent.ID)
+			}
 			agent = current
 		}
 		unique[agent.ID+"@"+agent.URL] = agent
@@ -138,6 +145,35 @@ type agentRunDrainPendingError struct {
 
 func (e *agentRunDrainPendingError) Error() string { return e.message }
 
+// Keep the displayed failure list short without hiding structured evidence from
+// callers that must decide whether final telemetry is still pending.
+type runTelemetryDrainError struct {
+	message string
+	causes  []error
+}
+
+func (e *runTelemetryDrainError) Error() string   { return e.message }
+func (e *runTelemetryDrainError) Unwrap() []error { return e.causes }
+
+// Only an explicit positive Agent report establishes an outstanding delivery
+// obligation. A generic incomplete result or a transport error is not proof.
+func hasPendingRunTelemetry(err error) bool {
+	if pending, ok := err.(*agentRunDrainPendingError); ok {
+		return pending.remaining > 0
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, cause := range wrapped.Unwrap() {
+			if hasPendingRunTelemetry(cause) {
+				return true
+			}
+		}
+	case interface{ Unwrap() error }:
+		return hasPendingRunTelemetry(wrapped.Unwrap())
+	}
+	return false
+}
+
 func parseRunDrainPending(data []byte) *agentRunDrainPendingError {
 	var response struct {
 		Error           string `json:"error"`
@@ -170,7 +206,7 @@ func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model
 	for {
 		if err := ctx.Err(); err != nil {
 			if lastPending != nil {
-				return fmt.Errorf("%w; last Agent report: %s", err, lastPending)
+				return fmt.Errorf("%w; last Agent report: %w", err, lastPending)
 			}
 			return err
 		}
@@ -189,14 +225,19 @@ func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model
 		var pending *agentRunDrainPendingError
 		if !errors.As(err, &pending) {
 			if ctx.Err() != nil && lastPending != nil {
-				return fmt.Errorf("%w; last Agent report: %s", ctx.Err(), lastPending)
+				return fmt.Errorf("%w; last Agent report: %w", ctx.Err(), lastPending)
+			}
+			if lastPending != nil {
+				return fmt.Errorf("%w; last Agent report: %w", err, lastPending)
 			}
 			return err
 		}
-		lastPending = pending
+		if pending.remaining > 0 || lastPending == nil {
+			lastPending = pending
+		}
 		s.logger.Info("waiting for final Agent telemetry", "run", id, "agent", agent.ID, "remaining_events", pending.remaining)
 		if err := sleepContext(ctx, runDrainRetryDelay); err != nil {
-			return fmt.Errorf("%w; last Agent report: %s", err, lastPending)
+			return fmt.Errorf("%w; last Agent report: %w", err, lastPending)
 		}
 	}
 }
@@ -207,7 +248,7 @@ func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
 		ctx, cancel = context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
 	}
-	agents, err := s.cleanupParticipants(id)
+	agents, err := s.cleanupParticipantsChecked(id, true)
 	if err != nil {
 		return err
 	}
@@ -240,12 +281,14 @@ func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
 	}
 	workers.Wait()
 	var failures []error
+	var causes []error
 	count := 0
 	for index, err := range errorsByAgent {
 		if err == nil {
 			continue
 		}
 		count++
+		causes = append(causes, err)
 		s.logger.Warn("final Agent telemetry drain failed", "run", id, "agent", capable[index].ID, "error", err)
 		if len(failures) < 4 {
 			failures = append(failures, err)
@@ -254,7 +297,10 @@ func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
 	if count > len(failures) {
 		failures = append(failures, fmt.Errorf("%d additional Agents failed final log collection; inspect Controller logs", count-len(failures)))
 	}
-	return errors.Join(failures...)
+	if len(causes) == 0 {
+		return nil
+	}
+	return &runTelemetryDrainError{message: errors.Join(failures...).Error(), causes: causes}
 }
 func (s *Server) flushRunSources(id string) error {
 	root, err := s.analysisDirectory(id)

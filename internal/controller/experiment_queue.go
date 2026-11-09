@@ -78,6 +78,7 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 				}
 				s.updateExperiment(id, func(run *model.Experiment) {
 					run.CleanupState, run.CleanupError = "complete", ""
+					run.TelemetryPending = false
 					// Preserve already incomplete evidence from a failed run.
 					if run.DataState == "collecting" {
 						run.DataState = "complete"

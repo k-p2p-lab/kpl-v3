@@ -81,7 +81,18 @@ func propagationHistograms(samples []propagationSample) map[propagationSeriesKey
 		for _, bound := range propagationBounds {
 			if sample.seconds <= bound {
 				histogram.buckets[bound]++
+				break
 			}
+		}
+	}
+	// Bounds are ordered. Count a sample once in its first matching bucket,
+	// then construct the cumulative buckets once per series instead of doing
+	// up to len(propagationBounds) floating-point map writes for every receipt.
+	for _, histogram := range histograms {
+		var cumulative uint64
+		for _, bound := range propagationBounds {
+			cumulative += histogram.buckets[bound]
+			histogram.buckets[bound] = cumulative
 		}
 	}
 	return histograms

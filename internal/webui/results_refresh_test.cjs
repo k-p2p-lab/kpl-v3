@@ -495,6 +495,18 @@ test('retired attempts stay excluded after their replacement is deleted and stal
 });
 
 
+test('confirmed pending final logs remain visible after container cleanup and keep historical incompleteness',()=>{
+  const run={id:'pending-final',name:'Pending final logs',state:'failed',cleanupState:'complete',dataState:'incomplete',telemetryPending:true};
+  const f=fixture([run]);
+  assert.match(f.element('#savedResultsRows').innerHTML,/Final logs are pending; queued work waits for delivery/);
+  assert.match(f.element('#savedResultsRows').innerHTML,/Experiment data may be incomplete/);
+  run.telemetryPending=false;
+  f.api.renderSavedResults();
+  assert.doesNotMatch(f.element('#savedResultsRows').innerHTML,/Final logs are pending/);
+  assert.match(f.element('#savedResultsRows').innerHTML,/Experiment data may be incomplete/);
+  assert.equal(run.dataState,'incomplete');
+});
+
 test('normal recording and cleanup use neutral activity, with no pending warning', () => {
   const cases = [
     { state: 'running', cleanupState: 'pending', dataState: 'collecting', label: 'Recording experiment data' },

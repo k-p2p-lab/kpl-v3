@@ -16,6 +16,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/controller"
 	"github.com/k-p2p-lab/kpl-v3/internal/experimentnet"
 	"github.com/k-p2p-lab/kpl-v3/internal/peer"
+	"github.com/k-p2p-lab/kpl-v3/internal/runtimehealth"
 )
 
 var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer"}
@@ -170,6 +171,11 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		PrometheusPort:      parsedPrometheusPort,
 		GrafanaPort:         parsedGrafanaPort,
 	}, logger)
+	// Keep diagnostics alive during graceful finalization after the service
+	// context is canceled; stop them when the runtime actually returns.
+	healthCtx, stopHealth := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopHealth()
+	go runtimehealth.Run(healthCtx, logger, "controller")
 	return server.Run(ctx)
 }
 
@@ -230,6 +236,9 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	healthCtx, stopHealth := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopHealth()
+	go runtimehealth.Run(healthCtx, logger, "agent")
 	return server.Run(ctx)
 }
 

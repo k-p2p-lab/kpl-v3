@@ -333,15 +333,15 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			return errResultBusy
 		}
 		s.state.mu.RLock()
-		live := false
+		busy := s.state.experiments[id].TelemetryPending
 		for node := range s.state.activeNodesLocked() {
 			if node.RunID == id {
-				live = true
+				busy = true
 				break
 			}
 		}
 		s.state.mu.RUnlock()
-		if live {
+		if busy {
 			return errResultBusy
 		}
 		root, err := s.analysisDirectory(id)
@@ -365,6 +365,12 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		metadata.close()
 		if err != nil {
 			return err
+		}
+		// A terminal Run can still be waiting for the Agent's acknowledged tail.
+		// Keep it local until delivery completes, without blocking unrelated Runs
+		// whose sealed payload can free space for that recovery.
+		if result.TelemetryPending {
+			return errResultBusy
 		}
 		if err := s.applyBatchExtension(&result); err != nil {
 			return err
@@ -683,6 +689,27 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		return err
 	}
 	defer local.Close()
+	// State may have changed while copying outside the Controller locks. A
+	// newly known delivery backlog must retain its local payload even when the
+	// captured objects have already been published remotely.
+	s.state.mu.RLock()
+	pending := s.state.experiments[id].TelemetryPending
+	s.state.mu.RUnlock()
+	if pending {
+		return errResultBusy
+	}
+	metadata, err := openResultFile(local, "experiment.json")
+	if err != nil {
+		return err
+	}
+	result, err := readResultMetadata(metadata, id, false)
+	metadata.close()
+	if err != nil {
+		return err
+	}
+	if result.TelemetryPending {
+		return errResultBusy
+	}
 	currentFingerprint, err := sourceFingerprintAt(local, manifest)
 	if err != nil {
 		return err

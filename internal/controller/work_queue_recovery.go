@@ -12,6 +12,9 @@ import (
 )
 
 func needsRecoveredCleanup(run model.Experiment) bool {
+	if run.TelemetryPending {
+		return true
+	}
 	if run.CleanupState == "complete" {
 		return false
 	}

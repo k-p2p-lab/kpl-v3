@@ -144,6 +144,7 @@ type Experiment struct {
 	ControllerVersion string  `json:"controllerVersion,omitempty"`
 	CleanupState      string  `json:"cleanupState,omitempty"`
 	DataState         string  `json:"dataState,omitempty"`
+	TelemetryPending  bool    `json:"telemetryPending,omitempty"`
 	IntegrityError    string  `json:"integrityError,omitempty"`
 	CleanupError      string  `json:"cleanupError,omitempty"`
 	Agents            []Agent `json:"agents,omitempty"`

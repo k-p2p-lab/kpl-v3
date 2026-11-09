@@ -239,6 +239,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		run.ControllerVersion = model.BuildVersion()
 		run.CleanupState = "pending"
 		run.DataState = "collecting"
+		run.TelemetryPending = false
 	})
 	monitorDone := make(chan struct{})
 	defer close(monitorDone)
@@ -433,6 +434,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		resultErr = errors.Join(resultErr, errors.New(integrity))
 	}
 	finished := time.Now().UTC()
+	telemetryPending := hasPendingRunTelemetry(dataErr)
 	s.updateExperiment(experiment.ID, func(current *model.Experiment) {
 		current.FinishedAt = finished
 		current.PhaseName = ""
@@ -442,6 +444,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 			current.CleanupError = cleanupErr.Error()
 		}
 		current.DataState = "complete"
+		current.TelemetryPending = telemetryPending
 		for _, agent := range current.Agents {
 			if !agent.RunDrain {
 				current.DataState = "unverified"
@@ -651,7 +654,7 @@ func (s *Server) waitReadyUntil(ctx context.Context, runID string, generation ui
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("ready barrier timed out for group %q in generation %d: %d/%d ready, %d failed: %w", phase.Group, generation, ready, total, failed, ctx.Err())
+				return s.readyBarrierTimeoutError(runID, generation, phase, ctx.Err())
 			}
 			return ctx.Err()
 		case <-ticker.C:

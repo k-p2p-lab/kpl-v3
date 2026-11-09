@@ -227,7 +227,7 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 		s.state.mu.Lock()
 		for _, experiment := range experiments {
 			run := s.state.experiments[experiment.ID]
-			if !run.StartedAt.IsZero() && run.CleanupState != "" && run.CleanupState != "complete" {
+			if run.TelemetryPending || !run.StartedAt.IsZero() && run.CleanupState != "" && run.CleanupState != "complete" {
 				s.rememberQueueCleanupLocked(run.ID)
 			}
 			delete(s.state.runTimings, experiment.ID)

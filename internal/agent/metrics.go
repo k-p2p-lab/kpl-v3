@@ -16,7 +16,9 @@ import (
 )
 
 func (s *Server) metricsHandler() http.Handler {
-	return promhttp.HandlerFor(newAgentMetricsRegistry(s), promhttp.HandlerOpts{})
+	// A collector can wait for a durable telemetry write after its client has
+	// timed out. Keep those actual collections bounded until storage recovers.
+	return promhttp.HandlerFor(newAgentMetricsRegistry(s), promhttp.HandlerOpts{MaxRequestsInFlight: 2})
 }
 
 // metricsOnlyHandler deliberately exposes no Agent control or status routes.

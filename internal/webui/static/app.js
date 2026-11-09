@@ -1763,6 +1763,7 @@ function resultIntegrityMarkup(run) {
   const warnings = [];
   if (run.cleanupState === "failed") warnings.push("Peer cleanup failed.");
   else if (!active && ["pending", "running"].includes(run.cleanupState)) warnings.push("Peer cleanup has not been confirmed.");
+  if (run.telemetryPending) warnings.push("Final logs are pending; queued work waits for delivery.");
   if (run.dataState === "incomplete") warnings.push("Experiment data may be incomplete.");
   else if (run.dataState === "unverified" || (!active && run.dataState === "collecting" && run.cleanupState !== "retained")) warnings.push("Data completeness has not been verified.");
   if (run.cleanupError) warnings.push(run.cleanupError);

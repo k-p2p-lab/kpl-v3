@@ -284,6 +284,7 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 		next.StopRequested = false
 		next.ControllerVersion = ""
 		next.CleanupState, next.DataState, next.IntegrityError, next.CleanupError = "pending", "pending", "", ""
+		next.TelemetryPending = false
 		next.Agents = nil
 		next.State, next.Error, next.PhaseName = "queued", "", ""
 		next.Phase, next.ActiveJobs, next.CompletedJobs, next.FailedJobs, next.CanceledJobs = 0, 0, 0, 0, 0

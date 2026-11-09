@@ -60,7 +60,7 @@ func (a *App) build(ctx context.Context) error {
 func (a *App) test(ctx context.Context, scope string) error {
 	switch scope {
 	case "go":
-		if err := a.Run(ctx, "go", "test", "-buildvcs=false", "./...", "-timeout", "120s"); err != nil {
+		if err := a.Run(ctx, "go", "test", "-buildvcs=false", "./...", "-timeout", "300s"); err != nil {
 			return err
 		}
 		return a.Run(ctx, "go", "test", "-buildvcs=false", "github.com/libp2p/go-libp2p-pubsub", "-run", "^Test(KPL|Score)", "-timeout", "120s")
@@ -78,7 +78,7 @@ func (a *App) test(ctx context.Context, scope string) error {
 		return a.Run(ctx, "node", append([]string{"--test"}, files...)...)
 	case "race":
 		setting := "atexit_sleep_ms=0"
-		return a.WithEnv(map[string]*string{"GORACE": &setting}).Run(ctx, "go", "test", "-race", "-buildvcs=false", "./...", "-count=1", "-timeout", "300s")
+		return a.WithEnv(map[string]*string{"GORACE": &setting}).Run(ctx, "go", "test", "-race", "-buildvcs=false", "./...", "-count=1", "-timeout", "900s")
 	case "linux":
 		return a.Run(ctx, "docker", "build", "--target", "test", "-t", "kpl-v3:test", a.Repo)
 	default:

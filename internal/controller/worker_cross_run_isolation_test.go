@@ -38,6 +38,14 @@ phases:
     placement: random
     lifetime: {model: exponential, mean: 45m, min: 30m, max: 60m}
   - {action: wait-ready, group: target, minCount: 500, readyRatio: 1, timeout: 30s}
+  - {action: leave, group: target, count: 100, parallel: true, parallelism: 32}
+  - {action: join, group: target, type: full, count: 100, parallel: true, parallelism: 32, placement: random, lifetime: {model: exponential, mean: 45m, min: 30m, max: 60m}}
+  # The barrier denominator retains stopped Nodes: 500 ready of 600 known.
+  - {action: wait-ready, group: target, minCount: 600, readyRatio: 0.8333333333333334, timeout: 30s}
+  - {action: leave, group: target, count: 100, parallel: true, parallelism: 32}
+  - {action: join, group: target, type: full, count: 100, parallel: true, parallelism: 32, placement: random, lifetime: {model: exponential, mean: 45m, min: 30m, max: 60m}}
+  # Each replacement wave must restore 500 ready, now of 700 known Nodes.
+  - {action: wait-ready, group: target, minCount: 700, readyRatio: 0.7142857142857143, timeout: 30s}
 `
 const crossRunDirtyScenario = `version: 4
 name: failed-before-target
@@ -60,28 +68,36 @@ type crossRunMockAgent struct {
 	drained        map[string]bool
 }
 type crossRunCluster struct {
-	t             *testing.T
-	ctx           context.Context
-	server        *Server
-	mu            sync.Mutex
-	agents        map[string]*crossRunMockAgent
-	commands      []*exec.Cmd
-	samples       map[string]map[string]crossRunSample
-	created       map[string]map[string]model.Node
-	receipts      map[string][sha256.Size]byte
-	events        map[string][]model.TraceEvent
-	peak          map[string]int
-	unknownID     string
-	busyObserved  bool
-	targetRun     string
-	targetReady   chan struct{}
-	releaseTarget chan struct{}
-	releaseOnce   sync.Once
+	t              *testing.T
+	ctx            context.Context
+	server         *Server
+	mu             sync.Mutex
+	agents         map[string]*crossRunMockAgent
+	commands       []*exec.Cmd
+	samples        map[string]map[string]crossRunSample
+	created        map[string]map[string]model.Node
+	receipts       map[string][sha256.Size]byte
+	events         map[string][]model.TraceEvent
+	peak           map[string]int
+	left           map[string]int
+	unknownID      string
+	busyObserved   bool
+	targetRun      string
+	targetReady    chan struct{}
+	releaseTarget  chan struct{}
+	releaseOnce    sync.Once
+	turnoverReady  [2]chan struct{}
+	turnoverACK    [2]chan struct{}
+	turnoverOnce   [2]sync.Once
+	stopBackground func()
 }
 
 func newCrossRunCluster(t *testing.T, ctx context.Context) *crossRunCluster {
 	t.Helper()
-	f := &crossRunCluster{t: t, ctx: ctx, agents: make(map[string]*crossRunMockAgent), samples: make(map[string]map[string]crossRunSample), created: make(map[string]map[string]model.Node), receipts: make(map[string][sha256.Size]byte), events: make(map[string][]model.TraceEvent), peak: make(map[string]int), targetReady: make(chan struct{}), releaseTarget: make(chan struct{})}
+	f := &crossRunCluster{t: t, ctx: ctx, agents: make(map[string]*crossRunMockAgent), samples: make(map[string]map[string]crossRunSample), created: make(map[string]map[string]model.Node), receipts: make(map[string][sha256.Size]byte), events: make(map[string][]model.TraceEvent), peak: make(map[string]int), left: make(map[string]int), targetReady: make(chan struct{}), releaseTarget: make(chan struct{})}
+	for i := range f.turnoverReady {
+		f.turnoverReady[i], f.turnoverACK[i] = make(chan struct{}), make(chan struct{})
+	}
 	f.server = New(ServerConfig{DataDir: t.TempDir(), RunWorkers: true}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	f.server.client.Timeout = time.Minute // The last ACK is explicitly gated, not a latency assertion.
 	f.server.workerCommand = func(kind string) *exec.Cmd {
@@ -119,11 +135,17 @@ func newCrossRunCluster(t *testing.T, ctx context.Context) *crossRunCluster {
 		}
 	}()
 	go func() { defer close(summaryDone); f.server.runWorkerSummaryLoop(loopCtx) }()
-	t.Cleanup(func() {
-		f.releaseOnce.Do(func() { close(f.releaseTarget) })
+	f.stopBackground = func() {
 		stop()
 		<-heartbeatDone
 		<-summaryDone
+	}
+	t.Cleanup(func() {
+		f.releaseOnce.Do(func() { close(f.releaseTarget) })
+		for i := range f.turnoverACK {
+			f.turnoverOnce[i].Do(func() { close(f.turnoverACK[i]) })
+		}
+		f.stopBackground()
 		f.server.cancelMu.Lock()
 		for _, cancel := range f.server.cancels {
 			cancel()
@@ -156,21 +178,30 @@ func (f *crossRunCluster) serveAgent(a *crossRunMockAgent, w http.ResponseWriter
 		f.createAgentNode(a, w, r)
 		return
 	}
+	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/nodes/") {
+		id := strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/")
+		f.mu.Lock()
+		node, exists := a.nodes[id]
+		if exists {
+			f.retireMockNode(a, node)
+			f.left[node.RunID]++
+		}
+		_, stopped := a.history[id]
+		f.mu.Unlock()
+		if !exists && !stopped {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/runs/") {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/runs/"), "/nodes")
 		f.mu.Lock()
 		a.fences[id] = ^uint64(0)
-		for key, node := range a.nodes {
+		for _, node := range a.nodes {
 			if node.RunID == id {
-				node.State = model.NodeStopped
-				node.LastSeen = time.Now().UTC()
-				node.Metadata = map[string]string{"cleanupComplete": "true"}
-				node.PeerScores = map[string]float64{}
-				for i := range 32 {
-					node.PeerScores[fmt.Sprintf("historical-score-%d", i)] = float64(i)
-				}
-				a.history[key] = node
-				delete(a.nodes, key)
+				f.retireMockNode(a, node)
 			}
 		}
 		f.mu.Unlock()
@@ -182,6 +213,20 @@ func (f *crossRunCluster) serveAgent(a *crossRunMockAgent, w http.ResponseWriter
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// Caller holds f.mu. Terminal evidence remains available through every later
+// full Agent report, including while the next Run is actively creating Peers.
+func (f *crossRunCluster) retireMockNode(a *crossRunMockAgent, node model.Node) {
+	node.State = model.NodeStopped
+	node.LastSeen = time.Now().UTC()
+	node.Metadata = map[string]string{"cleanupComplete": "true"}
+	node.PeerScores = map[string]float64{}
+	for i := range 32 {
+		node.PeerScores[fmt.Sprintf("historical-score-%d", i)] = float64(i)
+	}
+	a.history[node.ID] = node
+	delete(a.nodes, node.ID)
 }
 
 func (f *crossRunCluster) createAgentNode(a *crossRunMockAgent, w http.ResponseWriter, r *http.Request) {
@@ -217,6 +262,11 @@ func (f *crossRunCluster) createAgentNode(a *crossRunMockAgent, w http.ResponseW
 	}
 	node, exists := a.nodes[request.ID]
 	gate := false
+	turnover := -1
+	if !exists {
+		// An exact replay of an individually stopped Peer must not resurrect it.
+		node, exists = a.history[request.ID]
+	}
 	if !exists {
 		now := time.Now().UTC()
 		node = model.Node{ID: request.ID, RunID: request.RunID, Generation: request.Generation, AgentID: a.identity.ID, Group: request.Group, Type: request.Type, Role: request.Role, Profile: request.Profile, State: model.NodeReady, StartedAt: now, LastSeen: now}
@@ -241,6 +291,10 @@ func (f *crossRunCluster) createAgentNode(a *crossRunMockAgent, w http.ResponseW
 			f.targetRun = node.RunID
 			gate = true
 			close(f.targetReady)
+		}
+		if request.Group == "target" && (len(f.created[node.RunID]) == 600 || len(f.created[node.RunID]) == 700) {
+			turnover = (len(f.created[node.RunID]) - 600) / 100
+			close(f.turnoverReady[turnover])
 		}
 	}
 	unknown := request.ID == f.unknownID
@@ -270,6 +324,13 @@ func (f *crossRunCluster) createAgentNode(a *crossRunMockAgent, w http.ResponseW
 	if gate {
 		select {
 		case <-f.releaseTarget:
+		case <-f.ctx.Done():
+			return
+		}
+	}
+	if turnover >= 0 {
+		select {
+		case <-f.turnoverACK[turnover]:
 		case <-f.ctx.Done():
 			return
 		}
@@ -462,6 +523,33 @@ func (f *crossRunCluster) lateRunPayload(old model.Experiment, current model.Exp
 	if err := f.server.state.appendEvents(model.EventBatch{AgentID: oldNode.AgentID, Events: []model.TraceEvent{event}}); err != nil {
 		f.t.Fatal(err)
 	}
+	// An out-of-order historical status page can contain previously unseen
+	// nonterminal A records. It must not recreate A's retired runtime indexes,
+	// consume B's reservations, or make B's ready population disappear.
+	f.mu.Lock()
+	owner.LastSeen = time.Now().UTC()
+	owner.ActiveNodes = len(f.agents[owner.ID].nodes)
+	f.mu.Unlock()
+	late := []model.Node{
+		{ID: old.ID + "-late-ready-unseen", RunID: old.ID, Generation: 1, AgentID: owner.ID, Group: "dirty", Type: "full", State: model.NodeReady, StartedAt: owner.LastSeen, LastSeen: owner.LastSeen},
+		{ID: old.ID + "-late-starting-unseen", RunID: old.ID, Generation: 1, AgentID: owner.ID, Group: "dirty", Type: "full", State: model.NodeStarting, StartedAt: owner.LastSeen, LastSeen: owner.LastSeen},
+	}
+	if err := f.server.state.heartbeat(model.AgentHeartbeat{Agent: owner, Nodes: late, Partial: true}); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.server.verifyRetiredRuntime(old.ID); err != nil {
+		f.t.Fatal(err)
+	}
+	f.server.state.mu.RLock()
+	for _, node := range late {
+		_, hot := f.server.state.nodes[node.ID]
+		_, reported := f.server.state.nodeReportTimes[node.ID]
+		_, versioned := f.server.state.nodeVersions[node.ID]
+		if hot || reported || versioned {
+			f.t.Errorf("late %s A record recreated runtime state: hot=%v report=%v version=%v", node.State, hot, reported, versioned)
+		}
+	}
+	f.server.state.mu.RUnlock()
 }
 
 func (f *crossRunCluster) target(dirty *model.Experiment) ([]crossRunSample, crossRunMetricCounts, crossRunBaseline) {
@@ -501,6 +589,33 @@ func (f *crossRunCluster) target(dirty *model.Experiment) ([]crossRunSample, cro
 		f.t.Fatalf("old Run traffic affected B: ready=%d/%d failed=%d reservation=%d/%d unknown=%d/%d metrics=%+v/%+v", ready, total, failed, beforeReservations, afterReservations, beforeUnknown, afterUnknown, crossRunCounts(beforeSummary.Metrics), crossRunCounts(afterSummary.Metrics))
 	}
 	f.releaseOnce.Do(func() { close(f.releaseTarget) })
+	for wave := range f.turnoverReady {
+		select {
+		case <-f.turnoverReady[wave]:
+		case <-f.ctx.Done():
+			f.t.Fatalf("replacement wave %d did not restore 500 Peers: %v", wave+1, f.ctx.Err())
+		}
+		if err := f.server.refreshAgentState(f.ctx, first.ID); err != nil {
+			f.t.Fatal(err)
+		}
+		ready, total, failed = f.server.readyCount(first.ID, 1, "target", "full")
+		f.mu.Lock()
+		left, live := f.left[first.ID], 0
+		for _, agent := range f.agents {
+			for _, node := range agent.nodes {
+				if node.RunID == first.ID {
+					live++
+				}
+			}
+		}
+		f.mu.Unlock()
+		wantTotal, wantLeft := 600+100*wave, 100*(wave+1)
+		if ready != 500 || total != wantTotal || failed != 0 || live != 500 || left != wantLeft {
+			f.t.Fatalf("replacement wave %d clipped or overlapped population: ready=%d total=%d failed=%d live=%d left=%d", wave+1, ready, total, failed, live, left)
+		}
+		f.t.Logf("B replacement wave=%d ready=%d known=%d live=%d removed=%d", wave+1, ready, total, live, left)
+		f.turnoverOnce[wave].Do(func() { close(f.turnoverACK[wave]) })
+	}
 	run := f.awaitRun(first.ID)
 	if run.State != "completed" || run.DataState != "complete" {
 		f.t.Fatalf("B did not finish successfully: %+v", run)
@@ -522,7 +637,7 @@ func (f *crossRunCluster) target(dirty *model.Experiment) ([]crossRunSample, cro
 	peak := f.peak[first.ID]
 	commands := append([]*exec.Cmd(nil), f.commands...)
 	f.mu.Unlock()
-	if peak != 500 || len(samples) != 500 {
+	if peak != 500 || len(samples) != 700 {
 		f.t.Fatalf("B population was clipped: peak=%d samples=%d", peak, len(samples))
 	}
 	for _, cmd := range commands {
@@ -541,11 +656,17 @@ func (f *crossRunCluster) target(dirty *model.Experiment) ([]crossRunSample, cro
 }
 
 func TestWorkerCrossRunIsolationReaches500AfterFailedDenseRun(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	// This is the entire integration fixture's budget, including instrumented
+	// OS subprocesses. Scenario readiness and shutdown deadlines remain 30s.
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 	fresh := newCrossRunCluster(t, ctx)
 	fresh.awaitBaseline("fresh initial")
 	freshSamples, freshMetrics, freshBaseline := fresh.target(nil)
+	// The independent baseline cluster has finished all work. Preserve its
+	// history and measured outcome without replaying its 700 terminal records
+	// throughout the separate failed-A comparison's execution.
+	fresh.stopBackground()
 	dirty := newCrossRunCluster(t, ctx)
 	dirty.awaitBaseline("dirty initial")
 	first, err := dirty.server.StartScenario(ctx, []byte(crossRunDirtyScenario))

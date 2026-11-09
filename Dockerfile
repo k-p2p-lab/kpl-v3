@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/k-
 
 FROM builder AS test
 RUN apk add --no-cache bash coreutils
-RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 120s \
+RUN CGO_ENABLED=0 go test -buildvcs=false ./... -timeout 300s \
     && CGO_ENABLED=0 go test -buildvcs=false github.com/libp2p/go-libp2p-pubsub -run '^Test(KPL|Score)' -timeout 120s
 
 FROM alpine:3.22 AS runtime

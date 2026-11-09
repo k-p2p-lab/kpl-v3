@@ -9,6 +9,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -351,6 +352,7 @@ func (s *state) applyPreparedHeartbeat(h model.AgentHeartbeat, historical map[st
 	releasedReservations := 0
 	metricNodes := make([]model.Node, 0, len(h.Nodes))
 	for _, node := range h.Nodes {
+		previousReportTime := s.nodeReportTimes[node.ID]
 		// Both input timestamps use the Agent's clock. Preserve LastSeen for
 		// status/creation merges, but normalize its age for topology freshness.
 		s.nodeReportTimes[node.ID] = topologyReportTime(now, reportedAt, node.LastSeen)
@@ -390,7 +392,14 @@ func (s *state) applyPreparedHeartbeat(h model.AgentHeartbeat, historical map[st
 				node = old
 			}
 		}
-		s.setNodeLocked(node)
+		if old, exists := s.nodes[node.ID]; exists && confirmedHistoricalNode(old) && !previousReportTime.IsZero() && reflect.DeepEqual(old, node) {
+			// Terminal evidence has no active topology freshness to renew. A
+			// repeated immutable report must not retransmit its dense history to
+			// the Run worker. Keep the paired observation timestamp unchanged too.
+			s.nodeReportTimes[node.ID] = previousReportTime
+		} else {
+			s.setNodeLocked(node)
+		}
 		// Initialize from the merged state, so old live reports cannot recreate
 		// metric baselines for terminal nodes. Marker reads happen after unlock.
 		metricNodes = append(metricNodes, node)

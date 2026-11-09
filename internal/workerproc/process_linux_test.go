@@ -3,6 +3,7 @@
 package workerproc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -76,9 +77,19 @@ func TestWorkerProcessHelper(t *testing.T) {
 		if kind == "reject-bootstrap" {
 			return nil, errors.New("fixture bootstrap rejected")
 		}
+		switch kind {
+		case "reject-bootstrap-canceled":
+			return nil, context.Canceled
+		case "reject-bootstrap-closed":
+			return nil, ErrClosed
+		case "reject-bootstrap-protocol":
+			return nil, ErrProtocol
+		case "reject-bootstrap-joined":
+			return nil, errors.Join(errors.New("fixture bootstrap rejected"), context.Canceled)
+		}
 		if kind == "bootstrap-callback" {
 			if err := peer.Call(factoryCtx, "bootstrap-block", nil, nil); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("bootstrap callback: %w", err)
 			}
 		}
 		return func(ctx context.Context, method string, body json.RawMessage) (any, error) {
@@ -503,6 +514,8 @@ func TestFailedStartRetainsProcessUntilBootstrapBrokerQuiesces(t *testing.T) {
 	for _, canceled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
 			opts := helperOptions()
+			var workerStderr bytes.Buffer
+			opts.Stderr = &workerStderr
 			opts.GracePeriod, opts.KillWait = 10*time.Millisecond, 30*time.Millisecond
 			opts.HandshakeTimeout = time.Second
 			ctx, cancel := context.WithCancel(t.Context())
@@ -559,7 +572,7 @@ func TestFailedStartRetainsProcessUntilBootstrapBrokerQuiesces(t *testing.T) {
 				t.Fatal("finished bootstrap broker did not release its process")
 			}
 			if err := result.process.Close(); err != nil {
-				t.Fatal(err)
+				t.Fatalf("close bootstrapping worker: %v; stderr: %s", err, workerStderr.String())
 			}
 			assertReclaimedPeer(t, result.process.peer)
 		})
@@ -570,5 +583,17 @@ func TestFailedStartReturnsNoOwnerAfterCompleteCleanup(t *testing.T) {
 	process, err := Start(t.Context(), "reject-bootstrap", map[string]any{"runId": "rejected"}, nil, helperOptions())
 	if process != nil || err == nil || errors.Is(err, ErrNotQuiescent) || errors.Is(err, ErrNotReaped) {
 		t.Fatalf("fully reaped initialization failure changed its caller contract: process=%v error=%v", process != nil, err)
+	}
+}
+
+func TestFailedStartPreservesApplicationBootstrapFailures(t *testing.T) {
+	for _, kind := range []string{"reject-bootstrap", "reject-bootstrap-canceled", "reject-bootstrap-closed", "reject-bootstrap-protocol", "reject-bootstrap-joined"} {
+		t.Run(kind, func(t *testing.T) {
+			process, err := Start(t.Context(), kind, map[string]any{"runId": "application-failure"}, nil, helperOptions())
+			var exited *exec.ExitError
+			if process != nil || err == nil || !errors.As(err, &exited) || exited.ExitCode() != 4 || errors.Is(err, ErrNotQuiescent) || errors.Is(err, ErrNotReaped) {
+				t.Fatalf("application bootstrap failure was mistaken for normal disconnect: retained=%t err=%v", process != nil, err)
+			}
+		})
 	}
 }

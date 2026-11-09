@@ -401,6 +401,12 @@ func Serve(ctx context.Context, kind string, factory Factory) error {
 	select {
 	case init := <-ready:
 		if init.err != nil || init.handler == nil {
+			// Closing the supervisor pipes cancels bootstrap callbacks too. The
+			// callback result and peer.done can become ready together; selecting
+			// this branch must preserve the same connection-close classification.
+			if init.err != nil && peer.ctx.Err() != nil && normalClose(init.err) == nil {
+				return normalClose(peer.connectionError())
+			}
 			if init.err == nil {
 				init.err = errors.New("private worker factory returned no handler")
 			}
@@ -413,6 +419,9 @@ func Serve(ctx context.Context, kind string, factory Factory) error {
 		peer.handler = init.handler
 		peer.mu.Unlock()
 		if err := peer.send(peer.ctx, frame{identity: peer.id, Type: "ready"}, true); err != nil {
+			if normalClose(err) == nil {
+				return normalClose(peer.connectionError())
+			}
 			return err
 		}
 	case <-peer.done:
@@ -423,6 +432,24 @@ func Serve(ctx context.Context, kind string, factory Factory) error {
 }
 
 func normalClose(err error) error {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return err
+		}
+		for _, cause := range causes {
+			if normalClose(cause) != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		if normalClose(cause) == nil {
+			return nil
+		}
+		return err
+	}
 	// The peer may notice either pipe first during an ordinary supervisor
 	// shutdown. A callback still writing sees EPIPE where the reader sees EOF.
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) || errors.Is(err, context.Canceled) || errors.Is(err, ErrClosed) || errors.Is(err, os.ErrClosed) {

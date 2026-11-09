@@ -240,7 +240,7 @@ func TestWorkerInventoryDeltaNeverRevivesTerminalHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, stats := poll()
-	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || stats.nodes != 1 {
+	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || stats.nodes != 0 {
 		t.Fatalf("terminal lifecycle changed: %+v %+v", proof, stats)
 	}
 	server.state.mu.RLock()

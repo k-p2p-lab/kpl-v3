@@ -73,13 +73,25 @@ function fixture(api, renderImage = async () => png, options = {}) {
     }),
   };
 }
-async function settle(predicate) {
+async function settle(predicate, nextTurn = () => new Promise(resolve => setTimeout(resolve, 0))) {
+  if (predicate()) return;
   for (let i = 0; i < 40; i++) {
+    // UI polling uses timers. Yield that phase before checking progress,
+    // including work completed on the final permitted turn.
+    await nextTurn();
     if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
   }
   assert.fail("image request did not settle");
 }
+
+test('image fixture checks readiness on its final permitted turn and keeps the turn budget', async () => {
+  let turns = 0;
+  await settle(() => turns === 40, async () => { turns++; });
+  assert.equal(turns, 40);
+  let exhausted = 0;
+  await assert.rejects(settle(() => false, async () => { exhausted++; }), /image request did not settle/);
+  assert.equal(exhausted, 40);
+});
 
 test("retry restores saved-result images after a research rendering failure", async () => {
   const previous = globalThis.KPLResearchTools;
@@ -843,7 +855,7 @@ test('reopening a running verification loads its saved result without submitting
   assert.equal(element('resultImagesDialog').open, false);
 });
 
-test('batch mean summary and charts remain available during source verification', async () => {
+test('batch mean summary and charts remain available during source verification', async (t) => {
   let poll, reads = 0;
   const runs = [sample('first'), sample('second')];
   for (const run of runs) run.result.batchId = 'batch';
@@ -858,6 +870,11 @@ test('batch mean summary and charts remain available during source verification'
     return new Promise(resolve => { poll = resolve; });
   });
   const work = ui.openBatch('batch');
+  t.after(async () => {
+    element('resultImagesDialog').close();
+    poll?.({ ...completed, reused: true });
+    await work;
+  });
   await settle(() => poll);
   assert.equal(element('batchAnalysisSummary').hidden, false);
   assert.match(element('batchAnalysisSummary').innerHTML, /15/);

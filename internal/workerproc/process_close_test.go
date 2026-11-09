@@ -22,4 +22,12 @@ func TestNormalCloseAcceptsPipeDisconnectAndPreservesFaults(t *testing.T) {
 			t.Fatalf("worker/protocol failure was hidden: %v -> %v", wrapped, got)
 		}
 	}
+	for _, err := range []error{errors.Join(ErrProtocol, context.Canceled), errors.Join(errors.New("application failure"), syscall.EPIPE), fmt.Errorf("bootstrap: %w", errors.Join(context.Canceled, errors.New("bootstrap failure")))} {
+		if got := normalClose(err); got != err {
+			t.Fatalf("joined application/protocol failure was hidden by disconnect: %v -> %v", err, got)
+		}
+	}
+	if got := normalClose(errors.Join(context.Canceled, &os.PathError{Op: "write", Path: "private-worker-out", Err: syscall.EPIPE})); got != nil {
+		t.Fatalf("ordinary joined disconnect became an error: %v", got)
+	}
 }

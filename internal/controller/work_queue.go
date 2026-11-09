@@ -68,7 +68,7 @@ func (s *Server) updateQueuePositionsLocked() {
 	for position, slot := range s.experimentQueue {
 		slot.item.Position = position
 		slot.item.State = "queued"
-		if position == 0 {
+		if position == 0 && (slot.opened || !s.summaryRefreshActive) {
 			slot.item.State = "running"
 			if slot.item.StartedAt == nil {
 				started := time.Now().UTC()
@@ -78,6 +78,11 @@ func (s *Server) updateQueuePositionsLocked() {
 		item := slot.item
 		if old, exists := previous[item.ID]; exists {
 			item.Phase, item.Progress = old.Phase, old.Progress
+		}
+		if position == 0 && !slot.opened && s.summaryRefreshActive {
+			item.Phase, item.Progress = "Finishing previous Run metrics", 0
+		} else if item.Phase == "Finishing previous Run metrics" {
+			item.Phase, item.Progress = "", 0
 		}
 		queue = append(queue, item)
 		if slot.batch != nil {
@@ -92,7 +97,7 @@ func (s *Server) updateQueuePositionsLocked() {
 	}
 	s.state.workQueue = queue
 	s.state.mu.Unlock()
-	if len(s.experimentQueue) > 0 && !s.experimentQueue[0].opened {
+	if len(s.experimentQueue) > 0 && !s.experimentQueue[0].opened && !s.summaryRefreshActive {
 		head := s.experimentQueue[0]
 		head.opened = true
 		close(head.ready)

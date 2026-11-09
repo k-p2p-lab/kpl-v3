@@ -100,6 +100,14 @@ func (s *Server) publishWorkerSummary(summary runWorkerSummary) error {
 		return e
 	}
 	complete := summary.SourceRevision != "" || summary.Cursor == currentSize
+	currentEvents, eventSize, err := eventInputAt(root, summary.RunID)
+	if err != nil {
+		return err
+	}
+	complete = complete && summary.EventRevision != "" && summary.EventRevision == currentEvents && summary.Cursor == eventSize
+	// Only the parent can bind a complete projection to the current logical
+	// source. Never trust a child-supplied flag for a partial journal snapshot.
+	summary.EventsComplete = complete
 	summary.SourceRevision = currentRevision
 	s.state.mu.RLock()
 	old, cached := s.state.workerSummaries[summary.RunID]
@@ -170,9 +178,19 @@ func (s *Server) loadWorkerSummaries() error {
 	// no list of all historical summaries is retained in the service heap.
 	return s.state.walkWorkerSummaries(nil, func(summary runWorkerSummary) error {
 		current, err := s.runSourceRevision(summary.RunID)
+		dirty := err != nil || current != summary.SourceRevision || summary.EventRevision == "" || !summary.Retired
+		if summary.Retired && summary.EventRevision != "" {
+			s.state.persistMu.Lock()
+			rebased, rebaseErr := s.state.rebaseRetiredWorkerSummaryLocked(summary.RunID, time.Now().UTC())
+			s.state.persistMu.Unlock()
+			if rebaseErr != nil {
+				s.logger.Warn("rebase sealed runtime summary", "run", summary.RunID, "error", rebaseErr)
+			}
+			dirty = !rebased
+		}
 		s.state.mu.Lock()
 		defer s.state.mu.Unlock()
-		if err != nil || current != summary.SourceRevision {
+		if dirty {
 			if s.state.summaryDirty == nil {
 				s.state.summaryDirty = make(map[string]bool)
 			}

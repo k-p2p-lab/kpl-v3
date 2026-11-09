@@ -5,7 +5,7 @@
 
   function phaseLabel(item) {
     const labels = {"waiting-for-cleanup":"Waiting for Peer cleanup", "checking-sources":"Checking sources", starting:"Preparing analysis", reading:"Reading results", aggregating:"Calculating", saving:"Saving analysis", "checking-hosts":"Checking hosts", "requesting-reboot":"Requesting host reboot", "waiting-for-hosts":"Waiting for hosts to return"};
-    if (item.state === "queued") return item.position > 0 ? item.position + " task" + (item.position === 1 ? "" : "s") + " ahead" : "Waiting to start";
+    if (item.state === "queued") return item.position > 0 ? item.position + " task" + (item.position === 1 ? "" : "s") + " ahead" : labels[item.phase] || item.phase || "Waiting to start";
     return labels[item.phase] || item.phase || (item.kind === "experiment" ? "Running experiment" : item.kind === "host-reboot" ? "Preparing host reboot" : "Analyzing results");
   }
 

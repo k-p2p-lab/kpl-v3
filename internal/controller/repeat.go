@@ -112,7 +112,7 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	if err != nil {
 		return model.Experiment{}, err
 	}
-	if len(s.experimentQueue) == 0 && len(s.queueCleanup) == 0 {
+	if !s.config.RunWorkers && len(s.experimentQueue) == 0 && len(s.queueCleanup) == 0 && !s.summaryRefreshActive {
 		experiments[0].State = "running"
 		experiments[0].StartedAt = time.Now().UTC()
 		if s.config.NetworkManagerURL != "" {
@@ -275,6 +275,17 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 			s.cancelQueuedIterations(experiments[index:], "Repetition batch was canceled before this iteration started")
 			return
 		}
+		s.refreshRunMetricsBoundary(ctx, batch.slot)
+		if err := ctx.Err(); err != nil {
+			s.cancelQueuedIterations(experiments[index:], "Repetition batch was canceled during Run metric finalization")
+			return
+		}
+		// A correction can itself leave an unreaped worker. Its cleanup must
+		// finish before this Run's measurement clock or Peer creation begins.
+		if err := s.waitQueueCleanup(ctx, experiment.ID, spec); err != nil {
+			s.cancelQueuedIterations(experiments[index:], "Cannot prepare next run: "+err.Error())
+			return
+		}
 		if experiment.State == "queued" {
 			if err := s.waitRunStorage(ctx, experiment.ID); err != nil {
 				s.cancelQueuedIterations(experiments[index:], "Cannot start next run: "+err.Error())
@@ -313,6 +324,7 @@ func (s *Server) runRepeatedScenarios(ctx context.Context, batch *repeatBatch, e
 			}
 		}
 		s.state.persistMu.Unlock()
+		s.refreshRunMetricsBoundary(ctx, batch.slot)
 		if finished.State != "completed" || finished.Error != "" {
 			batch.cancel()
 			s.cancelQueuedIterations(experiments[index+1:], fmt.Sprintf("Not started because iteration %d ended as %s", experiment.Iteration, finished.State))

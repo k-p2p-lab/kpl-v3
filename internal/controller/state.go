@@ -32,6 +32,7 @@ type state struct {
 	workerSummaries         map[string]runWorkerSummary
 	summaryDirty            map[string]bool
 	summaryDue              map[string]time.Time
+	runMetricMaintenance    bool
 	closedRuns              map[string]bool
 	closedRunOrder          []string
 	retirementRevision      uint64

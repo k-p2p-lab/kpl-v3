@@ -88,7 +88,8 @@ type workerReply struct {
 	Error *workerDomainError `json:"error,omitempty"`
 }
 type workerJournalCursor struct {
-	Size int64 `json:"size"`
+	Size          int64  `json:"size"`
+	EventRevision string `json:"eventRevision,omitempty"`
 }
 type workerHistogram struct {
 	AgentID, Topic string
@@ -104,6 +105,8 @@ type runWorkerSummary struct {
 	NextRefreshAt    time.Time             `json:"nextRefreshAt,omitempty"`
 	Cursor           int64                 `json:"cursor"`
 	SourceRevision   string                `json:"sourceRevision,omitempty"`
+	EventRevision    string                `json:"eventRevision,omitempty"`
+	EventsComplete   bool                  `json:"eventsComplete,omitempty"`
 	Retired          bool                  `json:"retired,omitempty"`
 	Counters         []workerCounterSeries `json:"counters,omitempty"`
 	CountersComplete bool                  `json:"countersComplete,omitempty"`
@@ -121,6 +124,7 @@ type runWorkerClient struct {
 	journal           *os.File
 	journalInfo       os.FileInfo
 	offset            int64
+	eventRevision     string
 	accumulator       *runMetricAccumulator
 	placementMu       sync.Mutex
 	placementRNG      map[string]*rand.Rand
@@ -396,6 +400,10 @@ func (c *runWorkerClient) syncJournal(ctx context.Context) error {
 		return err
 	}
 	if cursor.Size == c.offset {
+		if c.eventRevision != "" && cursor.EventRevision != "" && cursor.EventRevision != c.eventRevision {
+			return errors.New("committed journal identity changed without an append")
+		}
+		c.eventRevision = cursor.EventRevision
 		return nil
 	}
 	path := filepath.Join(c.server.config.DataDir, currentRunsDirectory, c.runID, "events.jsonl")
@@ -412,6 +420,10 @@ func (c *runWorkerClient) syncJournal(ctx context.Context) error {
 		return err
 	}
 	if c.journal == nil || !os.SameFile(info, c.journalInfo) {
+		if c.journal != nil && c.offset != 0 {
+			f.Close()
+			return errors.New("committed journal identity changed during the Run")
+		}
 		if c.journal != nil {
 			_ = c.journal.Close()
 		}
@@ -442,6 +454,7 @@ func (c *runWorkerClient) syncJournal(ctx context.Context) error {
 		return err
 	}
 	c.offset = cursor.Size
+	c.eventRevision = cursor.EventRevision
 	return nil
 }
 
@@ -450,7 +463,7 @@ func (c *runWorkerClient) publishSummary(ctx context.Context) error {
 	defer c.journalMu.Unlock()
 	now := time.Now().UTC()
 	metrics, histograms := c.accumulator.livePrometheusSummary(c.runID, now)
-	summary := runWorkerSummary{RunID: c.runID, Metrics: metrics, At: now, Cursor: c.offset}
+	summary := runWorkerSummary{RunID: c.runID, Metrics: metrics, At: now, Cursor: c.offset, EventRevision: c.eventRevision}
 	for key, histogram := range histograms {
 		row := workerHistogram{AgentID: key.agentID, Topic: key.topic, Count: histogram.count, Sum: histogram.sum}
 		for _, bound := range propagationBounds {
@@ -905,7 +918,7 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		path := filepath.Join(s.config.DataDir, currentRunsDirectory, b.runID, "events.jsonl")
 		info, err := os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
-			return workerJournalCursor{}, nil
+			return workerJournalCursor{EventRevision: eventRevisionOf(nil)}, nil
 		}
 		if err != nil {
 			return nil, err
@@ -913,7 +926,7 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("journal is not a regular file")
 		}
-		return workerJournalCursor{Size: info.Size()}, nil
+		return workerJournalCursor{Size: info.Size(), EventRevision: eventRevisionOf([]resultFile{{name: "events.jsonl", size: info.Size(), info: info}})}, nil
 	case "summary":
 		var summary runWorkerSummary
 		if err := json.Unmarshal(raw, &summary); err != nil {

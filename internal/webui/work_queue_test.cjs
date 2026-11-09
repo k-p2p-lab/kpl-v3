@@ -41,6 +41,14 @@ test('analysis progress is shown only when known and queued work never claims ca
   assert.equal(phaseLabel({...item('one'),phase:'waiting-for-cleanup'}),'Waiting for Peer cleanup');
 });
 
+test('an unopened head explains integrated Run metric finalization without adding a queue item',()=>{
+  const head={...item('next','experiment'),state:'queued',phase:'Finishing previous Run metrics'};
+  assert.equal(phaseLabel(head),'Finishing previous Run metrics');
+  assert.match(queueMarkup([head]),/Finishing previous Run metrics/);
+  assert.equal(phaseLabel({...head,position:1}),'1 task ahead');
+  assert.equal(phaseLabel({...head,phase:''}),'Waiting to start');
+});
+
 test('cancel uses an immutable ID once and keeps the slot pending until the live queue removes it',async()=>{
   let resolve;const calls=[];
   const h=fixture((path,options)=>{calls.push({path,options});return new Promise(yes=>resolve=yes);});

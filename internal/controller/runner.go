@@ -1708,6 +1708,10 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 	if err := s.persistExperiment(experiment); err != nil {
 		s.logger.Warn("persist experiment state", "run", runID, "error", err)
 		s.state.recordRunWriteError(runID, err)
+	} else if s.config.RunWorkers {
+		if _, err := s.state.rebaseRetiredWorkerSummaryLocked(runID, time.Now().UTC()); err != nil {
+			s.logger.Warn("rebase sealed runtime summary after metadata update", "run", runID, "error", err)
+		}
 	}
 }
 

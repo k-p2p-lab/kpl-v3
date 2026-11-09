@@ -14,8 +14,9 @@ import (
 )
 
 type workerSummaryStart struct {
-	RunID    string                   `json:"runId"`
-	Snapshot workerSnapshotDescriptor `json:"snapshot"`
+	RunID         string                   `json:"runId"`
+	Snapshot      workerSnapshotDescriptor `json:"snapshot"`
+	EventRevision string                   `json:"eventRevision"`
 }
 
 func summaryWorkerFactory(ctx context.Context, raw json.RawMessage, peer *workerproc.Peer) (workerproc.Handler, error) {
@@ -25,6 +26,9 @@ func summaryWorkerFactory(ctx context.Context, raw json.RawMessage, peer *worker
 	}
 	if start.RunID != peer.RunID() || start.Snapshot.Result.ID != start.RunID {
 		return nil, errors.New("summary worker identity mismatch")
+	}
+	if start.EventRevision == "" {
+		return nil, errors.New("summary worker event input identity is missing")
 	}
 	return func(callCtx context.Context, method string, input json.RawMessage) (any, error) {
 		if method != "execute" {
@@ -55,6 +59,7 @@ func summaryWorkerFactory(ctx context.Context, raw json.RawMessage, peer *worker
 		}
 		summary := makeRunWorkerSummary(accumulator, start.RunID, time.Now().UTC(), cursor)
 		summary.SourceRevision = start.Snapshot.Result.SourceRevision
+		summary.EventRevision = start.EventRevision
 		var err error
 		summary.Counters, err = counters.sealRunCounters(start.RunID)
 		if err != nil {
@@ -120,8 +125,9 @@ func (s *Server) waitControllerWorkers(ctx context.Context, ids []string) error 
 	return nil
 }
 
-// Refreshing sealed metrics is ordinary queued computation. Scrapes only read
-// immutable summaries and never spawn a process or reconstruct a raw index.
+// Metric maintenance belongs to Run finalization. Idle corrections use the same
+// admission exclusion without creating a user-visible FIFO item. Scrapes only
+// read immutable summaries and never reconstruct a raw index.
 func (s *Server) runWorkerSummaryLoop(ctx context.Context) {
 	if err := s.loadRetiredRuntimeFences(); err != nil {
 		s.logger.Error("load retired runtime fences", "error", err)
@@ -153,45 +159,132 @@ func (s *Server) runWorkerSummaryLoop(ctx context.Context) {
 				if now.Before(retryAfter[id]) {
 					continue
 				}
-				s.cancelMu.Lock()
-				if s.shuttingDown || s.summaryRefreshActive {
-					s.cancelMu.Unlock()
+				if s.tryRefreshIdleRunMetrics(ctx, id) {
+					retryAfter[id] = now.Add(30 * time.Second)
 					break
 				}
-				s.state.mu.RLock()
-				run := s.state.experiments[id]
-				s.state.mu.RUnlock()
-				if run.State == "running" || run.State == "queued" || s.cancels[id] != nil {
-					s.cancelMu.Unlock()
-					continue
-				}
-				jobCtx, cancel := context.WithCancel(ctx)
-				slot := s.enqueueWorkLocked(jobCtx, model.WorkQueueItem{Kind: "analysis", Name: "Refresh run metrics", RunID: id}, cancel)
-				s.summaryRefreshActive = true
-				s.cancelMu.Unlock()
-				retryAfter[id] = now.Add(30 * time.Second)
-				go func() {
-					defer cancel()
-					defer s.finishWork(slot)
-					defer func() { s.cancelMu.Lock(); s.summaryRefreshActive = false; s.cancelMu.Unlock() }()
-					if err := s.refreshWorkerSummary(jobCtx, id, slot); err != nil && jobCtx.Err() == nil {
-						s.logger.Warn("refresh sealed runtime summary", "run", id, "error", err)
-					}
-				}()
-				break
 			}
 		}
 	}
 }
 
-func (s *Server) refreshWorkerSummary(ctx context.Context, id string, slot *workSlot) error {
-	if err := s.waitWork(ctx, slot); err != nil {
-		return err
+// A boundary owns the experiment's existing slot. An idle correction instead
+// holds admission until its calculation and OS/RPC reclamation have finished.
+func (s *Server) beginRunMetricMaintenance(slot *workSlot) bool {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if s.shuttingDown || s.summaryRefreshActive {
+		return false
 	}
-	if err := s.waitQueueCleanup(ctx, id, scenario.Scenario{JobShutdownTimeout: "3m"}); err != nil {
+	if slot == nil {
+		if len(s.experimentQueue) != 0 {
+			return false
+		}
+		s.workWorkers.Add(1)
+	} else if slot.finished || !slot.opened || len(s.experimentQueue) == 0 || s.experimentQueue[0] != slot {
+		return false
+	}
+	s.summaryRefreshActive = true
+	s.state.mu.Lock()
+	s.state.runMetricMaintenance = true
+	s.state.mu.Unlock()
+	return true
+}
+
+func (s *Server) endRunMetricMaintenance(slot *workSlot) {
+	s.cancelMu.Lock()
+	s.summaryRefreshActive = false
+	s.state.mu.Lock()
+	s.state.runMetricMaintenance = false
+	s.state.mu.Unlock()
+	s.updateQueuePositionsLocked()
+	s.cancelMu.Unlock()
+	if slot == nil {
+		s.workWorkers.Done()
+	}
+}
+
+func (s *Server) runMetricRefreshEligible(id string) bool {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.state.mu.RLock()
+	run := s.state.experiments[id]
+	s.state.mu.RUnlock()
+	return run.State != "running" && run.State != "queued" && s.cancels[id] == nil
+}
+
+func (s *Server) refreshRunMetricSummary(ctx context.Context, id string) error {
+	s.state.persistMu.Lock()
+	rebased, err := s.state.rebaseRetiredWorkerSummaryLocked(id, time.Now().UTC())
+	s.state.persistMu.Unlock()
+	if err != nil || rebased {
 		return err
 	}
 	return s.computeWorkerSummary(ctx, id)
+}
+
+func (s *Server) tryRefreshIdleRunMetrics(ctx context.Context, id string) bool {
+	if ctx.Err() != nil || !s.beginRunMetricMaintenance(nil) {
+		return false
+	}
+	defer s.endRunMetricMaintenance(nil)
+	if !s.runMetricRefreshEligible(id) {
+		return false
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	err := s.recoverWorkCleanup(refreshCtx)
+	if err == nil {
+		err = s.waitQueueCleanup(refreshCtx, id, scenario.Scenario{JobShutdownTimeout: "3m"})
+	}
+	if err == nil {
+		err = s.refreshRunMetricSummary(refreshCtx, id)
+	}
+	if err != nil && ctx.Err() == nil {
+		s.logger.Warn("refresh idle Run metrics", "run", id, "error", err)
+	}
+	return true
+}
+
+// Take a finite snapshot: a late append during calculation is retained for the
+// next boundary instead of keeping this Run alive indefinitely. Future receipt
+// deadlines never delay the next experiment.
+func (s *Server) refreshRunMetricsBoundary(ctx context.Context, slot *workSlot) {
+	if !s.config.RunWorkers || slot == nil || ctx.Err() != nil || !s.beginRunMetricMaintenance(slot) {
+		return
+	}
+	defer s.endRunMetricMaintenance(slot)
+	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	ids := s.state.workerSummaryDue(time.Now().UTC())
+	sort.Strings(ids)
+	defer s.updateWorkStatus(slot.id, "", 0)
+	for index, id := range ids {
+		if refreshCtx.Err() != nil {
+			return
+		}
+		if !s.runMetricRefreshEligible(id) {
+			continue
+		}
+		s.updateWorkStatus(slot.id, "Refreshing run metrics", 100*float64(index)/float64(len(ids)))
+		err := s.waitQueueCleanup(refreshCtx, id, scenario.Scenario{JobShutdownTimeout: "3m"})
+		if err == nil {
+			err = s.refreshRunMetricSummary(refreshCtx, id)
+		}
+		if err != nil {
+			if ctx.Err() == nil {
+				s.logger.Warn("refresh Run metrics at experiment boundary", "run", id, "error", err)
+			}
+			// A possibly unreaped calculation owns a cleanup barrier. Do not
+			// start another calculation until the normal recovery path reaps it.
+			s.cancelMu.Lock()
+			pending := len(s.queueCleanup) != 0
+			s.cancelMu.Unlock()
+			if pending {
+				return
+			}
+		}
+	}
 }
 
 // The caller already owns the shared work slot (including cleanup recovery).
@@ -204,7 +297,7 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 	if snapshot.active {
 		return errResultBusy
 	}
-	process, err := workerproc.Start(ctx, "controller-summary", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot)}, s.workerSnapshotSource([]*resultSnapshot{snapshot}), workerproc.Options{RunID: id, Command: s.workerCommand})
+	process, err := workerproc.Start(ctx, "controller-summary", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot), EventRevision: eventRevisionOf(snapshot.files)}, s.workerSnapshotSource([]*resultSnapshot{snapshot}), workerproc.Options{RunID: id, Command: s.workerCommand})
 	if err != nil {
 		if process != nil {
 			s.rememberUnreapedWorker(id, process)

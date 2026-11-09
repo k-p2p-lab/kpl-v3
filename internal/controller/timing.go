@@ -279,7 +279,7 @@ func (s *state) estimateRunFinishesLocked(runs []model.Experiment, now time.Time
 		}
 		return a.key.execution < b.key.execution
 	})
-	cursor, known, overdue := now, true, false
+	cursor, known, overdue := now, !s.runMetricMaintenance, false
 	nextPosition := 0
 	for first := 0; first < len(groups); {
 		// A terminal submission can still own its FIFO slot while finishing

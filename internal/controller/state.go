@@ -33,6 +33,7 @@ type state struct {
 	summaryDue              map[string]time.Time
 	closedRuns              map[string]bool
 	closedRunOrder          []string
+	retirementRevision      uint64
 	retiredLookup           func(string) (bool, error)
 	terminalHistory         *terminalNodeHistory
 	resultsRevision         atomic.Uint64
@@ -61,6 +62,7 @@ type state struct {
 	reservations            map[string]string
 	uncertainCreates        map[string]uncertainCreate
 	agentAdmissionUntil     map[string]time.Time
+	agentAdmissionOwners    map[string]agentAdmissionOwner
 	agentSnapshots          map[string]time.Time
 	nodeReportTimes         map[string]time.Time
 	experiments             map[string]model.Experiment
@@ -169,6 +171,7 @@ func (s *state) registerAgent(agent model.Agent) (model.Agent, error) {
 	}
 	if restarted {
 		delete(s.agentAdmissionUntil, agent.ID)
+		delete(s.agentAdmissionOwners, agent.ID)
 		for nodeID, agentID := range s.reservations {
 			if agentID == agent.ID {
 				delete(s.reservations, nodeID)
@@ -219,25 +222,35 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	if h.Agent.ID == "" {
 		return fmt.Errorf("agent id is required")
 	}
-	retired := make(map[string]bool)
-	if s.journalOnly && s.retiredLookup != nil {
-		for _, node := range h.Nodes {
-			if _, seen := retired[node.RunID]; seen {
-				continue
-			}
-			closed, err := s.lookupRetiredRun(node.RunID)
-			if err != nil {
-				return err
-			}
-			retired[node.RunID] = closed
-		}
+	h = s.normalizeHeartbeatRunIDs(h)
+	retired, revision, err := s.heartbeatRetirements(h.Nodes)
+	if err != nil {
+		return err
 	}
 	historical, err := s.prepareHistoricalHeartbeat(h, retired)
 	if err != nil {
 		return err
 	}
+	return s.applyPreparedHeartbeat(h, historical, retired, revision)
+}
+
+func (s *state) applyPreparedHeartbeat(h model.AgentHeartbeat, historical map[string]model.Node, retired map[string]bool, revision uint64) error {
+	// History persistence and marker reads must run outside mu. A Run can
+	// finish in that interval, so couple the prepared classification to the
+	// retirement commit before it is allowed to modify the live inventory.
+	for {
+		s.mu.Lock()
+		if revision == s.retirementRevision {
+			break
+		}
+		s.mu.Unlock()
+		var err error
+		retired, revision, err = s.heartbeatRetirements(h.Nodes)
+		if err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
-	s.mu.Lock()
 	previous, ok := s.agents[h.Agent.ID]
 	if !ok {
 		s.mu.Unlock()
@@ -255,6 +268,20 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(h.Nodes))
+	// Validate again after historical disk I/O, before a cold record can
+	// remove any live map entry. A concurrent registration or ownership change
+	// must not make the history filter bypass the atomic batch checks.
+	for _, node := range h.Nodes {
+		_, duplicate := seen[node.ID]
+		owner := s.nodes[node.ID].AgentID
+		previousRun := s.nodes[node.ID].RunID
+		reservation := s.reservations[node.ID]
+		if node.ID == "" || duplicate || owner != "" && owner != h.Agent.ID || previousRun != "" && node.RunID != "" && previousRun != node.RunID || reservation != "" && reservation != h.Agent.ID {
+			s.mu.Unlock()
+			return fmt.Errorf("agent %q heartbeat contains an empty, duplicate, or foreign node %q", h.Agent.ID, node.ID)
+		}
+		seen[node.ID] = struct{}{}
+	}
 	if s.journalOnly {
 		retained := h.Nodes[:0]
 		for _, node := range h.Nodes {
@@ -269,23 +296,17 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 					continue
 				}
 			}
-			if retired[node.RunID] && (node.State == model.NodeStopped || node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") && (!exists || !nodeHasLiveState(old) && old.Metadata["cleanupComplete"] == "true") {
+			if retired[node.RunID] && !(exists && !confirmedHistoricalNode(old) && confirmedHistoricalNode(node)) {
+				// A completed Run cannot acquire live Peers through a delayed
+				// report, including an ID absent from the cold history. Keep any
+				// existing unconfirmed obligation, accepting only terminal proof
+				// that can resolve it. The Agent's physical occupancy is applied
+				// separately below and must not be replaced with a synthetic zero.
 				continue
 			}
 			retained = append(retained, node)
 		}
 		h.Nodes = retained
-	}
-	for _, node := range h.Nodes {
-		_, duplicate := seen[node.ID]
-		owner := s.nodes[node.ID].AgentID
-		previousRun := s.nodes[node.ID].RunID
-		reservation := s.reservations[node.ID]
-		if node.ID == "" || duplicate || owner != "" && owner != h.Agent.ID || previousRun != "" && node.RunID != "" && previousRun != node.RunID || reservation != "" && reservation != h.Agent.ID {
-			s.mu.Unlock()
-			return fmt.Errorf("agent %q heartbeat contains an empty, duplicate, or foreign node %q", h.Agent.ID, node.ID)
-		}
-		seen[node.ID] = struct{}{}
 	}
 	if stale {
 		// A newer full status can cross an older partial batch. Successful

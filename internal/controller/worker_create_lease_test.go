@@ -377,3 +377,31 @@ func TestWorkerCreateCancellationAndExplicitRefusalDoNotConsumeReplayEvidence(t 
 		t.Fatalf("definite no-create refusal retained possible admission: %v", err)
 	}
 }
+
+func TestWorkerCreateReplayRefusalDoesNotEraseEarlierUnknownAdmission(t *testing.T) {
+	f := newBrokerCreateFixture(t, func(f *brokerCreateFixture, w http.ResponseWriter, r *http.Request, request model.CreateNodeRequest) {
+		if f.calls.Load() == 1 {
+			dropCreateResponse(t, w)
+			return
+		}
+		w.Header().Set(model.AgentAdmissionRetryHeader, "not-created")
+		w.Header().Set("Retry-After", "1")
+		writeError(w, 503, "this retry was not admitted")
+	})
+	_, first := f.b.dispatchAgent(t.Context(), f.call)
+	_, second := f.b.dispatchAgent(t.Context(), f.call)
+	var uncertain *uncertainNodeCreateError
+	if !errors.As(first, &uncertain) || !errors.As(second, &uncertain) || encodeWorkerError(second).Kind != "uncertain" {
+		t.Fatalf("replay refusal released the original unknown POST: %v / %v", first, second)
+	}
+	f.b.mu.Lock()
+	lease := f.b.createLeases[f.request.ID]
+	retained := lease != nil && lease.attempted && lease.possibleAdmission
+	f.b.mu.Unlock()
+	f.b.server.state.mu.RLock()
+	reserved := f.b.server.state.reservations[f.request.ID]
+	f.b.server.state.mu.RUnlock()
+	if !retained || reserved != f.owner.ID {
+		t.Fatal("replay refusal discarded pending creation ownership")
+	}
+}

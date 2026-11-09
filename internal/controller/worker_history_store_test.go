@@ -390,3 +390,35 @@ func TestTerminalHistoryRejectsUnsafeFileAndUnknownSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalHistoryRejectsMalformedAggregateKeyShape(t *testing.T) {
+	for _, bucket := range []string{"counts", "propagation"} {
+		t.Run(bucket, func(t *testing.T) {
+			h := newTerminalNodeHistory(t.TempDir())
+			historyTestReconcile(t, h, historyTestNode("node"))
+			root, db, err := h.open(false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = db.Update(func(tx *bolt.Tx) error {
+				if bucket == "counts" {
+					return tx.Bucket([]byte(bucket)).Put([]byte(`["legacy-run","agent","workers","worker","full","stopped","extra"]`), []byte{0, 0, 0, 0, 0, 0, 0, 1})
+				}
+				return tx.Bucket([]byte(bucket)).Put([]byte(`["legacy-run","agent"]`), []byte{1})
+			})
+			db.Close()
+			root.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bucket == "counts" {
+				err = h.counts(nil, func(nodeMetricLabels, int) error { t.Fatal("malformed aggregate emitted a metric"); return nil })
+			} else {
+				err = h.propagation(func(string, string, string) error { t.Fatal("malformed propagation emitted a baseline"); return nil })
+			}
+			if err == nil {
+				t.Fatal("malformed fixed-array key was silently normalized")
+			}
+		})
+	}
+}

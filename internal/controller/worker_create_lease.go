@@ -40,11 +40,13 @@ func classifyWorkerCreateTransport(err error) error {
 // only its acknowledgement, explicit release, generation fence or Run close
 // retires this evidence. The hard limit bounds abandoned worker requests.
 type workerCreateLease struct {
-	agentID, baseURL string
-	startedAt        time.Time
-	generation       uint64
-	digest           [sha256.Size]byte
-	attempted        bool
+	agentID, baseURL  string
+	startedAt         time.Time
+	generation        uint64
+	digest            [sha256.Size]byte
+	attempted         bool
+	possibleAdmission bool
+	inFlight          int
 }
 
 type workerCreateAuthorizationError struct {
@@ -209,6 +211,7 @@ func (b *runWorkerBroker) authorizeCreateAgent(call workerAgentCall) error {
 		}
 	}
 	lease.digest, lease.attempted = digest, true
+	lease.inFlight++
 	b.fenced = false
 	return nil
 }
@@ -259,18 +262,40 @@ func (b *runWorkerBroker) dispatchAgent(ctx context.Context, call workerAgentCal
 		input = call.Input
 	}
 	err = b.server.callAgent(ctx, call.BaseURL, call.Method, call.Path, input, target)
-	// An explicit pre-admission refusal is the only HTTP response that permits
-	// a new placement. Other ambiguous attempts retain the original capability.
-	var deferred *agentAdmissionDeferredError
-	if call.Method == http.MethodPost && call.Path == "/api/v1/nodes" && (errors.As(err, &deferred) || errors.Is(err, errAgentCapacityReached)) {
-		var request model.CreateNodeRequest
-		if json.Unmarshal(call.Input, &request) == nil {
-			b.mu.Lock()
-			if lease := b.createLeases[request.ID]; lease != nil {
-				lease.attempted = false
-			}
-			b.mu.Unlock()
-		}
+	if call.Method == http.MethodPost && call.Path == "/api/v1/nodes" {
+		err = b.finishCreateAgentCall(call, err)
 	}
 	return output, err
+}
+
+func (b *runWorkerBroker) finishCreateAgentCall(call workerAgentCall, err error) error {
+	// A refusal of a replay says nothing about an earlier interrupted POST.
+	// Only a first definite no-create response, with no other dispatch in
+	// flight, permits discarding the original admission capability.
+	var request model.CreateNodeRequest
+	if json.Unmarshal(call.Input, &request) != nil {
+		return err
+	}
+	var deferred *agentAdmissionDeferredError
+	notCreated := errors.As(err, &deferred) || errors.Is(err, errAgentCapacityReached)
+	b.mu.Lock()
+	lease := b.createLeases[request.ID]
+	priorUnknown := false
+	if lease != nil && lease.digest == sha256.Sum256(call.Input) {
+		lease.inFlight = max(0, lease.inFlight-1)
+		priorUnknown = lease.possibleAdmission || lease.inFlight > 0
+		if notCreated && !priorUnknown {
+			lease.attempted = false
+		} else {
+			lease.possibleAdmission = true
+		}
+	}
+	b.mu.Unlock()
+	if err != nil && (!notCreated || priorUnknown) {
+		var uncertain *uncertainNodeCreateError
+		if !errors.As(err, &uncertain) {
+			return &uncertainNodeCreateError{err}
+		}
+	}
+	return err
 }

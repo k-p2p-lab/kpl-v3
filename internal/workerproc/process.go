@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -422,7 +423,9 @@ func Serve(ctx context.Context, kind string, factory Factory) error {
 }
 
 func normalClose(err error) error {
-	if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) || errors.Is(err, ErrClosed) || errors.Is(err, os.ErrClosed) {
+	// The peer may notice either pipe first during an ordinary supervisor
+	// shutdown. A callback still writing sees EPIPE where the reader sees EOF.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) || errors.Is(err, context.Canceled) || errors.Is(err, ErrClosed) || errors.Is(err, os.ErrClosed) {
 		return nil
 	}
 	return err

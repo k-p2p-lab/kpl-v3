@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,7 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 		}
 	}
 	s.state.cacheRetiredRunLocked(id)
+	s.state.retirementRevision++
 	if deleted {
 		delete(s.state.workerSummaries, id)
 	}
@@ -196,8 +198,25 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	if err := s.verifyRetiredRuntime(id); err != nil {
 		return err
 	}
+	s.state.clearRetiredAdmissionHints(id)
 	s.state.notify()
-	s.logger.Info("experiment runtime reset verified", "run", id, "activeNodes", 0, "reservations", 0, "uncertainCreates", 0, "rawAccumulators", 0)
+	attrs := []slog.Attr{slog.String("run", id), slog.Int("activeNodes", 0), slog.Int("reservations", 0), slog.Int("uncertainCreates", 0), slog.Int("rawAccumulators", 0)}
+	// Run-scoped cleanup alone cannot describe shared parent pressure. Sample
+	// the shared indexes too without waiting on a busy control-plane mutex.
+	if s.state.mu.TryRLock() {
+		cooldowns := 0
+		now := time.Now()
+		for _, until := range s.state.agentAdmissionUntil {
+			if now.Before(until) {
+				cooldowns++
+			}
+		}
+		attrs = append(attrs, slog.Bool("parentStateAvailable", true), slog.Int("parentNodes", len(s.state.nodes)), slog.Int("parentNodeReports", len(s.state.nodeReportTimes)), slog.Int("parentNodeVersions", len(s.state.nodeVersions)), slog.Int("parentReservations", len(s.state.reservations)), slog.Int("parentUncertainCreates", len(s.state.uncertainCreates)), slog.Int("agentsInAdmissionCooldown", cooldowns))
+		s.state.mu.RUnlock()
+	} else {
+		attrs = append(attrs, slog.Bool("parentStateAvailable", false))
+	}
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "experiment runtime reset verified", attrs...)
 	return nil
 }
 

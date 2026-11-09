@@ -18,6 +18,27 @@ func (s *state) keepRunHistoryHotLocked(id string) bool {
 	return exists && (run.State == "queued" || run.State == "running" || run.CleanupState == "running")
 }
 
+// Legacy reports may omit the Run ID of a known Node. Preserve that identity
+// before any disk I/O, rather than consulting a live map that retirement can
+// remove in the meantime. Modern reports need no additional slice allocation.
+func (s *state) normalizeHeartbeatRunIDs(h model.AgentHeartbeat) model.AgentHeartbeat {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	copied := false
+	for i, node := range h.Nodes {
+		if node.RunID == "" {
+			if id := s.nodes[node.ID].RunID; id != "" {
+				if !copied {
+					h.Nodes = append([]model.Node(nil), h.Nodes...)
+					copied = true
+				}
+				h.Nodes[i].RunID = id
+			}
+		}
+	}
+	return h
+}
+
 // Validate the complete batch before its atomic disk transaction. No network,
 // disk transaction or fsync holds the main state or telemetry journal mutex.
 // heartbeat rechecks registration after this returns, before publishing state.

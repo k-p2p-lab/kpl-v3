@@ -96,6 +96,7 @@ func TestObservationWorkerHelper(t *testing.T) {
 		}, nil
 	})
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "observation worker:", err)
 		os.Exit(2)
 	}
 	os.Exit(0)
@@ -116,9 +117,10 @@ func observationWorkerFixture(t *testing.T, intercept func(context.Context, stri
 		t.Fatal(err)
 	}
 	broker := &runWorkerBroker{server: s, runID: id}
+	var workerStderr bytes.Buffer
 	options := workerproc.Options{Command: func(kind string) *exec.Cmd {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestObservationWorkerHelper$", "--", "observation-worker-helper", kind)
-		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+		cmd.Stdout, cmd.Stderr = io.Discard, &workerStderr
 		return cmd
 	}}
 	process, err := workerproc.Start(t.Context(), "controller-run", observationTestStart{RunID: id}, func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -138,7 +140,13 @@ func observationWorkerFixture(t *testing.T, intercept func(context.Context, stri
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := process.CloseContext(ctx); err != nil {
-			t.Errorf("reap observation worker: %v", err)
+			stderr := "worker has not been reaped"
+			select {
+			case <-process.Done():
+				stderr = workerStderr.String()
+			default:
+			}
+			t.Errorf("reap observation worker: %v; stderr: %s", err, stderr)
 		}
 	})
 	return s, broker, process, path, prefix

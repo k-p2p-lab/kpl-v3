@@ -281,6 +281,10 @@ func (s *Server) deferAgentAdmission(agent model.Agent, err *agentAdmissionDefer
 		until := now.Add(err.after)
 		if until.After(previous) {
 			s.state.agentAdmissionUntil[agent.ID] = until
+			if s.state.agentAdmissionOwners == nil {
+				s.state.agentAdmissionOwners = make(map[string]agentAdmissionOwner)
+			}
+			s.state.agentAdmissionOwners[agent.ID] = agentAdmissionOwner{RunID: runID, StartedAt: agent.StartedAt}
 		}
 	}
 	s.state.mu.Unlock()
@@ -292,6 +296,27 @@ func (s *Server) deferAgentAdmission(agent model.Agent, err *agentAdmissionDefer
 type agentAdmissionDeferredError struct {
 	after  time.Duration
 	reason string
+}
+
+type agentAdmissionOwner struct {
+	RunID     string
+	StartedAt time.Time
+}
+
+// A not-created Retry-After is a soft hint, not cleanup ownership. Once this
+// Run's actual cleanup/drain/worker barriers pass, let the same Agent instance
+// reassess its current admission state on the next Run's first request.
+func (s *state) clearRetiredAdmissionHints(runID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, owner := range s.agentAdmissionOwners {
+		current, exists := s.agents[id]
+		if owner.RunID != runID || owner.StartedAt.IsZero() || !exists || !current.StartedAt.Equal(owner.StartedAt) {
+			continue
+		}
+		delete(s.agentAdmissionUntil, id)
+		delete(s.agentAdmissionOwners, id)
+	}
 }
 
 func (e *agentAdmissionDeferredError) Error() string { return "Agent admission deferred: " + e.reason }

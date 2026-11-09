@@ -190,6 +190,9 @@ func captureRunSource(root *os.Root, manifest runArchiveManifestData, name strin
 }
 
 func (file resultFile) reader() *io.SectionReader {
+	if file.readAt != nil {
+		return io.NewSectionReader(file.readAt, 0, file.size)
+	}
 	if len(file.parts) > 0 {
 		return io.NewSectionReader(joinedResultReader{parts: file.parts}, 0, file.size)
 	}

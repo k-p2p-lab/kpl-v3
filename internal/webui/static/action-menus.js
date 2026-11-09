@@ -105,6 +105,8 @@
       event.stopPropagation();
       close(active, true);
     } else if (menu && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      // Native form controls inside a menu own their text/option navigation.
+      if (event.target.closest("select, textarea, input:not([type=checkbox]):not([type=radio]), [contenteditable=true]")) return;
       event.preventDefault();
       event.stopPropagation();
       open(menu);

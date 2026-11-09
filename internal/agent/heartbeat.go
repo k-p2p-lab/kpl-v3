@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
 const heartbeatBodyLimit = 10 << 20
+
+type heartbeatLeaseContextKey struct{}
 
 // Registration invalidates acknowledgments: a restarted Controller may have
 // forgotten the full inventory. Serializing it with sends prevents an earlier
@@ -35,11 +38,64 @@ func (s *Server) registerLocked(ctx context.Context) error {
 }
 
 func (s *Server) heartbeat(ctx context.Context) error {
+	finishView := s.acquireRunView()
+	defer finishView()
 	s.heartbeatMu.Lock()
 	defer s.heartbeatMu.Unlock()
-	h := s.snapshotWithHistory(false)
+	stopLease := func() {}
+	if s.config.RunWorkerFactory != nil {
+		// Lease renewal does not wait behind a large experiment snapshot. The
+		// following full partial reports still carry every observed Node.
+		if err := s.postJSON(ctx, "/api/v1/agents/heartbeat", model.AgentHeartbeat{Agent: s.snapshotAgent(), Partial: true}, nil); err != nil {
+			return err
+		}
+		leaseCtx, cancelLease := context.WithCancel(context.WithValue(ctx, heartbeatLeaseContextKey{}, true))
+		leaseDone := make(chan struct{})
+		go func() {
+			defer close(leaseDone)
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-leaseCtx.Done():
+					return
+				case <-ticker.C:
+					_ = s.postJSON(leaseCtx, "/api/v1/agents/heartbeat", model.AgentHeartbeat{Agent: s.snapshotAgent(), Partial: true}, nil)
+				}
+			}
+		}()
+		// Only serialized full reports apply capacity revisions; late lease
+		// responses must not overwrite the override acknowledged by them.
+		stopLease = func() { cancelLease(); <-leaseDone }
+		defer stopLease()
+	}
+	h, err := s.snapshotWithHistoryContext(ctx, false)
+	if err != nil {
+		return err
+	}
+	// A later lease must not make the complete observation look stale to the
+	// Controller. Stop/join it and refresh compact states and the capture clock.
+	stopLease()
+	if s.config.RunWorkerFactory != nil {
+		s.mu.RLock()
+		for i, node := range h.Nodes {
+			if proc := s.processes[node.ID]; proc != nil {
+				if proc.exited || proc.node.State == model.NodeStopping {
+					h.Nodes[i] = heartbeatNodeStatus(proc)
+				} else {
+					current := cloneNodeStatus(proc.node)
+					current.Addresses, current.ConnectedPeers, current.RoutingPeers = node.Addresses, node.ConnectedPeers, node.RoutingPeers
+					current.MeshPeers, current.TopicPeers, current.PeerScores, current.ScoreSample = node.MeshPeers, node.TopicPeers, node.PeerScores, node.ScoreSample
+					current.OverlayObservedAt = node.OverlayObservedAt
+					h.Nodes[i] = current
+				}
+			}
+		}
+		h.Agent = s.agentStatusLocked(h.Agent.Hostname)
+		s.mu.RUnlock()
+	}
 	h.Partial = true
-	err := sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
+	err = sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
 		if err := s.postData(ctx, "/api/v1/agents/heartbeat", data, nil); err != nil {
 			return err
 		}

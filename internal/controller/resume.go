@@ -357,6 +357,9 @@ func readResumeFile(root *os.Root, name string, limit int) ([]byte, error) {
 }
 
 func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec scenario.Scenario) error {
+	if err := s.waitControllerWorkers(ctx, runIDs); err != nil {
+		return err
+	}
 	timeout, _ := time.ParseDuration(spec.JobShutdownTimeout)
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
@@ -380,14 +383,48 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		cancel()
 		if err == nil {
 			drainCtx, drainCancel := context.WithTimeout(ctx, timeout)
-			err = s.drainRunTelemetry(drainCtx, runID)
+			if s.config.RunWorkers {
+				err = s.rebuildJournalIndex(drainCtx, runID)
+			}
+			if err == nil {
+				err = s.drainRunTelemetry(drainCtx, runID)
+			}
 			drainCancel()
 		}
 		if err != nil {
 			return fmt.Errorf("cleanup previous run %s: %w", runID, err)
 		}
+		// A successful strict drain ACK resolves delivery debt. Preserve the
+		// earlier scientific failure; terminal Peer evidence is checked below.
+		if s.config.RunWorkers {
+			s.updateExperiment(runID, func(run *model.Experiment) { run.TelemetryPending = false })
+		}
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return s.refreshAgentState(cleanupCtx, runIDs...)
+	if err := s.refreshAgentState(cleanupCtx, runIDs...); err != nil {
+		return err
+	}
+	if s.config.RunWorkers {
+		for _, id := range runIDs {
+			if err := s.waitRunTerminalEvidence(cleanupCtx, id); err != nil {
+				return err
+			}
+			s.state.persistMu.Lock()
+			deleted, err := s.state.resultDeletedLocked(id)
+			s.state.persistMu.Unlock()
+			if err != nil {
+				return err
+			}
+			if _, ok := s.state.workerMetricSummary(id); !deleted && !ok {
+				if err := s.computeWorkerSummary(cleanupCtx, id); err != nil {
+					return err
+				}
+			}
+			if err := s.retireRunRuntime(cleanupCtx, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

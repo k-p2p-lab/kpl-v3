@@ -2,13 +2,19 @@
 .library-group-actions { display: flex; align-items: center; gap: .5rem; min-width: 0; margin-left: auto; }
 .library-group-actions > button { padding-inline: .7rem; }
 #scenarioGroupTools, #resultGroupTools { container: library-tools / inline-size; min-width: 0; }
-#scenarioGroupTools { flex: 0 0 auto; padding: .6rem .75rem .75rem; margin-bottom: .4rem; border-bottom: 1px solid var(--line-soft); }
-#scenarioGroupTools .library-group-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); }
+#scenarioGroupTools { flex: 0 0 auto; padding: .25rem .5rem; margin-bottom: .1rem; border-bottom: 1px solid var(--line-soft); }
+#scenarioGroupTools .library-group-toolbar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; }
 #scenarioGroupTools .library-group-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; margin-left: 0; }
 #scenarioGroupTools .library-filter-menu { width: 100%; }
 #scenarioGroupTools .library-filter-menu > button { width: 100%; max-width: 100%; justify-content: flex-start; }
 #scenarioGroupTools .library-filter-summary { flex: 1; min-width: 0; max-width: none; text-align: left; }
 #scenarioGroupTools .library-filter-menu > button::after { flex: 0 0 .35rem; }
+#scenarioGroupTools .library-group-selection { grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; margin-top: .25rem; padding: 0; border: 0; background: none; }
+#scenarioGroupTools .library-selection-count { grid-column: auto; gap: .5rem; font-size: .7rem; }
+#scenarioGroupTools .library-group-toolbar button, #scenarioGroupTools .library-group-selection .secondary-button { min-height: 1.75rem; padding: .2rem .4rem; font-size: .7rem; }
+#scenarioGroupTools .library-select-all { min-height: 1.75rem; font-size: .7rem; }
+.library-move-menu { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .5rem; padding: .45rem .5rem .65rem; border-bottom: 1px solid var(--line); }
+.library-move-menu select { min-width: 0; }
 #resultGroupTools { padding: .85rem 1.2rem; border-bottom: 1px solid var(--line); }
 .library-group-toolbar select, .library-group-selection select, .library-group-dialog input { min-height: var(--control-height); border: 1px solid var(--line); border-radius: .45rem; background: var(--surface); color: var(--text); padding: .4rem .6rem; font: inherit; }
 .library-group-toolbar select, .library-group-selection select { font-size: .8rem; }
@@ -41,7 +47,7 @@
 .scenario-library-item:has([data-library-select-key]:checked), [data-result-table] tr:has([data-library-select-key]:checked), .saved-batch:has(> summary [data-library-select-key]:checked) { background: color-mix(in srgb, var(--cyan) 7%, var(--surface)); }
 .library-item-select input:focus-visible, .library-select-all input:focus-visible, .library-filter-option input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .scenario-library-item.has-group-selection { grid-template-columns: auto minmax(0, 1fr) auto; column-gap: .15rem; }
-.scenario-library-item > .library-item-select { align-self: start; margin-top: .45rem; }
+.scenario-library-item > .library-item-select { align-self: center; min-width: 2rem; min-height: 2.5rem; margin: 0; padding: .25rem; }
 .result-item-heading { display: flex; align-items: flex-start; gap: .4rem; min-width: 0; }
 .result-item-heading > strong { min-width: 0; flex: 1; overflow-wrap: anywhere; line-height: 1.55; }
 .result-item-heading > .library-item-select { margin-block: -.15rem; }
@@ -86,16 +92,16 @@
 #libraryDeleteError:empty, #deleteResultDialog .dialog-error:empty { display: none; }
 .library-delete-shell > footer { margin: 0; padding-top: 1rem; border-top: 1px solid var(--line-soft); }
 @media (max-width: 860px) {
-  .scenario-library { grid-template-rows: auto auto auto auto auto minmax(0, 1fr); }
-  #scenarioGroupTools { grid-column: 1 / -1; grid-row: 2; padding-inline: .65rem; }
-  .scenario-library-summary { grid-row: 3; }
-  .scenario-library-status { grid-row: 4; }
-  .scenario-list-error { grid-row: 5; }
-  .scenario-library-list { grid-row: 6; }
+  #scenarioGroupTools { padding-inline: .5rem; }
 }
 @media (max-height: 650px) {
-  .scenario-library { overflow-y: auto; }
-  .scenario-library-list { min-height: 7rem; flex-shrink: 0; }
+  .scenario-library { overflow: hidden; }
+  .scenario-library-list { min-height: 0; flex-shrink: 1; }
+}
+@container library-tools (max-width: 22rem) {
+  #scenarioGroupTools .library-filter-summary { display: none; }
+  #scenarioGroupTools .library-select-all { font-size: .72rem; gap: .3rem; }
+  #scenarioGroupTools .library-group-actions { grid-template-columns: minmax(0, 1fr) auto; }
 }
 @container library-tools (max-width: 27rem) {
   .library-group-toolbar { gap: .5rem; }

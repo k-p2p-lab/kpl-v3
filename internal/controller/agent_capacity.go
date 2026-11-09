@@ -264,6 +264,10 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 // A busy Agent is skipped fleet-wide until Retry-After expires. Pinned jobs wait
 // for that same Agent; unpinned jobs can immediately reserve another candidate.
 func (s *Server) deferAgentAdmission(agent model.Agent, err *agentAdmissionDeferredError, runID string) {
+	if s.worker != nil {
+		_ = s.worker.call(context.Background(), "defer-admission", workerAdmission{Agent: agent, After: err.after, Reason: err.reason}, nil)
+		return
+	}
 	now := time.Now()
 	s.state.mu.Lock()
 	current, exists := s.state.agents[agent.ID]

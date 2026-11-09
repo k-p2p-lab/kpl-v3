@@ -13,6 +13,9 @@ import (
 )
 
 func (s *Server) prepareExperimentNetwork(ctx context.Context, experiment model.Experiment) error {
+	if s.worker != nil {
+		return s.worker.command(ctx, "prepare-network", nil)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
 	s.state.mu.RLock()

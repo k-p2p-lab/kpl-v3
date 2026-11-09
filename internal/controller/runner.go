@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -24,9 +25,12 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/auth"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
+	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
 type ServerConfig struct {
+	// RunWorkers is enabled by the production Controller role.
+	RunWorkers          bool
 	RuntimeImage        string // Deployment-selected image reference, not a Docker Engine observation.
 	NetworkManagerURL   string
 	AgentDiscoveryDNS   string
@@ -45,6 +49,13 @@ type ServerConfig struct {
 }
 
 type Server struct {
+	worker                     *runWorkerClient
+	journalRecovery            sync.Map
+	journalBuildMu             sync.Mutex
+	workerCommand              func(string) *exec.Cmd
+	workerMu                   sync.Mutex
+	unreapedWorkers            map[string][]*workerproc.Process
+	summaryRefreshActive       bool
 	attackTargets              attackTargetCache
 	libraryDownloadsMu         sync.Mutex
 	libraryDownloads           map[string]libraryDownload
@@ -124,6 +135,8 @@ type Server struct {
 	dashboardSummaryFrame      *dashboardFrame
 	snapshotData               []byte
 	snapshotAt                 time.Time
+	snapshotEpoch              uint64
+	snapshotResetDone          chan struct{}
 }
 
 func New(config ServerConfig, logger *slog.Logger) *Server {
@@ -186,6 +199,13 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	}
 	server.state.metrics.registry.MustRegister(newServiceResourceCollector(server))
 	server.registerTelemetryMetrics()
+	server.state.journalOnly = config.RunWorkers
+	if config.RunWorkers {
+		server.state.requestJournalRecovery = server.requestJournalIndexRecovery
+	}
+	if config.RunWorkers {
+		server.state.retiredLookup = server.isRuntimeRetired
+	}
 	return server
 }
 
@@ -233,6 +253,10 @@ func (s *Server) stopScenarioLocked(runID string) error {
 }
 
 func (s *Server) runScenario(parentCtx context.Context, experiment model.Experiment, spec scenario.Scenario) {
+	if s.config.RunWorkers && s.worker == nil {
+		s.runScenarioWorker(parentCtx, experiment, spec)
+		return
+	}
 	ctx, cancelScenario := context.WithCancel(parentCtx)
 	defer cancelScenario()
 	s.updateExperiment(experiment.ID, func(run *model.Experiment) {
@@ -391,7 +415,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 	// For a single run, natural onExit only governs background jobs. Repeated,
 	// canceled, or failed runs also fence and remove Peers after producers stop,
 	// so no in-flight creation can escape cleanup or overlap the next iteration.
-	if runErr != nil || cleanupErr != nil || experiment.Repetitions > 1 {
+	if runErr != nil || cleanupErr != nil || experiment.Repetitions > 1 || s.worker != nil {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		s.updateExperiment(experiment.ID, func(run *model.Experiment) { run.CleanupState = "running" })
 		stopErr := s.stopRunGeneration(cleanupCtx, experiment.ID, generation)
@@ -415,13 +439,18 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		drainCancel()
 	}
 	resultErr := errors.Join(runErr, cleanupErr, dataErr)
+	if hasPendingRunWorker(dataErr) {
+		cleanupErr = errors.Join(cleanupErr, dataErr)
+	}
 
-	if err := s.state.recordAnalysisObservation(experiment.ID, time.Now().UTC()); err != nil {
+	observationCtx, observationCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	if err := s.state.recordAnalysisObservation(experiment.ID, time.Now().UTC(), observationCtx); err != nil {
 		s.logger.Warn("record final analysis observation", "run", experiment.ID, "error", err)
 		dataErr = errors.Join(dataErr, err)
 		resultErr = errors.Join(resultErr, err)
 		s.state.recordRunWriteError(experiment.ID, err)
 	}
+	observationCancel()
 
 	if err := s.flushRunSources(experiment.ID); err != nil {
 		s.state.recordRunWriteError(experiment.ID, err)
@@ -456,7 +485,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 				current.IntegrityError = dataErr.Error()
 			}
 		}
-		if resultErr == nil && experiment.Repetitions <= 1 && !closedSingleRun && len(current.Agents) > 0 {
+		if s.worker == nil && resultErr == nil && experiment.Repetitions <= 1 && !closedSingleRun && len(current.Agents) > 0 {
 			current.CleanupState = "retained"
 			current.DataState = "collecting"
 		}
@@ -782,6 +811,9 @@ func (s *Server) phaseOperationError(ctx context.Context, runID string, phase sc
 // so a create that was already in flight cannot commit after cleanup. A later
 // scenario generation is still allowed to create peers with the same run ID.
 func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation uint64) error {
+	if s.worker != nil {
+		return s.worker.command(ctx, "stop-generation", workerGeneration{RunID: runID, Generation: generation})
+	}
 	agents, err := s.cleanupParticipants(runID)
 	if err != nil {
 		return err
@@ -833,6 +865,9 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 // Agent must not turn confirmed cleanup into a failed Run. Omitting run IDs
 // retains the full-inventory refresh; legacy ownership falls back as before.
 func (s *Server) refreshAgentState(ctx context.Context, runIDs ...string) error {
+	if s.worker != nil {
+		return s.worker.command(ctx, "refresh", nil)
+	}
 	type owner struct{ id, url string }
 	var owners map[owner]bool
 	if len(runIDs) > 0 {
@@ -890,6 +925,21 @@ func (s *Server) acquireAgent(ctx context.Context, nodeID string) (model.Agent, 
 }
 
 func (s *Server) acquireAgentWithPlacement(ctx context.Context, nodeID, agentID string, rng *rand.Rand) (model.Agent, error) {
+	if s.worker != nil {
+		c := s.worker
+		c.placementMu.Lock()
+		if c.placementRNG == nil {
+			c.placementRNG = make(map[string]*rand.Rand)
+		}
+		if rng != nil {
+			c.placementRNG[nodeID] = rng
+		}
+		c.placementMu.Unlock()
+		defer func() { c.placementMu.Lock(); delete(c.placementRNG, nodeID); c.placementMu.Unlock() }()
+		var result model.Agent
+		err := c.call(ctx, "reserve", workerReservation{NodeID: nodeID, AgentID: agentID, Random: rng != nil}, &result)
+		return result, err
+	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -934,6 +984,9 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 			continue
 		}
 		if agent.Disabled || now.Before(s.state.agentAdmissionUntil[agent.ID]) || !agentIsOnline(agent, now) || agent.Capacity > 0 && agent.ActiveNodes >= agent.Capacity {
+			continue
+		}
+		if s.config.RunWorkers && !agent.RunProcesses {
 			continue
 		}
 		if rng != nil {
@@ -1012,6 +1065,10 @@ func utilization(agent model.Agent, additional int) float64 {
 }
 
 func (s *Server) releaseReservation(nodeID string) {
+	if s.worker != nil {
+		_ = s.worker.call(context.Background(), "release", nodeID, nil)
+		return
+	}
 	s.state.mu.Lock()
 	agentID, reserved := s.state.reservations[nodeID]
 	if reserved {
@@ -1029,6 +1086,21 @@ func (s *Server) releaseReservation(nodeID string) {
 }
 
 func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID string, node model.Node, expectedInstance ...time.Time) bool {
+	if s.worker != nil {
+		c := s.worker
+		c.syncMu.Lock()
+		defer c.syncMu.Unlock()
+		var result workerCreatedResult
+		err := c.call(context.Background(), "created", workerCreated{Request: request, AgentID: agentID, Node: node, Expected: expectedInstance}, &result)
+		if err != nil || !result.Accepted {
+			return false
+		}
+		c.server.state.mu.Lock()
+		c.server.state.setNodeLocked(result.Node)
+		c.server.state.nodeReportTimes[result.Node.ID] = result.ReportedAt
+		c.server.state.mu.Unlock()
+		return true
+	}
 	now := time.Now().UTC()
 	hasObservationTime := !node.LastSeen.IsZero()
 	config := request.Config.WithDefaults()
@@ -1102,6 +1174,11 @@ func (s *Server) recordCreatedNode(request model.CreateNodeRequest, agentID stri
 }
 
 func (s *Server) markNodeStoppingAndReleaseCapacity(nodeID string) {
+	if s.worker != nil {
+		_ = s.worker.call(context.Background(), "mark-stopping", nodeID, nil)
+		_ = s.worker.syncInventory(context.Background())
+		return
+	}
 	s.state.mu.Lock()
 	node, exists := s.state.nodes[nodeID]
 	releaseCapacity := false
@@ -1478,6 +1555,9 @@ func (s *Server) agent(id string) (model.Agent, bool) {
 }
 
 func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, input, output any) error {
+	if s.worker != nil {
+		return s.worker.callAgent(ctx, baseURL, method, path, input, output)
+	}
 	route, _, _ := strings.Cut(path, "?")
 	runDrain := method == http.MethodPost && strings.HasPrefix(route, "/api/v1/runs/") && strings.HasSuffix(route, "/drain")
 	var body io.Reader
@@ -1543,6 +1623,9 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 		}
 		responseErr := fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(message)))
 		if runDrain && resp.StatusCode == http.StatusServiceUnavailable {
+			if pending := parseRunWorkerPending(message); pending != nil {
+				return pending
+			}
 			if pending := parseRunDrainPending(message); pending != nil {
 				return pending
 			}
@@ -1588,6 +1671,10 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 }
 
 func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) {
+	if s.worker != nil {
+		s.worker.update(runID, update)
+		return
+	}
 	s.state.persistMu.Lock()
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultDeletedLocked(runID); err != nil || deleted {
@@ -1603,7 +1690,18 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 		return
 	}
 	update(&experiment)
+	if s.config.RunWorkers && (experiment.State == "completed" || experiment.State == "failed" || experiment.State == "canceled") {
+		// The immutable input remains in scenario.yaml. Queued/active work keeps
+		// its launch input; terminal history must not pin large source strings.
+		experiment.ScenarioYAML = ""
+	}
 	s.state.experiments[runID] = experiment
+	if s.config.RunWorkers {
+		if s.state.summaryDirty == nil {
+			s.state.summaryDirty = make(map[string]bool)
+		}
+		s.state.summaryDirty[runID] = true
+	}
 	s.state.mu.Unlock()
 	s.state.notify()
 	if err := s.persistExperiment(experiment); err != nil {

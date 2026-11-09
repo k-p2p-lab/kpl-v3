@@ -64,6 +64,10 @@ func (s *Server) proxyMeshFreeze(ctx context.Context, nodeID string, request mod
 	}
 	apiURL, peerID := proc.apiURL, proc.node.PeerID
 	s.mu.RUnlock()
+	if s.config.RunWorkerFactory != nil {
+		err := s.runWorkerControl(ctx, proc, "mesh-freeze", request, &result)
+		return result, err
+	}
 	data, err := json.Marshal(request)
 	if err != nil {
 		return result, err

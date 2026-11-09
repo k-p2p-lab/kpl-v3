@@ -23,10 +23,18 @@ type dashboardSnapshotFlight struct {
 // without holding a mutex and leave immediately on cancellation; reconnects
 // join the same producer instead of piling up blocked snapshot computations.
 func (s *Server) streamSnapshotAtContext(ctx context.Context, keepAlive func() error) ([]byte, time.Time, error) {
+retry:
 	if err := ctx.Err(); err != nil {
 		return nil, time.Time{}, err
 	}
 	s.snapshotMu.Lock()
+	if reset := s.snapshotResetDone; reset != nil {
+		s.snapshotMu.Unlock()
+		if err := waitSnapshotFlight(ctx, reset, keepAlive); err != nil {
+			return nil, time.Time{}, err
+		}
+		goto retry
+	}
 	if s.snapshotData != nil && time.Since(s.snapshotAt) < snapshotInterval {
 		data, at := s.snapshotData, s.snapshotAt
 		s.snapshotMu.Unlock()
@@ -34,6 +42,7 @@ func (s *Server) streamSnapshotAtContext(ctx context.Context, keepAlive func() e
 	}
 	flight := s.snapshotFlight
 	if flight == nil {
+		epoch := s.snapshotEpoch
 		flight = &rawSnapshotFlight{done: make(chan struct{})}
 		s.snapshotFlight = flight
 		go func() {
@@ -41,10 +50,12 @@ func (s *Server) streamSnapshotAtContext(ctx context.Context, keepAlive func() e
 			flight.at = time.Now()
 			flight.data, flight.err = json.Marshal(s.state.snapshot())
 			s.snapshotMu.Lock()
-			if flight.err == nil {
+			if flight.err == nil && s.snapshotEpoch == epoch {
 				s.snapshotData, s.snapshotAt = flight.data, flight.at
 			}
-			s.snapshotFlight = nil
+			if s.snapshotFlight == flight {
+				s.snapshotFlight = nil
+			}
 			close(flight.done)
 			s.snapshotMu.Unlock()
 		}()
@@ -61,10 +72,18 @@ func (s *Server) dashboardStreamSnapshotContext(ctx context.Context, keepAlive f
 }
 
 func (s *Server) dashboardStreamSnapshotForTopology(ctx context.Context, keepAlive func() error, includeTopology bool) (*dashboardFrame, error) {
+retry:
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	s.snapshotMu.Lock()
+	if reset := s.snapshotResetDone; reset != nil {
+		s.snapshotMu.Unlock()
+		if err := waitSnapshotFlight(ctx, reset, keepAlive); err != nil {
+			return nil, err
+		}
+		goto retry
+	}
 	frame, flight := s.dashboardFrame, s.dashboardFlight
 	if !includeTopology {
 		frame, flight = s.dashboardSummaryFrame, s.dashboardSummaryFlight
@@ -74,6 +93,7 @@ func (s *Server) dashboardStreamSnapshotForTopology(ctx context.Context, keepAli
 		return frame, nil
 	}
 	if flight == nil {
+		epoch := s.snapshotEpoch
 		flight = &dashboardSnapshotFlight{done: make(chan struct{})}
 		if includeTopology {
 			s.dashboardFlight = flight
@@ -85,15 +105,19 @@ func (s *Server) dashboardStreamSnapshotForTopology(ctx context.Context, keepAli
 			flight.frame, flight.err = newDashboardFrame(s.state.snapshotForTopologyView(true, includeTopology), at)
 			s.snapshotMu.Lock()
 			if includeTopology {
-				if flight.err == nil {
+				if flight.err == nil && s.snapshotEpoch == epoch {
 					s.dashboardFrame = flight.frame
 				}
-				s.dashboardFlight = nil
+				if s.dashboardFlight == flight {
+					s.dashboardFlight = nil
+				}
 			} else {
-				if flight.err == nil {
+				if flight.err == nil && s.snapshotEpoch == epoch {
 					s.dashboardSummaryFrame = flight.frame
 				}
-				s.dashboardSummaryFlight = nil
+				if s.dashboardSummaryFlight == flight {
+					s.dashboardSummaryFlight = nil
+				}
 			}
 			close(flight.done)
 			s.snapshotMu.Unlock()

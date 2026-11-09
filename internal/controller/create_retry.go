@@ -96,6 +96,10 @@ type uncertainCreate struct {
 // An interrupted POST may still create a Peer. Keep its slot until the Agent
 // reports that Peer or acknowledges the run fence and container cleanup.
 func (s *Server) retainUncertainCreate(request model.CreateNodeRequest, agentID string) {
+	if s.worker != nil {
+		_ = s.worker.call(context.Background(), "uncertain", workerCreated{Request: request, AgentID: agentID}, nil)
+		return
+	}
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	if s.state.reservations[request.ID] != agentID {

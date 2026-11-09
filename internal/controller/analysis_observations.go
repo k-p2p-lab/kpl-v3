@@ -74,7 +74,7 @@ func (s *Server) recordAnalysisLoop(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := s.state.recordAnalysisObservation(id, now.UTC()); err != nil {
+				if err := s.state.recordAnalysisObservation(id, now.UTC(), ctx); err != nil && ctx.Err() == nil {
 					s.logger.Warn("record analysis observation", "run", id, "error", err)
 				}
 			}
@@ -82,12 +82,22 @@ func (s *Server) recordAnalysisLoop(ctx context.Context) {
 	}
 }
 
-func (s *state) recordAnalysisObservation(runID string, now time.Time) (resultErr error) {
+func (s *state) recordAnalysisObservation(runID string, now time.Time, contexts ...context.Context) (resultErr error) {
+	ctx := context.Background()
+	if s.worker != nil && s.worker.ctx != nil {
+		ctx = s.worker.ctx
+	}
+	if len(contexts) > 0 && contexts[0] != nil {
+		ctx = contexts[0]
+	}
 	defer func() {
-		if resultErr != nil {
+		if resultErr != nil && resultErr != ctx.Err() {
 			s.recordRunWriteError(runID, resultErr)
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.RLock()
 	nodes := make([]model.Node, 0)
 	agents := make(map[string]model.Agent, len(s.agents))
@@ -105,6 +115,9 @@ func (s *state) recordAnalysisObservation(runID string, now time.Time) (resultEr
 	data, err := json.Marshal(observation)
 	if err != nil {
 		return err
+	}
+	if s.worker != nil {
+		return s.worker.streamObservation(ctx, observation.At, data)
 	}
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()

@@ -71,6 +71,23 @@ func (s *Server) proxyProfileUpdate(ctx context.Context, nodeID string, request 
 	}
 	apiURL, peerID := proc.apiURL, proc.node.PeerID
 	s.mu.RUnlock()
+	if s.config.RunWorkerFactory != nil {
+		err = s.runWorkerControl(ctx, proc, "profile", request, &result)
+		if err != nil && request.Stage == "apply" {
+			s.mu.Lock()
+			if s.processes[nodeID] == proc && !proc.exited {
+				current, _ := strconv.ParseUint(proc.node.Metadata["profileRevision"], 10, 64)
+				if current < request.Revision {
+					setProcessMetadata(proc, "profilePending", "true")
+					if request.Set.Network != nil {
+						setProcessMetadata(proc, "networkPending", "true")
+					}
+				}
+			}
+			s.mu.Unlock()
+		}
+		return result, err
+	}
 	dispatched := false
 	defer func() {
 		if err == nil || !dispatched || request.Stage != "apply" {

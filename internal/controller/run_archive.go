@@ -379,6 +379,11 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		if err != nil {
 			return err
 		}
+		if s.config.RunWorkers {
+			if err := s.state.recoverPendingJournalLocked(id); err != nil {
+				return err
+			}
+		}
 		fingerprint, err := sourceFingerprintAt(root, manifest)
 		if err != nil {
 			return err

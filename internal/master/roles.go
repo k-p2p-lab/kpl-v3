@@ -17,11 +17,15 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/experimentnet"
 	"github.com/k-p2p-lab/kpl-v3/internal/peer"
 	"github.com/k-p2p-lab/kpl-v3/internal/runtimehealth"
+	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
 var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer"}
 
 func IsRuntimeCommand(name string) bool {
+	if name == "internal-worker" {
+		return true
+	}
 	for _, role := range roleCommands {
 		if role == name {
 			return true
@@ -77,6 +81,8 @@ func (a *App) executeRuntime(ctx context.Context, args []string) error {
 		err = runNetworkGateway(ctx, args[1:])
 	case "peer":
 		err = runPeer(ctx, logger, args[1:])
+	case "internal-worker":
+		err = runInternalWorker(ctx, logger, args[1:])
 	}
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
@@ -85,6 +91,36 @@ func (a *App) executeRuntime(ctx context.Context, args []string) error {
 		logger.Error("kpl stopped", "role", args[0], "error", err)
 	}
 	return err
+}
+
+// This role requires the private inherited IPC descriptors checked by Serve.
+// It is deliberately absent from public help and completion role lists.
+func runInternalWorker(ctx context.Context, logger *slog.Logger, args []string) error {
+	if len(args) != 1 {
+		return usageError("internal worker requires one private role")
+	}
+	kind := args[0]
+	switch kind {
+	case "controller-run", "controller-analysis", "controller-summary", "controller-export", "controller-journal", "agent-run":
+	default:
+		return usageError("unknown internal worker role")
+	}
+	return workerproc.Serve(ctx, kind, func(workerCtx context.Context, workerKind string, bootstrap json.RawMessage, peer *workerproc.Peer) (workerproc.Handler, error) {
+		workerLogger := logger.With("workerKind", workerKind, "runId", peer.RunID(), "workerEpoch", peer.Epoch())
+		slog.SetDefault(workerLogger)
+		var handler workerproc.Handler
+		var err error
+		if workerKind == "agent-run" {
+			handler, err = agent.NewRunWorkerHandler(workerCtx, workerKind, bootstrap, peer)
+		} else {
+			handler, err = controller.WorkerFactory(workerCtx, workerKind, bootstrap, peer)
+		}
+		if err != nil {
+			return nil, err
+		}
+		go runtimehealth.Run(workerCtx, workerLogger, workerKind)
+		return handler, nil
+	})
 }
 
 func runServiceMonitor(ctx context.Context, logger *slog.Logger, args []string) error {
@@ -157,6 +193,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
+		RunWorkers:          true,
 		RuntimeImage:        strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")),
 		NetworkManagerURL:   strings.TrimSpace(*networkManager),
 		AgentDiscoveryDNS:   strings.TrimSpace(*agentDiscoveryDNS),
@@ -224,6 +261,9 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 	server, err := agent.New(authenticatedAgentConfig(user, password, agent.Config{
+		RunWorkerFactory: func(workerCtx context.Context, config agent.RunWorkerConfig, broker workerproc.Handler) (*workerproc.Process, error) {
+			return workerproc.Start(workerCtx, "agent-run", config, broker)
+		},
 		HostRebootEnabled: *hostRebootEnabled, ControlNodeID: *controlNodeID,
 		AutoResetNetwork: *autoResetNetwork, ControlNetwork: *controlNetwork,
 		ID: *id, Name: *name, Listen: *listen, AdvertiseURL: *advertiseURL,

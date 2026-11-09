@@ -124,7 +124,7 @@ func reportAnalysisProgress(ctx context.Context, phase string, bytes int64) {
 }
 
 func scanAnalysisFile(ctx context.Context, file resultFile, consume func([]byte) error) error {
-	if file.file == nil && len(file.parts) == 0 {
+	if file.file == nil && file.readAt == nil && len(file.parts) == 0 {
 		return nil
 	}
 	reportAnalysisProgress(ctx, file.name, 0)

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,16 @@ const (
 )
 
 type state struct {
+	worker                  *runWorkerClient
+	journalOnly             bool
+	requestJournalRecovery  func(string)
+	journalIndices          map[string]*runJournalIndex
+	workerSummaries         map[string]runWorkerSummary
+	summaryDirty            map[string]bool
+	summaryDue              map[string]time.Time
+	closedRuns              map[string]bool
+	closedRunOrder          []string
+	retiredLookup           func(string) (bool, error)
 	resultsRevision         atomic.Uint64
 	failedRunWrites         map[string]bool
 	archiveQueueMu          sync.Mutex
@@ -203,6 +214,19 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	if h.Agent.ID == "" {
 		return fmt.Errorf("agent id is required")
 	}
+	retired := make(map[string]bool)
+	if s.journalOnly && s.retiredLookup != nil {
+		for _, node := range h.Nodes {
+			if _, seen := retired[node.RunID]; seen {
+				continue
+			}
+			closed, err := s.lookupRetiredRun(node.RunID)
+			if err != nil {
+				return err
+			}
+			retired[node.RunID] = closed
+		}
+	}
 	now := time.Now().UTC()
 	s.mu.Lock()
 	previous, ok := s.agents[h.Agent.ID]
@@ -222,6 +246,17 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(h.Nodes))
+	if s.journalOnly {
+		retained := h.Nodes[:0]
+		for _, node := range h.Nodes {
+			old, exists := s.nodes[node.ID]
+			if retired[node.RunID] && (node.State == model.NodeStopped || node.State == model.NodeFailed && node.Metadata["cleanupComplete"] == "true") && (!exists || !nodeHasLiveState(old) && old.Metadata["cleanupComplete"] == "true") {
+				continue
+			}
+			retained = append(retained, node)
+		}
+		h.Nodes = retained
+	}
 	for _, node := range h.Nodes {
 		_, duplicate := seen[node.ID]
 		owner := s.nodes[node.ID].AgentID
@@ -255,6 +290,7 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	h.Agent.Version = firstNonEmpty(h.Agent.Version, previous.Version)
 	h.Agent.PeerImage = firstNonEmpty(h.Agent.PeerImage, previous.PeerImage)
 	h.Agent.RunDrain = h.Agent.RunDrain || previous.RunDrain
+	h.Agent.RunProcesses = h.Agent.RunProcesses || previous.RunProcesses
 	h.Agent.CreateReplay = h.Agent.CreateReplay || previous.CreateReplay
 	if h.Agent.Host == nil {
 		h.Agent.Host = cloneAgentHost(previous).Host
@@ -366,6 +402,9 @@ func (s *state) heartbeat(h model.AgentHeartbeat) error {
 	s.agents[h.Agent.ID] = h.Agent
 	s.mu.Unlock()
 	for _, node := range metricNodes {
+		if retired[node.RunID] {
+			continue
+		}
 		s.metrics.initNode(node)
 	}
 	s.notify()
@@ -421,6 +460,12 @@ func (s *state) appendEvents(batch model.EventBatch) error {
 }
 
 func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (resultErr error) {
+	if s.worker != nil {
+		return s.worker.call(context.Background(), "append", events, nil)
+	}
+	if s.journalOnly {
+		return s.appendJournalEvents(runID, events)
+	}
 	defer func() {
 		if resultErr != nil {
 			s.recordRunWriteError(runID, resultErr)
@@ -718,7 +763,7 @@ func (s *state) snapshotForTopologyView(dashboard, includeTopology bool) model.S
 			break
 		}
 	}
-	if runID == "" {
+	if runID == "" && !s.journalOnly {
 		for _, experiment := range result.Experiments {
 			if !experiment.StartedAt.IsZero() && experiment.State != "queued" {
 				runID = experiment.ID
@@ -727,6 +772,7 @@ func (s *state) snapshotForTopologyView(dashboard, includeTopology bool) model.S
 		}
 	}
 	accumulator := s.runMetrics[runID]
+	summary, hasSummary := s.workerSummaries[runID]
 	s.mu.RUnlock()
 	if accumulator != nil {
 		result.Metrics = accumulator.liveSummary(runID, result.GeneratedAt)
@@ -737,6 +783,8 @@ func (s *state) snapshotForTopologyView(dashboard, includeTopology bool) model.S
 			accumulator.dataMu.RUnlock()
 			result.Metrics.Bandwidth = &bandwidth
 		}
+	} else if hasSummary {
+		result.Metrics = summary.Metrics
 	} else {
 		result.Metrics.RunID = runID
 	}

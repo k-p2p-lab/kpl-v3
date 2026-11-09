@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -71,6 +72,7 @@ type savedResult struct {
 }
 
 type resultFile struct {
+	readAt io.ReaderAt
 	parts  []resultFile
 	remote *storedRunFile
 	name   string
@@ -106,12 +108,15 @@ type resultArchiveFlight struct {
 }
 
 type resultSnapshot struct {
-	files       []resultFile
-	exportedAt  time.Time
-	active      bool
-	result      savedResult
-	storedState string
-	release     func()
+	releaseArchiveRead func()
+	acquireArchiveRead func(context.Context) (func(), error)
+	metricsCache       *snapshotMetricsCache
+	files              []resultFile
+	exportedAt         time.Time
+	active             bool
+	result             savedResult
+	storedState        string
+	release            func()
 }
 
 func (snapshot *resultSnapshot) close() {
@@ -511,13 +516,16 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 		job.cancel()
 	}
 	delete(s.analysisJobs, id)
-	if err := removeResultDirectory(runs, id); err != nil {
-		return err
-	}
+	// The durable tombstone has committed logical deletion. Release runtime
+	// projections even if physical cleanup must be retried after a disk error.
 	s.state.metrics.deleteRun(id)
 	s.state.mu.Lock()
 	delete(s.state.experiments, id)
 	delete(s.state.runMetrics, id)
+	delete(s.state.workerSummaries, id)
+	delete(s.state.journalIndices, id)
+	delete(s.state.summaryDirty, id)
+	delete(s.state.summaryDue, id)
 	delete(s.state.runTimings, id)
 	events := s.state.events[:0]
 	for _, event := range s.state.events {
@@ -538,7 +546,7 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 	s.resultArchiveMu.Lock()
 	delete(s.resultArchives, id)
 	s.resultArchiveMu.Unlock()
-	return nil
+	return removeResultDirectory(runs, id)
 }
 
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
@@ -852,6 +860,11 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		if err != nil {
 			return err
 		}
+		if s.config.RunWorkers {
+			if err := s.state.recoverPendingJournalLocked(id); err != nil {
+				return err
+			}
+		}
 		for _, name := range resultSourceFiles {
 			file, err := captureRunSource(root, manifest, name)
 			if err != nil && !((name == "events.jsonl" || name == "observations.jsonl" || name == resultNoteFile) && errors.Is(err, os.ErrNotExist)) {
@@ -891,6 +904,18 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 		return nil, err
 	}
 	if releaseRemote != nil {
+		releaseRemote = sync.OnceFunc(releaseRemote)
+		snapshot.releaseArchiveRead = releaseRemote
+		if s.config.RunWorkers {
+			snapshot.acquireArchiveRead = func(readCtx context.Context) (func(), error) {
+				select {
+				case s.archiveReadSlots <- struct{}{}:
+					return func() { <-s.archiveReadSlots }, nil
+				case <-readCtx.Done():
+					return nil, readCtx.Err()
+				}
+			}
+		}
 		previousRelease := snapshot.release
 		snapshot.release = func() {
 			releaseRemote()
@@ -926,6 +951,11 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 	result.SourceRevision = revision
 	snapshot.result = result
 	snapshot.storedState = result.storedState
+	if s.config.RunWorkers {
+		snapshot.metricsCache = &snapshotMetricsCache{boundary: func() time.Time { return snapshot.exportedAt }, calculate: func(callCtx context.Context) (model.Metrics, error) {
+			return s.exportMetricsWithWorker(callCtx, snapshot)
+		}}
+	}
 	return snapshot, nil
 }
 
@@ -1174,6 +1204,24 @@ func (snapshot *resultSnapshot) writeZIP(ctx context.Context, output io.Writer) 
 }
 
 func (snapshot *resultSnapshot) writeZIPMeasured(ctx context.Context, output io.Writer, pendingPublications *int) error {
+	var metrics model.Metrics
+	var err error
+	if snapshot.metricsCache != nil {
+		// Queue and finish calculation before committing ZIP bytes, and before
+		// holding a streaming NAS slot that an earlier queue task could need.
+		metrics, err = snapshot.metricsCache.get(ctx)
+		if err != nil {
+			return fmt.Errorf("summarize saved events: %w", err)
+		}
+		if snapshot.acquireArchiveRead != nil {
+			snapshot.releaseArchiveReader()
+			release, err := snapshot.acquireArchiveRead(ctx)
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
+	}
 	archive := zip.NewWriter(resultContextWriter{ctx: ctx, writer: output})
 	sizes := make(map[string]int64, len(snapshot.files))
 	for _, file := range snapshot.files {
@@ -1198,7 +1246,9 @@ func (snapshot *resultSnapshot) writeZIPMeasured(ctx context.Context, output io.
 			break
 		}
 	}
-	metrics, err := summarizeRunEventsContext(ctx, snapshot.result.ID, eventLog, snapshot.exportedAt)
+	if snapshot.metricsCache == nil {
+		metrics, err = summarizeRunEventsContext(ctx, snapshot.result.ID, eventLog, snapshot.exportedAt)
+	}
 	if err != nil {
 		return fmt.Errorf("summarize saved events: %w", err)
 	}

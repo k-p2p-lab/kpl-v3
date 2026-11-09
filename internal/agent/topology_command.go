@@ -96,6 +96,10 @@ func (s *Server) proxyTopology(ctx context.Context, nodeID string, request model
 	}
 	apiURL, peerID := proc.apiURL, proc.node.PeerID
 	s.mu.RUnlock()
+	if s.config.RunWorkerFactory != nil {
+		err := s.runWorkerControl(ctx, proc, "topology", request, &result)
+		return result, err
+	}
 	for _, info := range infos {
 		if info.ID.String() == peerID {
 			return result, fmt.Errorf("node %q cannot be its own topology neighbor", nodeID)

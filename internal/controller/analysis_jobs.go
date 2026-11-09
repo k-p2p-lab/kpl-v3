@@ -420,6 +420,9 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 		job.status.SourceHash = sourceHash
 		s.analysisJobMu.Unlock()
 		processed = 0
+		if s.config.RunWorkers {
+			return s.analyzeJobWithWorker(ctx, job, snapshot, report)
+		}
 		analysis, err := analyzeResult(context.WithValue(ctx, analysisProgressKey{}, report), snapshot)
 		if err != nil {
 			return err
@@ -498,15 +501,25 @@ func (s *Server) saveAnalysisJob(ctx context.Context, job *analysisJob, analysis
 		return err
 	}
 	defer root.Close()
-	artifact, err := stageAnalysisJSON(ctx, root, analysis)
-	if err != nil {
-		return err
+	var artifact, compact *stagedAnalysisJSON
+	if staged, ok := analysis.(*workerAnalysisArtifacts); ok {
+		if staged.sinks["full"] == nil || staged.sinks["compact"] == nil {
+			return errors.New("analysis worker outputs are incomplete")
+		}
+		artifact, compact = staged.sinks["full"].staged, staged.sinks["compact"].staged
+	} else {
+		artifact, err = stageAnalysisJSON(ctx, root, analysis)
+		if err == nil {
+			compact, err = stageAnalysisJSON(ctx, root, summary)
+		}
+		if err != nil {
+			if artifact != nil {
+				artifact.discard()
+			}
+			return err
+		}
 	}
 	defer artifact.discard()
-	compact, err := stageAnalysisJSON(ctx, root, summary)
-	if err != nil {
-		return err
-	}
 	defer compact.discard()
 
 	s.analysisJobMu.Lock()

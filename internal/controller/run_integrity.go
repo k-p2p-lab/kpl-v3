@@ -24,6 +24,9 @@ const ownershipDirectory = "run-ownership"
 // Persist ownership before sending a create, including requests whose response
 // is lost. Metadata survives Controller restart and deletion of an old attempt.
 func (s *Server) rememberRunAgent(id string, agent model.Agent) error {
+	if s.worker != nil {
+		return s.worker.call(context.Background(), "remember", agent, nil)
+	}
 	return s.rememberRunAgentWithPersistence(id, agent, s.persistExperiment)
 }
 
@@ -103,7 +106,18 @@ func (s *Server) cleanupParticipantsChecked(id string, requireRecordedDrain bool
 	s.state.mu.RUnlock()
 	unique := map[string]model.Agent{}
 	for _, agent := range owned {
-		if current, ok := known[agent.ID]; ok && (current.URL == agent.URL || (!agent.StartedAt.IsZero() && current.StartedAt.Equal(agent.StartedAt)) || (current.StartupReconciled && current.StartedAt.After(agent.StartedAt) && sameAgentHost(current, agent))) {
+		current, registered := known[agent.ID]
+		compatible := registered && (current.URL == agent.URL || (!agent.StartedAt.IsZero() && current.StartedAt.Equal(agent.StartedAt)) || (current.StartupReconciled && current.StartedAt.After(agent.StartedAt) && sameAgentHost(current, agent)))
+		if requireRecordedDrain && agent.RunProcesses {
+			compatible = registered && !agent.StartedAt.IsZero() && (current.StartedAt.Equal(agent.StartedAt) || current.StartupReconciled && current.StartedAt.After(agent.StartedAt) && sameRunWorkerAgentHost(current, agent))
+			if !compatible {
+				return nil, &agentRunWorkerPendingError{message: fmt.Sprintf("Agent %s must register a matching instance before its recorded Run worker cleanup can be confirmed", agent.ID)}
+			}
+			if !current.RunProcesses || !current.RunDrain {
+				return nil, &agentRunWorkerPendingError{message: fmt.Sprintf("Agent %s no longer supports the recorded Run worker cleanup; process reset cannot be confirmed", agent.ID)}
+			}
+		}
+		if compatible {
 			if requireRecordedDrain && agent.RunDrain && !current.RunDrain {
 				return nil, fmt.Errorf("Agent %s no longer supports the recorded final telemetry drain; delivery cannot be confirmed", agent.ID)
 			}
@@ -136,6 +150,16 @@ func (s *Server) cleanupParticipantsChecked(id string, requireRecordedDrain bool
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 	return agents, nil
+}
+
+func sameRunWorkerAgentHost(current, recorded model.Agent) bool {
+	// A missing Swarm node ID cannot downgrade an existing host identity to
+	// hostname equality; different machines may legitimately share a hostname.
+	currentNode, recordedNode := current.Labels["swarmNodeId"], recorded.Labels["swarmNodeId"]
+	if currentNode != "" || recordedNode != "" {
+		return currentNode != "" && currentNode == recordedNode
+	}
+	return sameAgentHost(current, recorded)
 }
 
 type agentRunDrainPendingError struct {
@@ -220,6 +244,9 @@ func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model
 		path := "/api/v1/runs/" + url.PathEscape(id) + "/drain?timeout=" + url.QueryEscape(wait.String())
 		err := s.callAgent(ctx, agent.URL, http.MethodPost, path, nil, nil)
 		if err == nil {
+			if agent.RunProcesses {
+				return s.confirmRunWorkerDrain(ctx, agent)
+			}
 			return nil
 		}
 		var pending *agentRunDrainPendingError
@@ -242,7 +269,26 @@ func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model
 	}
 }
 
+// A stale task address can now serve an older Agent whose drain acknowledges
+// only logs. Check the raw status instead of the merged heartbeat cache, where
+// omitted capability fields intentionally preserve the registered values.
+func (s *Server) confirmRunWorkerDrain(ctx context.Context, agent model.Agent) error {
+	var heartbeat model.AgentHeartbeat
+	if err := s.callAgent(ctx, agent.URL, http.MethodGet, "/api/v1/status", nil, &heartbeat); err != nil {
+		pending := &agentRunWorkerPendingError{message: fmt.Sprintf("Agent %s Run worker cleanup cannot be confirmed: %v", agent.ID, err)}
+		return errors.Join(pending, err)
+	}
+	identity := heartbeat.Agent
+	if identity.ID != agent.ID || agent.StartedAt.IsZero() || !identity.StartedAt.Equal(agent.StartedAt) || !identity.RunProcesses || !identity.RunDrain {
+		return &agentRunWorkerPendingError{message: fmt.Sprintf("Agent %s Run worker cleanup cannot be confirmed by a different instance or missing process capability", agent.ID)}
+	}
+	return nil
+}
+
 func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
+	if s.worker != nil {
+		return s.worker.command(ctx, "drain", nil)
+	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 3*time.Minute)
@@ -303,6 +349,9 @@ func (s *Server) drainRunTelemetry(ctx context.Context, id string) error {
 	return &runTelemetryDrainError{message: errors.Join(failures...).Error(), causes: causes}
 }
 func (s *Server) flushRunSources(id string) error {
+	if s.worker != nil {
+		return s.worker.call(context.Background(), "flush", nil, nil)
+	}
 	root, err := s.analysisDirectory(id)
 	if err != nil {
 		return err

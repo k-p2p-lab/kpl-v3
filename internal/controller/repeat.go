@@ -79,6 +79,7 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 	}
 	executionID := cryptorand.Text()
 	experiments := make([]model.Experiment, repetitions)
+	scenarioYAML := string(raw)
 	for index := range experiments {
 		var nonce [16]byte
 		if _, err := cryptorand.Read(nonce[:]); err != nil {
@@ -88,7 +89,7 @@ func (s *Server) startScenarioRepeated(parent context.Context, raw []byte, repet
 		experiments[index] = model.Experiment{
 			ID:          fmt.Sprintf("run-%s-%x", now.Format("20060102T150405Z"), nonce),
 			ExecutionID: executionID, Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases),
-			ScenarioYAML: string(raw), Iteration: index + 1, Repetitions: repetitions,
+			ScenarioYAML: scenarioYAML, Iteration: index + 1, Repetitions: repetitions,
 		}
 		if spec.Seed == 0 {
 			experiments[index].Seed = now.UnixNano() + int64(index)

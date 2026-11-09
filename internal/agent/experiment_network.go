@@ -77,6 +77,21 @@ func (s *Server) fenceExperimentNetwork(ctx context.Context, request model.Exper
 	if request.RunID == "" || request.Epoch == "" || request.RequestedAt.IsZero() {
 		return errors.New("experiment network identity is required")
 	}
+	if s.config.RunWorkerFactory != nil {
+		if err := s.runWorkerAdmissionReady(request.RunID); err != nil {
+			return err
+		}
+		stored, exists, err := s.history.fence(request.RunID)
+		if err != nil {
+			return err
+		}
+		s.mu.RLock()
+		current, currentExists := s.runFences[request.RunID]
+		s.mu.RUnlock()
+		if exists && stored == ^uint64(0) || currentExists && current == ^uint64(0) {
+			return errors.New("experiment Run has already been finalized")
+		}
+	}
 	s.mu.Lock()
 	if !s.startupReconciled || s.shuttingDown || s.host != nil && s.host.RebootPending {
 		s.mu.Unlock()

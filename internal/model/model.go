@@ -21,6 +21,7 @@ type Agent struct {
 	StartupReconciled bool              `json:"startupReconciled,omitempty"`
 	PeerImage         string            `json:"peerImage,omitempty"`
 	RunDrain          bool              `json:"runDrain,omitempty"`
+	RunProcesses      bool              `json:"runProcesses,omitempty"`
 	ID                string            `json:"id"`
 	Name              string            `json:"name"`
 	URL               string            `json:"url"`

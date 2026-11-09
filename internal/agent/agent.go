@@ -31,6 +31,7 @@ import (
 var errCapacityReached = errors.New("agent capacity reached")
 
 type Config struct {
+	RunWorkerFactory  RunWorkerFactory `json:"-"`
 	HostRebootEnabled bool
 	HostRebootToken   string
 	ControlNodeID     string
@@ -56,6 +57,8 @@ type Config struct {
 }
 
 type process struct {
+	workerEpoch           string
+	intentPath            string
 	admissionDone         chan struct{}
 	gatewayURL            string
 	node                  model.Node
@@ -74,25 +77,30 @@ type process struct {
 }
 
 type Server struct {
-	hostRebootMu         sync.Mutex
-	host                 *model.AgentHost   // mu; copied before publishing
-	hostRebootReceipt    *hostRebootReceipt // hostRebootMu
-	hostBootIDReader     func() (string, error)
-	hostDockerCommand    func(context.Context, ...string) ([]byte, error)
-	closeOnce            sync.Once
-	closeErr             error
-	dataLock             *os.File
-	networkMu            sync.Mutex
-	networkRequest       model.ExperimentNetworkRequest // mu; admission remains closed until activation
-	experimentNetwork    *model.ExperimentNetwork       // mu
-	historyReplay        *historyReplay
-	history              *agentHistory
-	historyRevision      uint64
-	historyMapPeak       int
-	historyPeersRetired  uint64
-	historyFencesRetired uint64
-	historyErrors        uint64
-	fencingAll           bool
+	runWorkerSnapshotBudget time.Duration // zero uses the production bound; instrumented fixtures can use a separate finite budget.
+	runViewsMu              sync.Mutex
+	runViews                map[string]int
+	runWorkersMu            sync.Mutex
+	runWorkers              map[string]*agentRunWorker
+	hostRebootMu            sync.Mutex
+	host                    *model.AgentHost   // mu; copied before publishing
+	hostRebootReceipt       *hostRebootReceipt // hostRebootMu
+	hostBootIDReader        func() (string, error)
+	hostDockerCommand       func(context.Context, ...string) ([]byte, error)
+	closeOnce               sync.Once
+	closeErr                error
+	dataLock                *os.File
+	networkMu               sync.Mutex
+	networkRequest          model.ExperimentNetworkRequest // mu; admission remains closed until activation
+	experimentNetwork       *model.ExperimentNetwork       // mu
+	historyReplay           *historyReplay
+	history                 *agentHistory
+	historyRevision         uint64
+	historyMapPeak          int
+	historyPeersRetired     uint64
+	historyFencesRetired    uint64
+	historyErrors           uint64
+	fencingAll              bool
 
 	agentMemory               map[string]uint64
 	agentMemorySampleAt       time.Time
@@ -213,7 +221,7 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 // Server after shutdown; other callers must close it after operations finish.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
-		s.closeErr = s.history.close()
+		s.closeErr = errors.Join(s.closeRunWorkers(), s.history.close())
 		if s.dataLock != nil {
 			s.closeErr = errors.Join(s.closeErr, s.dataLock.Close())
 		}
@@ -221,8 +229,8 @@ func (s *Server) Close() error {
 	return s.closeErr
 }
 
-func (s *Server) Run(ctx context.Context) error {
-	defer s.Close()
+func (s *Server) Run(ctx context.Context) (resultErr error) {
+	defer func() { resultErr = errors.Join(resultErr, s.Close()) }()
 	defer s.docker.waitClient.CloseIdleConnections()
 	// Bind before reconciling: a duplicate Agent on the same host must not remove the
 	// running Agent's peers and only then discover that one of its ports is
@@ -273,6 +281,9 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	cleanupStarted := time.Now()
 	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, containerStopTimeout)
 	err = s.docker.removeAgentContainers(cleanupCtx, s.config.ID)
+	if err == nil && s.config.RunWorkerFactory != nil {
+		err = s.recoverPeerIntents(cleanupCtx)
+	}
 	cleanupCancel()
 	if err != nil {
 		return fmt.Errorf("clean up previous peer containers: %w", err)
@@ -466,6 +477,7 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 		image = s.docker.image
 	}
 	return model.Agent{
+		RunProcesses: s.config.RunWorkerFactory != nil,
 		Host:         s.hostStatusLocked(),
 		CreateReplay: true,
 		Resources:    s.resources,
@@ -488,6 +500,14 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 }
 
 func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartbeat {
+	h, err := s.snapshotWithHistoryContext(context.Background(), includeAcknowledged)
+	if err != nil {
+		s.logger.Error("experiment snapshot unavailable", "error", err)
+	}
+	return h
+}
+
+func (s *Server) snapshotWithHistoryContext(ctx context.Context, includeAcknowledged bool) (model.AgentHeartbeat, error) {
 	hostname, _ := os.Hostname()
 	s.mu.RLock()
 	capacity := len(s.processes)
@@ -505,8 +525,13 @@ func (s *Server) snapshotWithHistory(includeAcknowledged bool) model.AgentHeartb
 		h.Nodes = append(h.Nodes, heartbeatNodeStatus(proc))
 	}
 	s.mu.RUnlock()
+	var err error
+	h.Nodes, err = s.enrichRunWorkerNodes(ctx, h.Nodes)
+	if err != nil {
+		return model.AgentHeartbeat{}, err
+	}
 	sort.Slice(h.Nodes, func(i, j int) bool { return h.Nodes[i].ID < h.Nodes[j].ID })
-	return h
+	return h, nil
 }
 
 func (s *Server) createNode(ctx context.Context, request model.CreateNodeRequest) (model.Node, error) {
@@ -548,6 +573,11 @@ func (s *Server) admitNode(ctx, processParent context.Context, request model.Cre
 		return model.Node{}, fmt.Errorf("resolve peer network conditions: %w", err)
 	}
 	resolvedConfig.Network = networkConfig
+	if s.config.RunWorkerFactory != nil {
+		if err := s.runWorkerAdmissionReady(request.RunID); err != nil {
+			return model.Node{}, err
+		}
+	}
 	if err := s.lockAdmission(ctx, request); err != nil {
 		if hash != "" && errors.Is(err, errNodeExists) {
 			if node, found, replayErr := s.replayCreate(ctx, request.ID, hash); found || replayErr != nil {
@@ -639,6 +669,20 @@ func (s *Server) admitNode(ctx, processParent context.Context, request model.Cre
 	}
 	s.processes[request.ID] = proc
 	s.mu.Unlock()
+	if s.config.RunWorkerFactory != nil {
+		worker, workerErr := s.ensureRunWorker(ctx, request.RunID)
+		if workerErr == nil {
+			s.mu.Lock()
+			proc.workerEpoch = worker.process.Epoch()
+			s.mu.Unlock()
+			workerErr = worker.call(ctx, "node.register", node, nil)
+		}
+		if workerErr != nil {
+			cancel()
+			s.finishProcess(request.ID, proc, workerErr, nil)
+			return model.Node{}, workerErr
+		}
+	}
 
 	// Disk stalls must not block heartbeats, lifetime stops or other admissions.
 	configPath, err := s.writePeerConfig(peerConfig)
@@ -742,6 +786,9 @@ func (s *Server) writePeerConfig(config model.PeerProcessConfig) (string, error)
 }
 
 func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr error) {
+	if s.config.RunWorkerFactory != nil {
+		defer s.syncRunWorkerNode(proc)
+	}
 	observedAt := time.Now().UTC()
 	state, message := model.NodeStopped, ""
 	s.mu.Lock()
@@ -767,10 +814,17 @@ func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr 
 	if termination != nil {
 		// Spool writes may stall. Never hold the state lock while waiting for
 		// telemetry admission: heartbeats and other lifetime stops must proceed.
-		s.queueTermination(*termination)
+		if s.config.RunWorkerFactory != nil {
+			cleanupErr = s.completePeerIntent(proc, *termination, state, message)
+		} else {
+			s.queueTermination(*termination)
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if cleanupErr != nil || proc.exitErr != nil {
+		state, message = model.NodeFailed, errors.Join(proc.exitErr, cleanupErr).Error()
+	}
 	proc.exited = true
 	proc.cleanupErr = cleanupErr
 	current, ok = s.processes[nodeID]
@@ -783,6 +837,10 @@ func (s *Server) finishProcess(nodeID string, proc *process, runErr, cleanupErr 
 		setProcessMetadata(proc, "cleanupComplete", "true")
 		proc.node = heartbeatNodeStatus(proc)
 		proc.apiURL = ""
+		if s.config.RunWorkerFactory != nil {
+			proc.gatewayURL = ""
+			proc.cancel = nil
+		}
 	}
 	if proc.done != nil {
 		close(proc.done)
@@ -876,6 +934,13 @@ func (s *Server) stopRunGeneration(runID string, generation uint64) {
 }
 
 func (s *Server) updateNode(update model.Node) error {
+	if s.config.RunWorkerFactory != nil {
+		return s.observeRunWorkerNode(update)
+	}
+	return s.updateNodeLocal(update)
+}
+
+func (s *Server) updateNodeLocal(update model.Node) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	proc, ok := s.processes[update.ID]
@@ -932,14 +997,27 @@ func (s *Server) updateNode(update model.Node) error {
 }
 
 func (s *Server) nodes() []model.Node {
+	nodes, err := s.nodesWithContext(context.Background())
+	if err != nil {
+		s.logger.Error("experiment nodes unavailable", "error", err)
+	}
+	return nodes
+}
+
+func (s *Server) nodesWithContext(ctx context.Context) ([]model.Node, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	result := make([]model.Node, 0, len(s.processes))
 	for _, proc := range s.processes {
 		result = append(result, cloneNodeStatus(proc.node))
 	}
+	s.mu.RUnlock()
+	var err error
+	result, err = s.enrichRunWorkerNodes(ctx, result)
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
+	return result, nil
 }
 
 func cloneMeshPeers(peers map[string][]string) map[string][]string {
@@ -1137,24 +1215,28 @@ func (s *Server) drainEvents(ctx context.Context) error {
 // Retain one pending exit marker per process instead of silently losing it
 // when the trace queue is full. Admission also checks this separate backlog,
 // because acknowledged process records may already have retired to disk.
-func (s *Server) queueTermination(event model.TraceEvent) {
+func (s *Server) queueTermination(event model.TraceEvent) error {
 	s.eventsMu.Lock()
 	defer s.eventsMu.Unlock()
 	if s.terminations == nil {
 		s.terminations = make(map[string]model.TraceEvent)
 	}
-	if existing, ok := s.terminations[event.NodeID]; !ok || event.Timestamp.Before(existing.Timestamp) {
-		if s.spool != nil {
-			if err := s.spool.append([]model.TraceEvent{event}); err == nil {
-				delete(s.terminations, event.NodeID)
-				return
-			} else {
-				s.spoolError = err
-				s.logger.Error("persist termination evidence", "error", err)
-			}
-		}
-		s.terminations[event.NodeID] = event
+	if existing, ok := s.terminations[event.NodeID]; ok && !event.Timestamp.Before(existing.Timestamp) {
+		event = existing
 	}
+	if s.spool != nil {
+		if err := s.spool.append([]model.TraceEvent{event}); err == nil {
+			delete(s.terminations, event.NodeID)
+			return nil
+		} else {
+			s.spoolError = err
+			s.terminations[event.NodeID] = event
+			s.logger.Error("persist termination evidence", "error", err)
+			return err
+		}
+	}
+	s.terminations[event.NodeID] = event
+	return nil
 }
 
 func (s *Server) admitTerminationsLocked() {
@@ -1219,7 +1301,7 @@ func (s *Server) postData(ctx context.Context, path string, data []byte, output 
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return &controllerResponseError{resp.StatusCode, resp.Status, strings.TrimSpace(string(message))}
 	}
-	if path == "/api/v1/agents/register" || path == "/api/v1/agents/heartbeat" {
+	if (path == "/api/v1/agents/register" || path == "/api/v1/agents/heartbeat") && ctx.Value(heartbeatLeaseContextKey{}) != true {
 		if raw := resp.Header.Get("X-KPL-Agent-Capacity"); raw != "" {
 			capacity, err := strconv.Atoi(raw)
 			if err != nil || capacity <= 0 {

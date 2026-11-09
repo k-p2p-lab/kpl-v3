@@ -383,6 +383,9 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 		if err != nil {
 			return err
 		}
+		if s.config.RunWorkers {
+			return s.analyzeBatchWithWorker(ctx, job, selected, excluded, missing)
+		}
 		result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded, Runs: []resultAnalysis{}}
 		hashes := make(map[string]string, len(selected))
 		if job.previous != nil {
@@ -542,9 +545,17 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 		return err
 	}
 	defer root.Close()
-	artifact, err := stageAnalysisJSON(ctx, root, result)
-	if err != nil {
-		return err
+	var artifact *stagedAnalysisJSON
+	if staged, ok := result.(*workerAnalysisArtifacts); ok {
+		if staged.sinks["full"] == nil {
+			return errors.New("batch analysis worker output is incomplete")
+		}
+		artifact = staged.sinks["full"].staged
+	} else {
+		artifact, err = stageAnalysisJSON(ctx, root, result)
+		if err != nil {
+			return err
+		}
 	}
 	defer artifact.discard()
 

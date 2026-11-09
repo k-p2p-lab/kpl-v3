@@ -57,6 +57,26 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+		if s.config.RunWorkerFactory != nil {
+			s.stopRunGeneration(parts[0], ^uint64(0))
+			if s.history != nil {
+				s.history.mu.Lock()
+				err := s.history.saveFence(parts[0], ^uint64(0))
+				s.history.mu.Unlock()
+				if err != nil {
+					writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunWorkerPendingCode, WorkerPending: true})
+					return
+				}
+			}
+			if err := s.waitRunContainers(ctx, parts[0], ^uint64(0)); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunWorkerPendingCode, WorkerPending: true})
+				return
+			}
+			if err := s.waitRunWorkerIngress(ctx); err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunWorkerPendingCode, WorkerPending: true})
+				return
+			}
+		}
 		if err := s.drainRunEvents(ctx, parts[0]); err != nil {
 			var pending *runLogsPendingError
 			if errors.As(err, &pending) {
@@ -66,6 +86,22 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {
 			}
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
+		}
+		if s.config.RunWorkerFactory != nil {
+			if err := s.finishRunWorker(ctx, parts[0]); err != nil {
+				var pending *runLogsPendingError
+				if errors.As(err, &pending) {
+					writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunTelemetryPendingCode, RemainingEvents: pending.remaining})
+					return
+				}
+				var failed *runWorkerFailedError
+				if errors.As(err, &failed) {
+					writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: "run_worker_failed"})
+					return
+				}
+				writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunWorkerPendingCode, WorkerPending: true})
+				return
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -107,7 +143,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.snapshot())
+	finishView := s.acquireRunView()
+	defer finishView()
+	snapshot, err := s.snapshotWithHistoryContext(r.Context(), true)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeHeartbeatView(w, snapshot)
 }
 
 // The Controller discovers task addresses, but registration still travels over
@@ -137,13 +180,27 @@ func (s *Server) handleRegistrationRefresh(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, s.snapshot())
+	finishView := s.acquireRunView()
+	defer finishView()
+	snapshot, err := s.snapshotWithHistoryContext(r.Context(), true)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeHeartbeatView(w, snapshot)
 }
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.nodes())
+		finishView := s.acquireRunView()
+		defer finishView()
+		nodes, err := s.nodesWithContext(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		writeNodeView(w, nodes)
 	case http.MethodDelete:
 		s.mu.Lock()
 		if s.fencingAll {
@@ -183,6 +240,20 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
+		if s.config.RunWorkerFactory != nil {
+			s.runWorkersMu.Lock()
+			ids := make([]string, 0, len(s.runWorkers))
+			for id := range s.runWorkers {
+				ids = append(ids, id)
+			}
+			s.runWorkersMu.Unlock()
+			for _, id := range ids {
+				if err := s.finishRunWorker(drainCtx, id); err != nil {
+					writeError(w, http.StatusServiceUnavailable, err.Error())
+					return
+				}
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodPost:
 		var request model.CreateNodeRequest
@@ -191,7 +262,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		node, err := s.admitNode(r.Context(), context.Background(), request)
-		if errors.Is(err, errPeerHistoryFull) || errors.Is(err, errTelemetryBacklogFull) {
+		if errors.Is(err, errPeerHistoryFull) || errors.Is(err, errTelemetryBacklogFull) || errors.Is(err, errRunResetPending) {
 			w.Header().Set(model.AgentAdmissionRetryHeader, "not-created")
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -214,6 +285,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+	finishView := s.acquireNodeRunView(parts[0])
+	defer finishView()
 	if len(parts) == 1 && r.Method == http.MethodDelete {
 		if err := s.stopNode(parts[0]); err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -281,6 +354,9 @@ func (s *Server) proxyPublish(ctx context.Context, nodeID string, request model.
 	}
 	apiURL := proc.apiURL
 	s.mu.RUnlock()
+	if s.config.RunWorkerFactory != nil {
+		return s.runWorkerControl(ctx, proc, "publish", request, nil)
+	}
 	data, err := json.Marshal(request)
 	if err != nil {
 		return err

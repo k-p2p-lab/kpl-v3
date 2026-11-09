@@ -13,29 +13,37 @@ import (
 )
 
 // Event metrics accumulate at ingestion rather than from the bounded UI event
-// history. Each Controller has an isolated registry; counters reset on restart.
+// history. Worker-mode closed Runs have durable projections across restarts;
+// inline-mode active counters belong to this Controller process.
 type controllerMetrics struct {
-	registry          *prometheus.Registry
-	events            *prometheus.CounterVec
-	messageBytes      *prometheus.CounterVec
-	controlRPCs       *prometheus.CounterVec
-	controlEntries    *prometheus.CounterVec
-	controlMessageIDs *prometheus.CounterVec
-	controlPXRecords  *prometheus.CounterVec
-	operationFailures *prometheus.CounterVec
-	droppedEvents     *prometheus.CounterVec
-	lifecycleMu       sync.Mutex
-	resultDeleted     func(string) (bool, error)
-	initializedAgents sync.Map
-	initializedTopics sync.Map
+	registry            *prometheus.Registry
+	state               *state
+	counterRunIDs       map[string]bool
+	events              *prometheus.CounterVec
+	messageBytes        *prometheus.CounterVec
+	controlRPCs         *prometheus.CounterVec
+	controlEntries      *prometheus.CounterVec
+	controlMessageIDs   *prometheus.CounterVec
+	controlPXRecords    *prometheus.CounterVec
+	operationFailures   *prometheus.CounterVec
+	droppedEvents       *prometheus.CounterVec
+	lifecycleMu         sync.Mutex
+	resultDeleted       func(string) (bool, error)
+	initializedAgents   sync.Map
+	initializedTopics   sync.Map
+	sealed              map[string][]workerCounterSeries
+	counterDescriptions map[string]*prometheus.Desc
+	counterVectors      map[string]*prometheus.CounterVec
 }
 
 func newControllerMetrics(s *state) *controllerMetrics {
 	m := &controllerMetrics{
 		registry:      prometheus.NewRegistry(),
+		state:         s,
+		counterRunIDs: make(map[string]bool),
 		resultDeleted: s.resultDeletedLocked,
 		events: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "kpl_events_total", Help: "Telemetry and Controller events received since Controller startup.",
+			Name: "kpl_events_total", Help: "Telemetry and Controller events recorded for each Run.",
 		}, []string{"run_id", "agent_id", "event_type", "topic"}),
 		messageBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "kpl_message_bytes_total", Help: "PubSub data bytes reported by publish and deliver events; excludes libp2p transport framing.",
@@ -59,7 +67,7 @@ func newControllerMetrics(s *state) *controllerMetrics {
 			Name: "kpl_telemetry_dropped_events_total", Help: "Peer telemetry queue drops reported to the Controller.",
 		}, []string{"run_id", "agent_id"}),
 	}
-	m.registry.MustRegister(m.events, m.messageBytes, m.controlRPCs, m.controlEntries, m.controlMessageIDs, m.controlPXRecords, m.operationFailures, m.droppedEvents, newRunMetricsCollector(s),
+	m.registry.MustRegister(newControllerEventCollector(m), newRunMetricsCollector(s),
 		newControllerStateCollector(s), newAgentResourceCollector(s), newNetworkCollector(s), newBandwidthCollector(s), collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
@@ -73,6 +81,9 @@ func (m *controllerMetrics) initNode(node model.Node) {
 	}
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
+	if _, closed := m.sealed[node.RunID]; closed {
+		return
+	}
 	agentKey := [2]string{node.RunID, node.AgentID}
 	if _, initialized := m.initializedAgents.Load(agentKey); !initialized {
 		// First initialization only; no disk reads on ordinary heartbeats. The
@@ -81,6 +92,7 @@ func (m *controllerMetrics) initNode(node model.Node) {
 			return
 		}
 	}
+	m.counterRunIDs[node.RunID] = true
 	if _, initialized := m.initializedAgents.LoadOrStore(agentKey, struct{}{}); !initialized {
 		// Connection lifecycle events have no topic. These series must exist
 		// before disconnects to expose their first increase to Prometheus.
@@ -131,6 +143,8 @@ func (m *controllerMetrics) initNode(node model.Node) {
 func (m *controllerMetrics) deleteRun(runID string) {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
+	delete(m.sealed, runID)
+	delete(m.counterRunIDs, runID)
 	labels := prometheus.Labels{"run_id": runID}
 	for _, counter := range []*prometheus.CounterVec{m.events, m.messageBytes, m.controlRPCs, m.controlEntries, m.controlMessageIDs, m.controlPXRecords, m.operationFailures, m.droppedEvents} {
 		counter.DeletePartialMatch(labels)
@@ -150,18 +164,20 @@ func (m *controllerMetrics) deleteRun(runID string) {
 }
 
 func (m *controllerMetrics) observeEvent(event model.TraceEvent) {
-	m.events.WithLabelValues(event.RunID, event.AgentID, event.Type, event.Topic).Inc()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	m.addEventCounter("events", []string{event.RunID, event.AgentID, event.Type, event.Topic}, 1)
 	if key, ok := gossipSubControlEvent(event.Type); ok {
 		labels := []string{event.RunID, event.AgentID, key.direction, key.controlType}
-		m.controlRPCs.WithLabelValues(labels...).Inc()
+		m.addEventCounter("controlRPCs", labels, 1)
 		if count, ok := nonnegativeMetricCount(event.Fields["controlEntries"]); ok {
-			m.controlEntries.WithLabelValues(labels...).Add(count)
+			m.addEventCounter("controlEntries", labels, count)
 		}
 		if count, ok := nonnegativeMetricCount(event.Fields["messageIdCount"]); ok {
-			m.controlMessageIDs.WithLabelValues(labels...).Add(count)
+			m.addEventCounter("controlMessageIDs", labels, count)
 		}
 		if count, ok := nonnegativeMetricCount(event.Fields["peerExchangeCount"]); ok {
-			m.controlPXRecords.WithLabelValues(labels...).Add(count)
+			m.addEventCounter("controlPXRecords", labels, count)
 		}
 	}
 	switch event.Type {
@@ -171,14 +187,14 @@ func (m *controllerMetrics) observeEvent(event model.TraceEvent) {
 			encoding = "unknown"
 		}
 		if wireBytes, ok := nonnegativeMetricNumber(event.Fields["wireBytes"]); ok {
-			m.messageBytes.WithLabelValues(event.RunID, event.AgentID, event.Topic, event.Type, encoding).Add(wireBytes)
+			m.addEventCounter("messageBytes", []string{event.RunID, event.AgentID, event.Topic, event.Type, encoding}, wireBytes)
 		}
 	case "phase-operation-failed":
 		action, _ := event.Fields["action"].(string)
-		m.operationFailures.WithLabelValues(event.RunID, event.AgentID, action).Inc()
+		m.addEventCounter("operationFailures", []string{event.RunID, event.AgentID, action}, 1)
 	case "telemetry_drop":
 		if count, ok := nonnegativeMetricNumber(event.Fields["count"]); ok {
-			m.droppedEvents.WithLabelValues(event.RunID, event.AgentID).Add(count)
+			m.addEventCounter("droppedEvents", []string{event.RunID, event.AgentID}, count)
 		}
 	}
 }

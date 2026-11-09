@@ -770,6 +770,12 @@ function formatScenarioID(value) {
   return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
+function formatScenarioListDate(value) {
+  if (!value || String(value).startsWith("0001-")) return "—";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString("en-US", { year: "2-digit", month: "2-digit", day: "2-digit" }) : "—";
+}
+
 function validateSavedScenario(value, requireYAML = false) {
   if (!value || typeof value !== "object" || typeof value.id !== "string" || !value.id
       || typeof value.name !== "string" || (requireYAML && typeof value.yaml !== "string")) {
@@ -885,6 +891,14 @@ function setScenarioView(view) {
   }
 }
 
+function closeScenarioHelp(restoreFocus = false) {
+  const help = $(".scenario-run-help");
+  if (!help?.open) return false;
+  help.open = false;
+  if (restoreFocus) help.querySelector("summary")?.focus({ preventScroll: true });
+  return true;
+}
+
 function searchSavedScenarios(query) {
   state.scenarioQuery = query;
   state.pendingScenarioDeleteId = null;
@@ -904,6 +918,8 @@ function renderScenarioRunControl() {
 }
 
 function renderSavedScenarios() {
+  const libraryList = $("#scenarioLibraryList");
+  const libraryScroll = libraryList.scrollTop;
   renderScenarioValidation();
   renderScenarioImportReview();
   const scenarios = state.savedScenarios || [];
@@ -950,7 +966,32 @@ function renderSavedScenarios() {
   const empty = !visible.length && !state.scenariosLoading && !state.scenariosError && state.savedScenarios !== null
     ? `<li class="scenario-library-empty"><strong>${query || scenarios.length ? "No matching scenarios" : "Your scenario library is empty"}</strong><p>${query || scenarios.length ? "Choose another group or change your search." : "Choose New, edit your scenario, then save it here to use again."}</p></li>` : "";
   const focusedSelection = document.activeElement?.getAttribute?.("data-library-select-key");
-  setHTML($("#scenarioLibraryList"), empty || visible.map((item) => {
+  const rowContent = visible.map(item => [item.id, item.name, item.updatedAt,
+    globalThis.KPLLibraryGroups?.badgeMarkup(`scenario:${item.id}`) || "",
+    Boolean(globalThis.KPLLibraryGroups?.selectionMarkup(`scenario:${item.id}`, item.name || item.id))]);
+  const contentKey = JSON.stringify([rowContent, empty, state.pendingScenarioDeleteId]);
+  const rows = [...(libraryList.querySelectorAll?.("[data-scenario-row]") || [])];
+  const keepRows = state.scenarioLibraryContentKey === contentKey && visible.length > 0
+    && rows.length === visible.length && rows.every((row, index) => row.getAttribute("data-scenario-row") === visible[index].id);
+  if (keepRows) {
+    for (const row of rows) {
+      const id = row.getAttribute("data-scenario-row");
+      const selected = id === state.selectedScenarioId;
+      row.classList.toggle("selected", selected);
+      if (selected) row.setAttribute("aria-current", "true");
+      else row.removeAttribute("aria-current");
+      row.querySelector("[data-load-scenario]").disabled = busy;
+      row.querySelector(".scenario-item-state").textContent = id === state.scenarioLoadingId ? "Loading…" : selected ? "Editing" : "Load →";
+      row.querySelector("[data-delete-scenario]").disabled = busy || id === state.pendingScenarioDeleteId;
+      const confirm = row.querySelector("[data-confirm-scenario-delete]");
+      if (confirm) {
+        confirm.disabled = busy;
+        confirm.textContent = id === state.scenarioDeletingId ? "Deleting…" : "Confirm delete";
+      }
+      const cancel = row.querySelector("[data-cancel-scenario-delete]");
+      if (cancel) cancel.disabled = busy;
+    }
+  } else setHTML(libraryList, empty || visible.map((item) => {
     const name = item.name || item.id;
     const isSelected = item.id === state.selectedScenarioId;
     const confirmingDelete = item.id === state.pendingScenarioDeleteId;
@@ -959,22 +1000,23 @@ function renderSavedScenarios() {
     const updated = formatResultTime(item.updatedAt);
     const key = `scenario:${item.id}`;
     const selection = globalThis.KPLLibraryGroups?.selectionMarkup(key, name) || "";
-    return `<li class="scenario-library-item${isSelected ? " selected" : ""}${selection ? " has-group-selection" : ""}"${isSelected ? ' aria-current="true"' : ""}>
+    return `<li data-scenario-row="${escapeHTML(item.id)}" class="scenario-library-item${isSelected ? " selected" : ""}${selection ? " has-group-selection" : ""}"${isSelected ? ' aria-current="true"' : ""}>
       ${selection}
       <button class="load-scenario-button" type="button" data-load-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Load saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>
-        <span class="scenario-item-heading"><strong title="${escapeHTML(name)}">${escapeHTML(name)}</strong><span class="scenario-item-state">${isLoading ? "Loading…" : isSelected ? "Editing" : "Load →"}</span></span>
-        ${globalThis.KPLLibraryGroups?.badgeMarkup(key) || ""}
-        <span class="scenario-item-meta"><span>Updated ${escapeHTML(updated)}</span><span class="scenario-item-id" title="${escapeHTML(`Scenario ID: ${item.id}`)}"><span aria-hidden="true">ID ${escapeHTML(formatScenarioID(item.id))}</span><span class="visually-hidden">Scenario ID: ${escapeHTML(item.id)}</span></span></span>
+        <span class="scenario-item-heading"><strong title="${escapeHTML(name)}">${escapeHTML(name)}</strong></span>
+        <span class="scenario-item-meta">${globalThis.KPLLibraryGroups?.badgeMarkup(key) || ""}<span class="scenario-item-updated" title="${escapeHTML(`Updated ${updated}`)}"><span class="scenario-updated-label">Updated </span>${escapeHTML(formatScenarioListDate(item.updatedAt))}</span><span class="scenario-item-state">${isLoading ? "Loading…" : isSelected ? "Editing" : "Load →"}</span><span class="scenario-item-id visually-hidden"><span>Scenario ID: ${escapeHTML(item.id)}</span></span></span>
       </button>
       <button class="icon-button delete-scenario-button" type="button" data-delete-scenario="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Delete saved scenario: ${name}`)}" title="${escapeHTML(`Delete saved scenario: ${name}`)}" ${busy || confirmingDelete ? "disabled" : ""}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M7 5V3h6v2M5 5l1 12h8l1-12M8 8v6m4-6v6"/></svg></button>
       ${confirmingDelete ? `<div class="scenario-delete-confirmation"><p>Delete this saved scenario? This cannot be undone.</p><div class="scenario-item-actions"><button class="secondary-button" type="button" data-cancel-scenario-delete="${escapeHTML(item.id)}" ${busy ? "disabled" : ""}>Cancel</button><button class="danger-button confirm-delete-scenario" type="button" data-confirm-scenario-delete="${escapeHTML(item.id)}" aria-label="${escapeHTML(`Confirm deletion of saved scenario: ${name}`)}" ${busy ? "disabled" : ""}>${isDeleting ? "Deleting…" : "Confirm delete"}</button></div></div>` : ""}
     </li>`;
   }).join(""));
+  state.scenarioLibraryContentKey = contentKey;
   if (focusedSelection?.startsWith("scenario:")) {
     [...$("#scenarioLibraryList").querySelectorAll("[data-library-select-key]")]
       .find(input => input.getAttribute("data-library-select-key") === focusedSelection)?.focus({ preventScroll: true });
   }
   globalThis.KPLLibraryGroups?.refreshUI();
+  libraryList.scrollTop = libraryScroll;
 }
 
 async function refreshSavedScenarios() {
@@ -1028,7 +1070,7 @@ async function loadSavedScenario(id) {
     renderSavedScenarios();
     if (loaded && version === state.scenarioLoadVersion) {
       setScenarioView("editor");
-      $(window.matchMedia("(max-width: 860px)").matches ? "#scenarioEditorHeading" : "#scenarioText").focus();
+      $(window.matchMedia("(max-width: 860px)").matches ? "#scenarioEditorHeading" : "#scenarioText").focus({ preventScroll: true });
     }
   }
 }
@@ -2889,6 +2931,14 @@ $("#scenarioImportList").addEventListener("change", event => {
   renderScenarioImportReview();
 });
 $("#scenarioDialog").addEventListener("close", cancelScenarioFileImport);
+$("#scenarioDialog").addEventListener("close", () => closeScenarioHelp());
+$("#scenarioDialog").addEventListener("cancel", event => {
+  if (closeScenarioHelp(true)) event.preventDefault();
+});
+document.addEventListener("click", event => {
+  const help = $(".scenario-run-help");
+  if (help?.open && !help.contains(event.target)) closeScenarioHelp();
+});
 for (const button of document.querySelectorAll("button[data-scenario-view]")) button.addEventListener("click", () => setScenarioView(button.dataset.scenarioView));
 $("#scenarioEditor").addEventListener("focusin", () => setScenarioView("editor"));
 $("#scenarioLibrary").addEventListener("focusin", () => setScenarioView("library"));

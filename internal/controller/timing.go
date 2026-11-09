@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"sort"
@@ -185,6 +186,10 @@ func projectRunDuration(plan *timingPlan, observed []phaseTiming, start time.Tim
 }
 
 func (s *state) recordPhaseTiming(id string, phase int, finished bool, at time.Time) {
+	if s.worker != nil {
+		_ = s.worker.call(context.Background(), "phase-timing", workerPhaseTiming{Phase: phase, Finished: finished, At: at}, nil)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if timing := s.runTimings[id]; timing != nil && phase >= 0 && phase < len(timing.phases) {

@@ -131,6 +131,12 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	if err != nil {
 		return "", "", err
 	}
+	if attempt := node.Metadata["supervisorAttemptName"]; attempt != "" {
+		if !dockerPeerName.MatchString(attempt) {
+			return "", "", errors.New("invalid supervisor Peer creation intent")
+		}
+		name = attempt
+	}
 	network := d.network
 	if id := node.Metadata["peerNetworkId"]; id != "" {
 		if !dockerNetworkName.MatchString(id) {
@@ -176,6 +182,15 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	// a not-yet-created name. Admission has its own bounded budget and still
 	// honors an earlier caller deadline.
 	deadline := time.Now().Add(dockerAdmissionTimeout)
+	if raw := node.Metadata["supervisorAdmissionUntil"]; raw != "" {
+		persisted, parseErr := time.Parse(time.RFC3339Nano, raw)
+		if parseErr != nil {
+			return "", "", errors.New("invalid supervisor Peer admission deadline")
+		}
+		if persisted.Before(deadline) {
+			deadline = persisted
+		}
+	}
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
 		deadline = parentDeadline
 	}

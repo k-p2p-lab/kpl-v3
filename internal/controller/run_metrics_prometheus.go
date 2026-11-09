@@ -99,6 +99,10 @@ func propagationHistograms(samples []propagationSample) map[propagationSeriesKey
 }
 
 func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
+	if c.state.journalOnly {
+		c.collectWorkerSummaries(ch)
+		return
+	}
 	metrics := make([]model.Metrics, 0)
 	definitions := make(map[string]string)
 	asOf := time.Now().UTC()
@@ -122,6 +126,13 @@ func (c *runMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 		definitions[runID] = result.Definition
 		metrics = append(metrics, result)
 		for key, histogram := range cached {
+			histograms[runPropagationKey{runID, key.agentID, key.topic}] = histogram
+		}
+	}
+	for runID, summary := range c.state.workerSummarySnapshot() {
+		definitions[runID] = summary.Metrics.Definition
+		metrics = append(metrics, summary.Metrics)
+		for key, histogram := range summary.histograms() {
 			histograms[runPropagationKey{runID, key.agentID, key.topic}] = histogram
 		}
 	}
@@ -225,4 +236,83 @@ func (c *runMetricsCollector) collectWindow(ch chan<- prometheus.Metric, result 
 		ch <- prometheus.MustNewConstMetric(c.windowInitialRatio, prometheus.GaugeValue, result.InitialDeliveryRatio, result.RunID, "lower")
 		ch <- prometheus.MustNewConstMetric(c.windowInitialRatio, prometheus.GaugeValue, result.InitialDeliveryRatioUpperBound, result.RunID, "upper")
 	}
+}
+
+// Historical projections are emitted one Run at a time. Keeping all decoded
+// histograms until the end of a scrape would recreate a history-sized heap.
+func (c *runMetricsCollector) collectWorkerSummaries(ch chan<- prometheus.Metric) {
+	c.state.mu.RLock()
+	zeros := make(map[string]map[propagationSeriesKey]bool)
+	for _, node := range c.state.nodes {
+		if node.RunID == "" || node.AgentID == "" {
+			continue
+		}
+		topics := nodeTopics(node)
+		if len(topics) == 0 {
+			topics = []string{"kpl/default"}
+		}
+		if zeros[node.RunID] == nil {
+			zeros[node.RunID] = make(map[propagationSeriesKey]bool)
+		}
+		for _, topic := range topics {
+			zeros[node.RunID][propagationSeriesKey{node.AgentID, topic}] = true
+		}
+	}
+	c.state.mu.RUnlock()
+	err := c.state.visitWorkerSummaries(func(summary runWorkerSummary) error {
+		result := summary.Metrics
+		if result.Definition == sessionWindowDefinition {
+			c.collectWindow(ch, result)
+		} else {
+			for _, gauge := range c.windowGauges {
+				if gauge.name == "legacy_publications" {
+					ch <- prometheus.MustNewConstMetric(gauge.desc, prometheus.GaugeValue, float64(result.Published), result.RunID)
+				}
+			}
+			ch <- prometheus.MustNewConstMetric(c.expected, prometheus.GaugeValue, float64(result.ExpectedDeliveries), result.RunID)
+			ch <- prometheus.MustNewConstMetric(c.delivered, prometheus.GaugeValue, float64(result.EligibleDeliveries), result.RunID)
+			ch <- prometheus.MustNewConstMetric(c.duplicates, prometheus.GaugeValue, float64(result.EligibleDuplicates), result.RunID)
+			if result.DeliveryRatioAvailable {
+				ch <- prometheus.MustNewConstMetric(c.ratio, prometheus.GaugeValue, result.Reachability, result.RunID)
+			}
+			if result.DuplicateSamples > 0 {
+				ch <- prometheus.MustNewConstMetric(c.duplicateMean, prometheus.GaugeValue, result.AverageDuplicates, result.RunID)
+			}
+		}
+		histograms := summary.histograms()
+		for key := range zeros[summary.RunID] {
+			if histograms[key] == nil {
+				histograms[key] = zeroPropagationHistogram()
+			}
+		}
+		delete(zeros, summary.RunID)
+		for key, histogram := range histograms {
+			desc := c.propagation
+			if result.Definition == sessionWindowDefinition {
+				desc = c.windowPropagation
+			}
+			metric, err := prometheus.NewConstHistogram(desc, histogram.count, histogram.sum, histogram.buckets, result.RunID, key.agentID, key.topic)
+			if err != nil {
+				return err
+			}
+			ch <- metric
+		}
+		return nil
+	})
+	if err != nil {
+		ch <- prometheus.NewInvalidMetric(c.expected, err)
+	}
+	for id, rows := range zeros {
+		for key := range rows {
+			ch <- prometheus.MustNewConstHistogram(c.propagation, 0, 0, zeroPropagationHistogram().buckets, id, key.agentID, key.topic)
+		}
+	}
+}
+
+func zeroPropagationHistogram() *propagationHistogram {
+	result := &propagationHistogram{buckets: make(map[float64]uint64, len(propagationBounds))}
+	for _, bound := range propagationBounds {
+		result.buckets[bound] = 0
+	}
+	return result
 }

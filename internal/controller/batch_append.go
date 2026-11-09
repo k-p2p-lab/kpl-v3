@@ -335,10 +335,11 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 		return model.Experiment{}, fmt.Errorf("%w: saved scenario: %v", errBatchNotAppendable, err)
 	}
 	pending := make([]model.Experiment, additional)
+	scenarioYAML := string(raw)
 	executionID := rand.Text()
 	for i := range pending {
 		now := time.Now().UTC()
-		pending[i] = model.Experiment{ID: fmt.Sprintf("run-%s-%s", now.Format("20060102T150405Z"), rand.Text()), BatchID: id, Iteration: expected + i + 1, Repetitions: expected + additional, Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases), ScenarioYAML: string(raw)}
+		pending[i] = model.Experiment{ID: fmt.Sprintf("run-%s-%s", now.Format("20060102T150405Z"), rand.Text()), BatchID: id, Iteration: expected + i + 1, Repetitions: expected + additional, Name: spec.Name, State: "queued", Seed: spec.Seed, TotalPhases: len(spec.Phases), ScenarioYAML: scenarioYAML}
 		if spec.Seed == 0 {
 			pending[i].Seed = now.UnixNano() + int64(i)
 		}

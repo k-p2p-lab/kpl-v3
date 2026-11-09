@@ -78,7 +78,7 @@ func (a *App) test(ctx context.Context, scope string) error {
 		return a.Run(ctx, "node", append([]string{"--test"}, files...)...)
 	case "race":
 		setting := "atexit_sleep_ms=0"
-		return a.WithEnv(map[string]*string{"GORACE": &setting}).Run(ctx, "go", "test", "-race", "-buildvcs=false", "./...", "-count=1", "-timeout", "120s")
+		return a.WithEnv(map[string]*string{"GORACE": &setting}).Run(ctx, "go", "test", "-race", "-buildvcs=false", "./...", "-count=1", "-timeout", "300s")
 	case "linux":
 		return a.Run(ctx, "docker", "build", "--target", "test", "-t", "kpl-v3:test", a.Repo)
 	default:

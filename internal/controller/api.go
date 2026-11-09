@@ -43,6 +43,12 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	if s.config.RunWorkers {
+		if err := s.loadRetiredRuntimeFences(); err != nil {
+			listener.Close()
+			return err
+		}
+	}
 	if s.state.agentSettingsErr != nil {
 		_ = listener.Close()
 		return s.state.agentSettingsErr
@@ -96,7 +102,11 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 	analysisDone := make(chan struct{})
 	go func() {
 		defer close(analysisDone)
-		s.recordAnalysisLoop(runCtx)
+		if s.config.RunWorkers {
+			s.runWorkerSummaryLoop(runCtx)
+		} else {
+			s.recordAnalysisLoop(runCtx)
+		}
 	}()
 	s.logger.Info("controller listening", "address", s.config.Listen)
 	served := make(chan error, 1)
@@ -540,6 +550,11 @@ func (s *Server) handleEventBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.state.appendEvents(batch); err != nil {
+		if errors.Is(err, errJournalIndexRequired) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

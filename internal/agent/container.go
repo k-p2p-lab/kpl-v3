@@ -24,6 +24,14 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 	s.mu.RLock()
 	node := proc.node
 	s.mu.RUnlock()
+	if s.config.RunWorkerFactory != nil {
+		var err error
+		node, err = s.beginPeerIntent(proc, node)
+		if err != nil {
+			s.finishProcess(node.ID, proc, err, nil)
+			return
+		}
+	}
 	id, apiURL, err := s.docker.createWithAdmission(ctx, node, config, func() {
 		// Match v2's ServiceCreate admission boundary. Docker CLI/daemon create
 		// latency must not consume a peer's lifetime before it exists. Copy,
@@ -32,7 +40,19 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 		s.mu.Lock()
 		setProcessMetadata(proc, "containerCreatedAt", createdAt.UTC().Format(time.RFC3339Nano))
 		s.mu.Unlock()
-		scheduleLifetimeStop(ctx, lifetime, createdAt, func() { _ = s.stopNode(node.ID) })
+		if s.config.RunWorkerFactory != nil {
+			worker, err := s.runWorker(node.RunID)
+			if err == nil {
+				timerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				err = worker.call(timerCtx, "timer.start", runWorkerTimer{NodeID: node.ID, Lifetime: lifetime, CreatedAt: createdAt}, nil)
+				cancel()
+			}
+			if err != nil {
+				s.failRunWorker(node.RunID, err)
+			}
+		} else {
+			scheduleLifetimeStop(ctx, lifetime, createdAt, func() { _ = s.stopNode(node.ID) })
+		}
 	})
 	if err != nil {
 		var cleanupErr error
@@ -44,6 +64,15 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 		}
 		s.finishProcess(node.ID, proc, fmt.Errorf("create peer container: %w", err), cleanupErr)
 		return
+	}
+	if s.config.RunWorkerFactory != nil {
+		if err := s.commitPeerIntent(proc, id); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), containerCleanupTimeout)
+			cleanupErr := s.docker.remove(cleanupCtx, id)
+			cancel()
+			s.finishProcess(node.ID, proc, err, cleanupErr)
+			return
+		}
 	}
 	s.mu.Lock()
 	proc.containerID = id
@@ -62,6 +91,9 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 	metadata["containerStartedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 	proc.node.Metadata = metadata
 	s.mu.Unlock()
+	if s.config.RunWorkerFactory != nil {
+		s.syncRunWorkerNode(proc)
+	}
 	err = s.docker.wait(ctx, id)
 	// Killing the Docker CLI does not kill the container. Always ask the daemon
 	// to remove this exact container using an independent cleanup context.

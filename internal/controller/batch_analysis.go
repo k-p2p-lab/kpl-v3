@@ -321,7 +321,7 @@ func (s *Server) startBatchAnalysisExpected(ctx context.Context, id string, refr
 	}
 	work, cancel := context.WithCancel(ctx)
 	job := &batchAnalysisJob{status: status, cancel: cancel}
-	job.slot = s.enqueueWorkLocked(work, model.WorkQueueItem{Kind: "batch-analysis", Name: members[0].Name, BatchID: id}, cancel)
+	job.slot = s.enqueueResultAnalysisLocked(work, model.WorkQueueItem{Kind: "batch-analysis", Name: members[0].Name, BatchID: id}, cancel)
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
 		job.previous = &previous
@@ -332,8 +332,7 @@ func (s *Server) startBatchAnalysisExpected(ctx context.Context, id string, refr
 	return status, nil
 }
 
-// Re-read after the shared FIFO slot is granted: experiments before this job
-// may have completed, failed, or been canceled since admission.
+// Re-read after the slot is granted. The batch may have changed since admission.
 func (s *Server) prepareBatchAnalysisJob(ctx context.Context, job *batchAnalysisJob) ([]savedResult, []savedResult, int, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
@@ -383,7 +382,7 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 		if err != nil {
 			return err
 		}
-		if s.config.RunWorkers {
+		if s.config.RunWorkers || job.slot.analysisWorkerURL != "" {
 			return s.analyzeBatchWithWorker(ctx, job, selected, excluded, missing)
 		}
 		result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded, Runs: []resultAnalysis{}}
@@ -590,11 +589,49 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 	status.ProcessedBytes = status.TotalBytes
 	status.FinishedAt, status.UpdatedAt = time.Now().UTC(), time.Now().UTC()
 	status.ResultURL = "/api/v1/batch-analysis-jobs/" + status.BatchID + "/result?jobId=" + status.ID
-	if err := s.persistBatchAnalysis(status); err != nil {
+	stagedStatus, err := stageAnalysisJSON(ctx, root, status)
+	if err != nil {
+		return err
+	}
+	defer stagedStatus.discard()
+	if err := s.commitBatchAnalysisStatus(ctx, stagedStatus, members); err != nil {
 		return err
 	}
 	job.status = status
 	return nil
+}
+
+// The caller holds analysisJobMu, which serializes batch membership changes.
+// Telemetry appends use persistMu, so recheck each contributing source and
+// commit the job's artifact pointer together. Large artifact writes and the
+// complete membership scan are already finished when this lock is acquired.
+func (s *Server) commitBatchAnalysisStatus(ctx context.Context, staged *stagedAnalysisJSON, members []savedResult) error {
+	s.state.persistMu.Lock()
+	defer s.state.persistMu.Unlock()
+	for _, member := range currentBatchMembers(members) {
+		if member.State != "completed" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		root, err := s.analysisDirectory(member.ID)
+		if err != nil {
+			return err
+		}
+		revision, err := sourceRevisionAt(root, member.ID)
+		_ = root.Close()
+		if err != nil {
+			return err
+		}
+		if revision != member.SourceRevision {
+			return errors.New("saved batch members changed during analysis; retry to capture the current batch")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return staged.publish(batchJobFile)
 }
 
 func (s *Server) handleBatchAnalysis(ctx context.Context) http.HandlerFunc {

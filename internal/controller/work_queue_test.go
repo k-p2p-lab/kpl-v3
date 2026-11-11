@@ -25,10 +25,15 @@ type queueTestWork struct {
 
 func queueTestEnqueue(t *testing.T, s *Server, kind string) *queueTestWork {
 	t.Helper()
+	return queueTestEnqueueWork(t, s, kind, kind == "analysis" || kind == "batch-analysis")
+}
+
+func queueTestEnqueueWork(t *testing.T, s *Server, kind string, resultAnalysis bool) *queueTestWork {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	work := &queueTestWork{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan error, 1), finished: make(chan struct{})}
 	s.cancelMu.Lock()
-	work.slot = s.enqueueWorkLocked(ctx, model.WorkQueueItem{Kind: kind, Name: kind}, cancel)
+	work.slot = s.enqueueWorkSlotLocked(ctx, model.WorkQueueItem{Kind: kind, Name: kind}, cancel, resultAnalysis)
 	s.cancelMu.Unlock()
 	t.Cleanup(func() {
 		cancel()
@@ -144,6 +149,51 @@ func TestWorkQueueCancellationRemovesWaitersAndRetainsRunningCleanup(t *testing.
 	queueTestAwait(t, third.entered, "next after cleanup")
 	third.once.Do(func() { close(third.release) })
 	s.workWorkers.Wait()
+}
+
+func TestWorkQueueParallelAnalysisKeepsDistinctWorkersAndStopsAtExperiment(t *testing.T) {
+	endpoints := []string{"http://analysis-worker-1:8093", "http://analysis-worker-2:8093"}
+	s := New(ServerConfig{DataDir: t.TempDir(), AnalysisWorkerURLs: endpoints}, nil)
+	first := queueTestEnqueue(t, s, "experiment")
+	local := queueTestEnqueue(t, s, "analysis")
+	remoteOne := queueTestEnqueue(t, s, "batch-analysis")
+	remoteTwo := queueTestEnqueue(t, s, "analysis")
+	internal := queueTestEnqueueWork(t, s, "analysis", false)
+	next := queueTestEnqueue(t, s, "experiment")
+	later := queueTestEnqueue(t, s, "batch-analysis")
+	queueTestAwait(t, first.entered, "first experiment")
+	first.once.Do(func() { close(first.release) })
+	queueTestAwait(t, local.entered, "Controller analysis")
+	queueTestAwait(t, remoteOne.entered, "first worker")
+	queueTestAwait(t, remoteTwo.entered, "second worker")
+	if local.slot.analysisWorkerURL != "" || remoteOne.slot.analysisWorkerURL != endpoints[0] || remoteTwo.slot.analysisWorkerURL != endpoints[1] {
+		t.Fatal("analysis jobs did not receive distinct workers")
+	}
+	if err := s.cancelWork(remoteTwo.slot.id); err != nil {
+		t.Fatal(err)
+	}
+	local.once.Do(func() { close(local.release) })
+	remoteOne.once.Do(func() { close(remoteOne.release) })
+	queueTestAwait(t, local.finished, "Controller analysis cleanup")
+	queueTestAwait(t, remoteOne.finished, "first worker cleanup")
+	queue := s.state.snapshot().WorkQueue
+	if len(queue) != 4 || queue[0].ID != remoteTwo.slot.id || queue[0].Phase != "Stopping" || queue[1].State != "queued" || queue[2].State != "queued" || queue[3].State != "queued" {
+		t.Fatalf("experiment or a later analysis overtook active cleanup: %+v", queue)
+	}
+	remoteTwo.once.Do(func() { close(remoteTwo.release) })
+	queueTestAwait(t, internal.entered, "internal analysis barrier")
+	if internal.slot.analysisWorkerURL != "" || internal.slot.analysisLeader {
+		t.Fatal("internal analysis was dispatched to the worker pool")
+	}
+	internal.once.Do(func() { close(internal.release) })
+	queueTestAwait(t, next.entered, "next experiment")
+	select {
+	case <-later.entered:
+		t.Fatal("analysis overtook the experiment barrier")
+	default:
+	}
+	next.once.Do(func() { close(next.release) })
+	queueTestAwait(t, later.entered, "analysis after the experiment")
 }
 
 func TestWorkQueueSnapshotDoesNotExposeMutableStartedTime(t *testing.T) {

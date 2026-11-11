@@ -840,8 +840,19 @@ func (s *Server) captureResultFiles(id string, download bool) (*resultSnapshot, 
 	return s.captureResultFilesContext(context.Background(), id, download)
 }
 func (s *Server) captureResultFilesContext(ctx context.Context, id string, download bool) (*resultSnapshot, error) {
+	return s.captureResultFilesWithOptions(ctx, id, download, false)
+}
+
+func (s *Server) captureRemoteAnalysisResultFilesContext(ctx context.Context, id string) (*resultSnapshot, error) {
+	return s.captureResultFilesWithOptions(ctx, id, false, true)
+}
+
+func (s *Server) captureResultFilesWithOptions(ctx context.Context, id string, download, remoteAnalysis bool) (*resultSnapshot, error) {
 	if !validResultID(id) {
 		return nil, errResultNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	runs, err := s.openResultRuns()
 	if errors.Is(err, os.ErrNotExist) {
@@ -873,16 +884,27 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 			return err
 		}
 		defer root.Close()
+		if remoteAnalysis && s.resultActive(id) {
+			return errResultBusy
+		}
 		manifest, err := readRunArchive(root, id)
 		if err != nil {
 			return err
 		}
 		if s.config.RunWorkers {
-			if err := s.state.recoverPendingJournalLocked(id); err != nil {
+			if remoteAnalysis {
+				err = checkRemoteAnalysisJournal(root)
+			} else {
+				err = s.state.recoverPendingJournalLocked(id)
+			}
+			if err != nil {
 				return err
 			}
 		}
 		for _, name := range resultSourceFiles {
+			if remoteAnalysis && name == resultNoteFile {
+				continue
+			}
 			file, err := captureRunSource(root, manifest, name)
 			if err != nil && !((name == "events.jsonl" || name == "observations.jsonl" || name == resultNoteFile) && errors.Is(err, os.ErrNotExist)) {
 				return fmt.Errorf("open %s: %w", name, err)
@@ -945,9 +967,13 @@ func (s *Server) captureResultFilesContext(ctx context.Context, id string, downl
 	if err == nil {
 		err = s.applyBatchExtension(&result)
 	}
-	if err == nil {
+	if err == nil && remoteAnalysis && (snapshot.active || result.State == "running" || result.State == "queued" || result.TelemetryPending) {
+		err = errResultBusy
+	}
+	if err == nil && !remoteAnalysis {
 		// Probe both ends before committing HTTP headers. Later I/O failures
-		// still abort the response instead of finishing a misleading ZIP.
+		// still abort the response instead of finishing a misleading ZIP. Remote
+		// analysis checks each block against its pinned length during transfer.
 		for _, file := range snapshot.files {
 			if file.size == 0 {
 				continue
@@ -983,6 +1009,9 @@ func (s *Server) handleResultDownload(w http.ResponseWriter, r *http.Request, id
 	}
 	snapshot, err := s.captureResultFilesContext(r.Context(), id, r.Method == http.MethodGet)
 	if err != nil {
+		if r.Context().Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
 		if errors.Is(err, errResultNotFound) {
 			http.NotFound(w, r)
 			return

@@ -78,6 +78,18 @@ test('opening a queued analysis preserves its run or batch identity without chan
   assert.match(h.elements.get('#workQueueList').innerHTML,/1 task ahead/);
 });
 
+test('parallel analyses show their assigned workers in the shared queue', () => {
+  const h = fixture();
+  const local = {...item('local', 'analysis'), worker:'Controller'};
+  const remote = {...item('remote', 'batch-analysis', 1), state:'running', worker:'Analysis worker 1'};
+  h.view.update([local, remote, item('next', 'experiment', 2)]);
+  const html = h.elements.get('#workQueueList').innerHTML;
+  assert.match(html, /aria-label="Queue position 2">2/);
+  assert.match(html, /Run analysis · Controller/);
+  assert.match(html, /Batch mean analysis · Analysis worker 1/);
+  assert.match(html, /2 tasks ahead/);
+});
+
 test('host reboot work has a distinct status view and cancel never claims to undo an accepted reboot',async()=>{
  const h=fixture();h.view.update([{...item('maintenance','host-reboot'),operationId:'host-reboot-operation',phase:'waiting-for-hosts',progress:75}]);
  const html=h.elements.get('#workQueueList').innerHTML;

@@ -30,22 +30,25 @@ import (
 
 type ServerConfig struct {
 	// RunWorkers is enabled by the production Controller role.
-	RunWorkers          bool
-	RuntimeImage        string // Deployment-selected image reference, not a Docker Engine observation.
-	NetworkManagerURL   string
-	AgentDiscoveryDNS   string
-	PrometheusURL       string
-	RunMinFreeBytes     uint64
-	ArchiveMiBPerSecond *uint64 // nil uses the default; zero disables idle throttling.
-	User                string
-	Password            string
-	Listen              string
-	DataDir             string
-	Token               string
-	HostRebootToken     string
-	MetricsURL          string
-	PrometheusPort      int
-	GrafanaPort         int
+	RunWorkers                   bool
+	RuntimeImage                 string // Deployment-selected image reference, not a Docker Engine observation.
+	NetworkManagerURL            string
+	AgentDiscoveryDNS            string
+	PrometheusURL                string
+	RunMinFreeBytes              uint64
+	ArchiveMiBPerSecond          *uint64 // nil uses the default; zero disables idle throttling.
+	AnalysisWorkerURLs           []string
+	AnalysisWorkerToken          string
+	AnalysisTransferMiBPerSecond uint64 // Zero uses the default transfer budget.
+	User                         string
+	Password                     string
+	Listen                       string
+	DataDir                      string
+	Token                        string
+	HostRebootToken              string
+	MetricsURL                   string
+	PrometheusPort               int
+	GrafanaPort                  int
 }
 
 type Server struct {
@@ -88,6 +91,8 @@ type Server struct {
 	nodeSeq                    atomic.Uint64
 	repeatBatches              map[string]*repeatBatch
 	experimentQueue            []*workSlot // cancelMu; shared experiment/analysis FIFO
+	analysisGroupReady         bool        // cancelMu; the head analysis group cleared Peer cleanup
+	analysisWorkerCleanupMu    sync.Mutex
 	workWorkers                sync.WaitGroup
 	workSlots                  map[string]*workSlot
 	recentWorkCancels          []string

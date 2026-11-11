@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  controller:
+    environment:
+      KPL_ANALYSIS_WORKER_URLS: '{{.Origins}}'
+      KPL_ANALYSIS_WORKER_TOKEN_FILE: /run/secrets/kpl-analysis
+      KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND: '${KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND:-32}'
+    networks: [analysis]
+    secrets:
+      - {source: analysis-auth, target: kpl-analysis, uid: '100', gid: '101', mode: 0400}
+{{- range .Workers}}
+  {{.Name}}:
+    image: '${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}'
+    command: [run, analysis-worker, --listen, ':8093']
+    user: '100:101'
+    environment:
+      KPL_ANALYSIS_WORKER_TOKEN_FILE: /run/secrets/kpl-analysis
+      KPL_RUNTIME_IMAGE: '${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}'
+    networks: [analysis]
+    secrets:
+      - {source: analysis-auth, target: kpl-analysis, uid: '100', gid: '101', mode: 0400}
+    stop_grace_period: 30s
+    deploy:
+      labels:
+        io.kpl.application: kp2plab-v3
+      replicas: 1
+      placement:
+        constraints:
+          - 'node.platform.os == linux'
+          - 'node.id == {{.NodeID}}'
+      resources:
+        limits:
+          cpus: '${KPL_ANALYSIS_CPUS:-2}'
+          memory: '${KPL_ANALYSIS_MEMORY_MIB:-4096}M'
+      update_config: {parallelism: 1, order: stop-first}
+      rollback_config: {parallelism: 1, order: stop-first}
+      restart_policy: {condition: any, delay: 5s}
+{{- end}}
+
+networks:
+  analysis:
+    driver: overlay
+    driver_opts:
+      encrypted: ''
+
+secrets:
+  analysis-auth:
+    external: true
+    name: '${KPL_ANALYSIS_SECRET:?Set the analysis Docker secret name}'

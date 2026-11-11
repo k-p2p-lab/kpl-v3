@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -20,7 +21,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
-var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer"}
+var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer", "analysis-worker"}
 
 func IsRuntimeCommand(name string) bool {
 	if name == "internal-worker" {
@@ -69,6 +70,8 @@ func (a *App) executeRuntime(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "controller":
 		err = runController(ctx, logger, args[1:])
+	case "analysis-worker":
+		err = runAnalysisWorker(ctx, logger, args[1:])
 	case "agent":
 		err = runAgent(ctx, logger, args[1:])
 	case "swarm-agent":
@@ -170,6 +173,16 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		}
 	}
 	archiveMiB := flags.Uint64("archive-mib-per-second", archiveRate, "idle archive copy/verification limit in MiB/s (0 disables throttling; experiment pauses remain)")
+	analysisWorkerURLs := flags.String("analysis-worker-urls", os.Getenv("KPL_ANALYSIS_WORKER_URLS"), "space-separated private analysis worker HTTP(S) origins")
+	analysisRate := uint64(32)
+	var analysisRateErr error
+	if raw := os.Getenv("KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND"); raw != "" {
+		analysisRate, analysisRateErr = strconv.ParseUint(raw, 10, 64)
+		if analysisRateErr != nil {
+			analysisRateErr = errors.New("invalid KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND")
+		}
+	}
+	analysisTransfer := flags.Uint64("analysis-transfer-mib-per-second", analysisRate, "remote result analysis transfer limit per worker in MiB/s (1-1024)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
@@ -184,6 +197,20 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	if err := roleDefaultError(flags, "archive-mib-per-second", archiveRateErr); err != nil {
 		return err
 	}
+	if err := roleDefaultError(flags, "analysis-transfer-mib-per-second", analysisRateErr); err != nil {
+		return err
+	}
+	if *analysisTransfer < 1 || *analysisTransfer > 1024 {
+		return errors.New("analysis transfer limit must be between 1 and 1024 MiB/s")
+	}
+	analysisToken, err := analysisWorkerTokenFromEnv()
+	if err != nil {
+		return err
+	}
+	analysisWorkers := strings.Fields(*analysisWorkerURLs)
+	if err := controller.ValidateAnalysisWorkerConnections(analysisWorkers, analysisToken); err != nil {
+		return err
+	}
 	parsedPrometheusPort, err := parsePort(*prometheusPort, 9090, "Prometheus")
 	if err != nil {
 		return err
@@ -193,20 +220,23 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		return err
 	}
 	server := controller.New(controller.ServerConfig{
-		RunWorkers:          true,
-		RuntimeImage:        strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")),
-		NetworkManagerURL:   strings.TrimSpace(*networkManager),
-		AgentDiscoveryDNS:   strings.TrimSpace(*agentDiscoveryDNS),
-		Listen:              *listen,
-		DataDir:             *dataDir,
-		RunMinFreeBytes:     *runMinFree,
-		ArchiveMiBPerSecond: archiveMiB,
-		User:                user,
-		Password:            password,
-		MetricsURL:          *metricsURL,
-		PrometheusURL:       *prometheusURL,
-		PrometheusPort:      parsedPrometheusPort,
-		GrafanaPort:         parsedGrafanaPort,
+		RunWorkers:                   true,
+		RuntimeImage:                 strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")),
+		NetworkManagerURL:            strings.TrimSpace(*networkManager),
+		AgentDiscoveryDNS:            strings.TrimSpace(*agentDiscoveryDNS),
+		Listen:                       *listen,
+		DataDir:                      *dataDir,
+		RunMinFreeBytes:              *runMinFree,
+		ArchiveMiBPerSecond:          archiveMiB,
+		AnalysisWorkerURLs:           analysisWorkers,
+		AnalysisWorkerToken:          analysisToken,
+		AnalysisTransferMiBPerSecond: *analysisTransfer,
+		User:                         user,
+		Password:                     password,
+		MetricsURL:                   *metricsURL,
+		PrometheusURL:                *prometheusURL,
+		PrometheusPort:               parsedPrometheusPort,
+		GrafanaPort:                  parsedGrafanaPort,
 	}, logger)
 	// Keep diagnostics alive during graceful finalization after the service
 	// context is canceled; stop them when the runtime actually returns.
@@ -214,6 +244,56 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	defer stopHealth()
 	go runtimehealth.Run(healthCtx, logger, "controller")
 	return server.Run(ctx)
+}
+
+func analysisWorkerTokenFromEnv() (string, error) {
+	token, path := os.Getenv("KPL_ANALYSIS_WORKER_TOKEN"), os.Getenv("KPL_ANALYSIS_WORKER_TOKEN_FILE")
+	if path == "" {
+		return token, nil
+	}
+	if token != "" {
+		return "", errors.New("set only one of KPL_ANALYSIS_WORKER_TOKEN and KPL_ANALYSIS_WORKER_TOKEN_FILE")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open analysis worker token file: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat analysis worker token file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 258 {
+		return "", errors.New("analysis worker token file must be a regular file of at most 258 bytes")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, 259))
+	if err != nil {
+		return "", fmt.Errorf("read analysis worker token file: %w", err)
+	}
+	if len(data) > 258 {
+		return "", errors.New("analysis worker token file exceeds size limit")
+	}
+	token = strings.TrimRight(string(data), "\r\n")
+	if err := controller.ValidateAnalysisWorkerToken(token); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func runAnalysisWorker(ctx context.Context, logger *slog.Logger, args []string) error {
+	flags := flag.NewFlagSet("kpl run analysis-worker", flag.ContinueOnError)
+	listen := flags.String("listen", ":8093", "private analysis HTTP listen address")
+	if err := parseRoleFlags(flags, args); err != nil {
+		return err
+	}
+	token, err := analysisWorkerTokenFromEnv()
+	if err != nil {
+		return err
+	}
+	healthCtx, stopHealth := context.WithCancel(ctx)
+	defer stopHealth()
+	go runtimehealth.Run(healthCtx, logger, "analysis-worker")
+	return controller.RunAnalysisWorker(ctx, *listen, token, logger)
 }
 
 func parsePort(raw string, fallback int, name string) (int, error) {

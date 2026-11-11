@@ -32,6 +32,7 @@ type Config map[string]string
 var ConfigKeys = []string{
 	"KPL_STACK_NAME", "KPL_CONTROL_NODE_ID", "KPL_PEER_NETWORK", "KPL_PEER_SUBNET", "KPL_IMAGE",
 	"KPL_AGENT_CAPACITY", "KPL_AGENT_HOST_REBOOT_ENABLED", "KPL_RUN_MIN_FREE_BYTES", "KPL_ARCHIVE_MIB_PER_SECOND", "KPL_ARCHIVE_HOST_PATH", "KPL_AGENT_METRICS_PORT", "KPL_USER", "KPL_PASSWORD",
+	"KPL_ANALYSIS_NODE_IDS", "KPL_ANALYSIS_SECRET", "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND", "KPL_ANALYSIS_CPUS", "KPL_ANALYSIS_MEMORY_MIB",
 	"GRAFANA_ADMIN_USER", "GRAFANA_ADMIN_PASSWORD", "KPL_HTTP_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT",
 	"KPL_MIN_AGENTS", "KPL_DOCKER_TIMEOUT", "KPL_IMAGE_BUILD_TIMEOUT", "KPL_IMAGE_PUSH_TIMEOUT",
 	"KPL_IMAGE_PULL_TIMEOUT", "KPL_CONTROLLER_STOP_TIMEOUT", "KPL_AGENT_STOP_TIMEOUT",
@@ -45,6 +46,7 @@ var (
 	imageTagPattern        = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`)
 	digestPattern          = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	positiveIntegerPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
+	swarmSecretNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 )
 
 func configKey(key string) bool {
@@ -83,6 +85,12 @@ func ValidateSetting(key, value string) error {
 		if !nodeIDPattern.MatchString(value) {
 			return errors.New("KPL_CONTROL_NODE_ID must be an exact node ID")
 		}
+	case "KPL_ANALYSIS_NODE_IDS":
+		return validateAnalysisNodeIDs(value)
+	case "KPL_ANALYSIS_SECRET":
+		if value != "" && !swarmSecretNamePattern.MatchString(value) {
+			return errors.New("KPL_ANALYSIS_SECRET must be a Docker secret name")
+		}
 	case "KPL_PEER_NETWORK":
 		if !networkNamePattern.MatchString(value) {
 			return errors.New("invalid KPL_PEER_NETWORK")
@@ -112,13 +120,19 @@ func ValidateSetting(key, value string) error {
 			return nil
 		}
 		fallthrough
-	case "KPL_AGENT_CAPACITY", "KPL_MIN_AGENTS", "KPL_DOCKER_TIMEOUT", "KPL_IMAGE_BUILD_TIMEOUT", "KPL_IMAGE_PUSH_TIMEOUT", "KPL_IMAGE_PULL_TIMEOUT", "KPL_CONTROLLER_STOP_TIMEOUT", "KPL_AGENT_STOP_TIMEOUT":
+	case "KPL_AGENT_CAPACITY", "KPL_MIN_AGENTS", "KPL_DOCKER_TIMEOUT", "KPL_IMAGE_BUILD_TIMEOUT", "KPL_IMAGE_PUSH_TIMEOUT", "KPL_IMAGE_PULL_TIMEOUT", "KPL_CONTROLLER_STOP_TIMEOUT", "KPL_AGENT_STOP_TIMEOUT", "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND", "KPL_ANALYSIS_CPUS", "KPL_ANALYSIS_MEMORY_MIB":
 		n, err := strconv.ParseInt(value, 10, 64)
 		if !positiveIntegerPattern.MatchString(value) || err != nil || n <= 0 {
 			return fmt.Errorf("%s must be a supported positive integer without leading zeros", key)
 		}
 		if strings.HasSuffix(key, "_TIMEOUT") && n > math.MaxInt64/int64(time.Second) {
 			return fmt.Errorf("%s exceeds the supported timeout range", key)
+		}
+		if key == "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND" && n > 1024 {
+			return errors.New("KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND must be between 1 and 1024")
+		}
+		if key == "KPL_ANALYSIS_CPUS" && n > math.MaxInt64/1_000_000_000 || key == "KPL_ANALYSIS_MEMORY_MIB" && n > math.MaxInt64/(1<<20) {
+			return fmt.Errorf("%s exceeds the supported resource range", key)
 		}
 	case "KPL_IMAGE":
 		return validateImage(value)
@@ -170,10 +184,13 @@ func ConfigDefaults(c Config) Config {
 		c = Config{}
 	}
 	defaults := map[string]string{
-		"KPL_AGENT_HOST_REBOOT_ENABLED": "false",
-		"KPL_ARCHIVE_MIB_PER_SECOND":    strconv.FormatUint(controller.DefaultArchiveMiBPerSecond, 10),
-		"KPL_ARCHIVE_HOST_PATH":         "",
-		"KPL_STACK_NAME":                "kpl", "KPL_RUN_MIN_FREE_BYTES": "1073741824", "KPL_AGENT_CAPACITY": "20", "KPL_MIN_AGENTS": "1",
+		"KPL_AGENT_HOST_REBOOT_ENABLED":        "false",
+		"KPL_ARCHIVE_MIB_PER_SECOND":           strconv.FormatUint(controller.DefaultArchiveMiBPerSecond, 10),
+		"KPL_ARCHIVE_HOST_PATH":                "",
+		"KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND": "32",
+		"KPL_ANALYSIS_CPUS":                    "2",
+		"KPL_ANALYSIS_MEMORY_MIB":              "4096",
+		"KPL_STACK_NAME":                       "kpl", "KPL_RUN_MIN_FREE_BYTES": "1073741824", "KPL_AGENT_CAPACITY": "20", "KPL_MIN_AGENTS": "1",
 		"KPL_USER": "admin", "GRAFANA_ADMIN_USER": "admin", "KPL_HTTP_PORT": "8080", "KPL_AGENT_METRICS_PORT": "9091",
 		"PROMETHEUS_PORT": "9090", "GRAFANA_PORT": "3000", "KPL_DOCKER_TIMEOUT": "60", "KPL_IMAGE_BUILD_TIMEOUT": "1800",
 		"KPL_IMAGE_PUSH_TIMEOUT": "600", "KPL_IMAGE_PULL_TIMEOUT": "300", "KPL_CONTROLLER_STOP_TIMEOUT": "960", "KPL_AGENT_STOP_TIMEOUT": "240",
@@ -212,6 +229,16 @@ func validateConfig(c Config) error {
 			if err := ValidateSetting(key, value); err != nil {
 				return err
 			}
+		}
+	}
+	if nodes := strings.Fields(c["KPL_ANALYSIS_NODE_IDS"]); len(nodes) != 0 {
+		for _, node := range nodes {
+			if node == c["KPL_CONTROL_NODE_ID"] {
+				return errors.New("KPL_ANALYSIS_NODE_IDS must not include KPL_CONTROL_NODE_ID")
+			}
+		}
+		if c["KPL_ANALYSIS_SECRET"] == "" {
+			return errors.New("KPL_ANALYSIS_SECRET is required when KPL_ANALYSIS_NODE_IDS is set")
 		}
 	}
 	return ValidatePortConflicts(c)

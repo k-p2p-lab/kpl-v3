@@ -274,7 +274,7 @@ func (a *App) Complete(ctx context.Context, args []string) error {
 			}
 		case "logs":
 			if len(words) == 2 {
-				candidates = append(candidates, "controller", "agent", "network-manager", "resource-monitor", "prometheus", "grafana", "access", "auth")
+				candidates = append(candidates, "controller", "agent", "analysis-worker-1", "network-manager", "resource-monitor", "prometheus", "grafana", "access", "auth")
 			}
 			if valueOptionActive && words[len(words)-1] == "--context" {
 				candidates = append(candidates, a.completionDocker(ctx, "context", "ls", "--format", "{{.Name}}")...)

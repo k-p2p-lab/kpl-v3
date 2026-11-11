@@ -2,11 +2,12 @@ package model
 
 import "time"
 
-// WorkQueueItem describes live Controller work. Experiment repetitions share
-// one slot; analyses and host maintenance occupy slots in the same FIFO.
+// WorkQueueItem describes live work in the shared execution queue. Consecutive
+// analyses can run concurrently on distinct workers when they reach the head.
 type WorkQueueItem struct {
 	ID          string     `json:"id"`
 	Kind        string     `json:"kind"`
+	Worker      string     `json:"worker,omitempty"`
 	Name        string     `json:"name"`
 	RunID       string     `json:"runId,omitempty"`
 	BatchID     string     `json:"batchId,omitempty"`

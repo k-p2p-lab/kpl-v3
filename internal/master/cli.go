@@ -469,7 +469,7 @@ Explicit files are relative to the caller. Use -- before option-like filenames.
 			help = `Usage: kpl run ROLE [OPTIONS]
 
 Roles: controller, agent, swarm-agent, peer, resource-monitor, network-manager,
-       network-gateway.
+       network-gateway, analysis-worker.
 
 Use kpl run ROLE --help for role-specific flags. Roles run without a source
 checkout. Runtime options belong after ROLE.
@@ -532,8 +532,9 @@ selected explicitly. --image cannot be combined with --republish. --platforms is
 accepted on restart only with --republish. Build/push/deploy failure after removal
 leaves the stack down or partially deployed; it is not automatically restored.
 Removal retains data volumes. Network reset requires an unused owned overlay.
-Log components: controller, agent, network-manager, resource-monitor, prometheus,
-grafana, access, auth. --context applies only to access/auth file reads.
+Log components: controller, agent, analysis-worker-N, network-manager,
+resource-monitor, prometheus, grafana, access, auth. --context applies only to
+access/auth file reads.
 Configuration: kpl config --help. Images: kpl image --help.
 `)
 		return err
@@ -552,7 +553,7 @@ Configuration: kpl config --help. Images: kpl image --help.
   help [COMMAND...]        Show command help
 
 Container roles (use run ROLE --help for role-specific flags):
-  controller | agent | swarm-agent | peer | resource-monitor | network-manager | network-gateway
+  controller | agent | swarm-agent | peer | resource-monitor | network-manager | network-gateway | analysis-worker
 
 Use kpl COMMAND --help for options.
 --repo selects the kpl-v3 checkout (also KPL_REPO); discovery searches the current

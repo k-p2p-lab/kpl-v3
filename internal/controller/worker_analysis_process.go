@@ -17,6 +17,7 @@ import (
 type analysisProcessInput struct {
 	RunID        string                     `json:"runId"`
 	AnalysisID   string                     `json:"analysisId"`
+	RuntimeImage string                     `json:"runtimeImage,omitempty"`
 	BatchID      string                     `json:"batchId,omitempty"`
 	Name         string                     `json:"name,omitempty"`
 	ExpectedRuns int                        `json:"expectedRuns,omitempty"`

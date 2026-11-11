@@ -232,10 +232,33 @@ func (s *swarm) stopService(ctx context.Context, service string, budget time.Dur
 // Compose merges volumes by target, retaining the local Controller data volume.
 func (s *swarm) deploymentComposeFiles() ([]string, func(), error) {
 	args := []string{"--compose-file", filepath.Join(s.a.Repo, "stack.swarm.yaml")}
-	cleanup := func() {}
+	var temporary []string
+	cleanup := func() {
+		for _, name := range temporary {
+			_ = os.Remove(name)
+		}
+	}
+	addOverride := func(pattern string, write func(io.Writer) error) error {
+		file, err := os.CreateTemp("", pattern)
+		if err != nil {
+			return err
+		}
+		name := file.Name()
+		temporary = append(temporary, name)
+		args = append(args, "--compose-file", name)
+		return errors.Join(write(file), file.Close())
+	}
 	source := s.config["KPL_ARCHIVE_HOST_PATH"]
 	if err := ValidateSetting("KPL_ARCHIVE_HOST_PATH", source); err != nil {
 		return nil, cleanup, err
+	}
+	if nodes := s.config["KPL_ANALYSIS_NODE_IDS"]; len(strings.Fields(nodes)) != 0 {
+		if err := addOverride("kpl-analysis-stack-*.yaml", func(file io.Writer) error {
+			return writeAnalysisCompose(file, nodes)
+		}); err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
 	}
 	if source == "" {
 		return args, cleanup, nil
@@ -244,21 +267,17 @@ func (s *swarm) deploymentComposeFiles() ([]string, func(), error) {
 	// before JSON quoting so both '${...}' and ordinary '$name' remain literal.
 	quoted, err := json.Marshal(strings.ReplaceAll(source, "$", "$$"))
 	if err != nil {
-		return nil, cleanup, err
-	}
-	file, err := os.CreateTemp("", "kpl-archive-stack-*.yaml")
-	if err != nil {
-		return nil, cleanup, err
-	}
-	name := file.Name()
-	cleanup = func() { _ = os.Remove(name) }
-	_, err = fmt.Fprintf(file, "version: \"3.8\"\nservices:\n  controller:\n    volumes:\n      - type: bind\n        source: %s\n        target: /var/lib/kpl/data/runs\n", quoted)
-	err = errors.Join(err, file.Close())
-	if err != nil {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return append(args, "--compose-file", name), cleanup, nil
+	if err := addOverride("kpl-archive-stack-*.yaml", func(file io.Writer) error {
+		_, err := fmt.Fprintf(file, "version: \"3.8\"\nservices:\n  controller:\n    volumes:\n      - type: bind\n        source: %s\n        target: /var/lib/kpl/data/runs\n", quoted)
+		return err
+	}); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return args, cleanup, nil
 }
 
 func (s *swarm) deploy(ctx context.Context) error {
@@ -268,6 +287,14 @@ func (s *swarm) deploy(ctx context.Context) error {
 		}
 	}
 	if err := s.a.Preflight(ctx, s.config, true); err != nil {
+		return err
+	}
+	if s.options.name == "deploy" {
+		if err := s.checkAnalysisPlacementUnchanged(ctx); err != nil {
+			return err
+		}
+	}
+	if err := s.checkAnalysisSwarm(ctx); err != nil {
 		return err
 	}
 	host, err := s.controlHost(ctx)
@@ -328,6 +355,9 @@ func (s *swarm) deploy(ctx context.Context) error {
 		// Tag resolution can outlast an external service replacement. Do not
 		// overwrite a new owner using the inventory captured before the pull.
 		if err := s.loadServices(ctx); err != nil {
+			return err
+		}
+		if err := s.checkAnalysisPlacementUnchanged(ctx); err != nil {
 			return err
 		}
 	}
@@ -394,6 +424,14 @@ func (s *swarm) deploy(ctx context.Context) error {
 		}
 		if err := s.waitTasks(ctx, tasks, s.agentTimeout); err != nil {
 			return err
+		}
+		configuredWorkers := len(strings.Fields(s.config["KPL_ANALYSIS_NODE_IDS"]))
+		for _, worker := range s.analysisWorkers() {
+			if worker.index >= configuredWorkers {
+				if err := s.run(ctx, "service", "rm", worker.id); err != nil {
+					return fmt.Errorf("remove stopped analysis worker: %w", err)
+				}
+			}
 		}
 	}
 	for _, node := range nodes {

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,54 @@ func awaitBatch(t *testing.T, s *Server, id string) batchAnalysisStatus {
 	t.Fatal("batch analysis did not settle")
 	return batchAnalysisStatus{}
 }
+
+func TestBatchAnalysisCommitRejectsTelemetryAfterMemberScan(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	batchFixture(t, s, "batch", "first", "completed", 1, 2, 1)
+	batchFixture(t, s, "batch", "second", "completed", 2, 2, 1)
+	if _, err := s.startBatchAnalysis(t.Context(), "batch", false); err != nil {
+		t.Fatal(err)
+	}
+	previous := awaitBatch(t, s, "batch")
+	s.analysisWorkers.Wait()
+	if previous.State != "completed" {
+		t.Fatalf("initial batch analysis: %+v", previous)
+	}
+	root, err := s.batchAnalysisDirectory("batch", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	before, err := root.ReadFile(batchJobFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.analysisJobMu.Lock()
+	defer s.analysisJobMu.Unlock()
+	members, err := s.allBatchMembers(t.Context(), "batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := previous
+	next.ID = "replacement"
+	next.ArtifactSlot = previous.nextArtifactSlot()
+	staged, err := stageAnalysisJSON(t.Context(), root, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.discard()
+	if err := s.state.persistEvents("first", []model.TraceEvent{{RunID: "first", EventID: "late", Type: "publish", Topic: "topic"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.commitBatchAnalysisStatus(t.Context(), staged, members); err == nil || !strings.Contains(err.Error(), "saved batch members changed") {
+		t.Fatalf("publication accepted stale contributor revisions: %v", err)
+	}
+	after, err := root.ReadFile(batchJobFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected publication replaced the completed job: %v", err)
+	}
+}
+
 func TestBatchAnalysisPersistsMeansAndKeepsIndividualAnalysis(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	batchFixture(t, s, "batch", "first", "completed", 1, 4, 1)

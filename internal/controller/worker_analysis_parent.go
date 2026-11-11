@@ -215,7 +215,7 @@ func (s *Server) analyzeJobWithWorker(ctx context.Context, job *analysisJob, sna
 	}
 	defer root.Close()
 	input := analysisProcessInput{RunID: snapshot.result.ID, AnalysisID: job.status.ID, Snapshots: []workerSnapshotDescriptor{describeWorkerSnapshot(snapshot)}}
-	artifacts, result, err := s.computeAnalysisProcess(ctx, input, []*resultSnapshot{snapshot}, root, func(p analysisProcessProgress) { report(p.Phase, p.Bytes) }, nil)
+	artifacts, result, err := s.computeAssignedAnalysis(ctx, job.slot, input, []*resultSnapshot{snapshot}, root, func(p analysisProcessProgress) { report(p.Phase, p.Bytes) }, nil)
 	if err != nil {
 		return err
 	}
@@ -226,16 +226,46 @@ func (s *Server) analyzeJobWithWorker(ctx context.Context, job *analysisJob, sna
 	return s.saveAnalysisJob(ctx, job, artifacts, nil)
 }
 
+func (s *Server) captureAnalysisSource(ctx context.Context, slot *workSlot, id string) (*resultSnapshot, error) {
+	if slot.analysisWorkerURL != "" {
+		return s.captureRemoteAnalysisResultFilesContext(ctx, id)
+	}
+	return s.captureResultFilesContext(ctx, id, false)
+}
+
+func (s *Server) computeAssignedAnalysis(ctx context.Context, slot *workSlot, input analysisProcessInput, snapshots []*resultSnapshot, root *os.Root, progress func(analysisProcessProgress), metadata workerproc.Handler) (*workerAnalysisArtifacts, analysisProcessResult, error) {
+	if slot.analysisWorkerURL == "" {
+		return s.computeAnalysisProcess(ctx, input, snapshots, root, progress, metadata)
+	}
+	input.RuntimeImage = s.config.RuntimeImage
+	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL); err != nil {
+		return nil, analysisProcessResult{}, err
+	}
+	source := s.remoteAnalysisSnapshotSource(snapshots)
+	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.config.AnalysisWorkerToken, input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond)
+	if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
+		err = errors.Join(err, s.clearAnalysisWorker(slot.analysisWorkerURL))
+	}
+	if err != nil && artifacts != nil {
+		artifacts.discard()
+		artifacts = nil
+	}
+	return artifacts, result, err
+}
+
 func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJob, selected, excluded []savedResult, missing int) error {
+	remote := job.slot.analysisWorkerURL != ""
 	verifiedHashes := map[string]string{}
-	if job.previous != nil {
+	// The Controller samples remote inputs once so the worker does not make a
+	// network round trip for each small sample or choose its own source identity.
+	if job.previous != nil || remote {
 		var sourceHash string
 		var err error
 		verifiedHashes, sourceHash, err = s.hashBatchAnalysisSources(ctx, job, selected)
 		if err != nil {
 			return err
 		}
-		if sourceHash == job.previous.SourceHash {
+		if job.previous != nil && sourceHash == job.previous.SourceHash {
 			return s.reuseBatchAnalysis(ctx, job)
 		}
 	}
@@ -247,7 +277,7 @@ func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJ
 	}()
 	input := analysisProcessInput{RunID: job.status.BatchID, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded}
 	for _, member := range selected {
-		snapshot, err := s.captureResultFilesContext(ctx, member.ID, false)
+		snapshot, err := s.captureAnalysisSource(ctx, job.slot, member.ID)
 		if err != nil {
 			return err
 		}
@@ -359,7 +389,7 @@ func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJ
 		metadataMu.Unlock()
 		return analysisBatchMetadata{SourceHash: sourceHash, Reliability: reliability}, nil
 	}
-	artifacts, result, err := s.computeAnalysisProcess(ctx, input, snapshots, root, progress, metadata)
+	artifacts, result, err := s.computeAssignedAnalysis(ctx, job.slot, input, snapshots, root, progress, metadata)
 	if err != nil {
 		return err
 	}

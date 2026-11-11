@@ -380,18 +380,7 @@ func (s *state) recoverPendingJournalLocked(id string) error {
 		// A cursor or snapshot read normally has no transaction to recover.
 		// Read-only bbolt opens neither rebuild its freelist nor sync the Run
 		// directory. Still inspect the old in-database intent for compatibility.
-		root, db, err := openJournalIndexMode(path, true)
-		if err != nil {
-			return err
-		}
-		legacyPending := false
-		err = db.View(func(tx *bolt.Tx) error {
-			if meta := tx.Bucket([]byte("meta")); meta != nil {
-				legacyPending = len(meta.Get([]byte("pending"))) != 0
-			}
-			return nil
-		})
-		err = errors.Join(err, db.Close(), root.Close())
+		legacyPending, err := hasLegacyJournalIntent(path)
 		if err != nil || !legacyPending {
 			return err
 		}
@@ -410,4 +399,19 @@ func (s *state) recoverPendingJournalLocked(id string) error {
 		s.markRunArchiveDirty(id)
 	}
 	return err
+}
+
+func hasLegacyJournalIntent(path string) (bool, error) {
+	root, db, err := openJournalIndexMode(path, true)
+	if err != nil {
+		return false, err
+	}
+	pending := false
+	err = db.View(func(tx *bolt.Tx) error {
+		if meta := tx.Bucket([]byte("meta")); meta != nil {
+			pending = len(meta.Get([]byte("pending"))) != 0
+		}
+		return nil
+	})
+	return pending, errors.Join(err, db.Close(), root.Close())
 }

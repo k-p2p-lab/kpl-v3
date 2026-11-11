@@ -13,6 +13,9 @@ func (s *swarm) restartRepublish(ctx context.Context) error {
 	if err := s.a.Preflight(ctx, s.config, true); err != nil {
 		return err
 	}
+	if err := s.checkAnalysisSwarm(ctx); err != nil {
+		return err
+	}
 	if s.config["GRAFANA_ADMIN_PASSWORD"] == "" {
 		return errors.New("GRAFANA_ADMIN_PASSWORD is required")
 	}
@@ -80,6 +83,25 @@ func (s *swarm) restartRepublish(ctx context.Context) error {
 	}
 	if int64(len(nodes)) < minimum {
 		return fmt.Errorf("republish requires at least %d eligible Agent nodes; specify nodes or a selector", minimum)
+	}
+	if workers := s.analysisWorkers(); len(workers) != 0 {
+		// Republish reuses worker service names. Confirm the old tasks have
+		// stopped before creating new tasks at the same analysis endpoints.
+		for _, worker := range workers {
+			if _, err := s.captureTasks(ctx, worker.id, ""); err != nil {
+				return err
+			}
+		}
+		if s.present["controller"] {
+			if err := s.stopService(ctx, s.stack+"_controller", s.controllerTimeout); err != nil {
+				return err
+			}
+		}
+		for _, worker := range workers {
+			if err := s.stopService(ctx, worker.id, s.agentTimeout); err != nil {
+				return err
+			}
+		}
 	}
 	s.reportNodes(nodes)
 	fmt.Fprintln(s.a.Stdout, "Republish 1/3: removing stack services; persistent data volumes and the Peer network are retained.")

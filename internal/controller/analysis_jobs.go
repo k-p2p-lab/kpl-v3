@@ -325,7 +325,7 @@ func (s *Server) startAnalysisJobExpected(ctx context.Context, id string, refres
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	job.cancel = cancel
-	job.slot = s.enqueueWorkLocked(workerCtx, model.WorkQueueItem{Kind: "analysis", Name: result.Name, RunID: id}, cancel)
+	job.slot = s.enqueueResultAnalysisLocked(workerCtx, model.WorkQueueItem{Kind: "analysis", Name: result.Name, RunID: id}, cancel)
 	s.analysisJobs[id] = job
 	s.analysisWorkers.Add(1)
 	go s.runAnalysisJob(workerCtx, job)
@@ -343,16 +343,19 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 			return err
 		}
 		s.updateWorkStatus(job.slot.id, "starting", 0)
-		select {
-		case s.analysisSlots <- struct{}{}:
-			defer func() { <-s.analysisSlots }()
-		case <-ctx.Done():
-			return ctx.Err()
+		remote := job.slot.analysisWorkerURL != ""
+		if !remote {
+			select {
+			case s.analysisSlots <- struct{}{}:
+				defer func() { <-s.analysisSlots }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		snapshot, err := s.captureResultFilesContext(ctx, job.status.RunID, false)
+		snapshot, err := s.captureAnalysisSource(ctx, job.slot, job.status.RunID)
 		if err != nil {
 			return err
 		}
@@ -420,7 +423,7 @@ func (s *Server) runAnalysisJob(ctx context.Context, job *analysisJob) {
 		job.status.SourceHash = sourceHash
 		s.analysisJobMu.Unlock()
 		processed = 0
-		if s.config.RunWorkers {
+		if s.config.RunWorkers || remote {
 			return s.analyzeJobWithWorker(ctx, job, snapshot, report)
 		}
 		analysis, err := analyzeResult(context.WithValue(ctx, analysisProgressKey{}, report), snapshot)
@@ -537,6 +540,15 @@ func (s *Server) saveAnalysisJob(ctx context.Context, job *analysisJob, analysis
 		return err
 	}
 	defer current.Close()
+	if job.slot != nil && job.slot.analysisWorkerURL != "" {
+		revision, err := sourceRevisionAt(current, job.status.RunID)
+		if err != nil {
+			return err
+		}
+		if revision != job.status.SourceRevision {
+			return errors.New("saved Run sources changed during analysis; retry to capture the current result")
+		}
+	}
 	// Preserve the referenced snapshot until both new files and the single
 	// metadata commit are durable. A partial write never changes its identity.
 	slot := job.status.nextArtifactSlot()

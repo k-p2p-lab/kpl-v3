@@ -15,15 +15,18 @@ import (
 // worker limit and never holds Controller locks while reading source data.
 func (s *Server) hashBatchAnalysisSources(ctx context.Context, job *batchAnalysisJob, selected []savedResult) (map[string]string, string, error) {
 	hashes := make(map[string]string, len(selected))
+	remote := job.slot.analysisWorkerURL != ""
 	for i, member := range selected {
 		err := func() error {
-			select {
-			case s.analysisSlots <- struct{}{}:
-				defer func() { <-s.analysisSlots }()
-			case <-ctx.Done():
-				return ctx.Err()
+			if !remote {
+				select {
+				case s.analysisSlots <- struct{}{}:
+					defer func() { <-s.analysisSlots }()
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
-			snapshot, err := s.captureResultFilesContext(ctx, member.ID, false)
+			snapshot, err := s.captureAnalysisSource(ctx, job.slot, member.ID)
 			if err != nil {
 				return err
 			}
@@ -120,7 +123,17 @@ func (s *Server) reuseBatchAnalysis(ctx context.Context, job *batchAnalysisJob) 
 	status := *job.previous
 	status.Membership, status.Stale, status.Reused = job.status.Membership, false, true
 	status.UpdatedAt = time.Now().UTC()
-	if err := s.persistBatchAnalysis(status); err != nil {
+	root, err := s.batchAnalysisDirectory(status.BatchID, false)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	staged, err := stageAnalysisJSON(ctx, root, status)
+	if err != nil {
+		return err
+	}
+	defer staged.discard()
+	if err := s.commitBatchAnalysisStatus(ctx, staged, members); err != nil {
 		return err
 	}
 	job.status = status

@@ -52,6 +52,11 @@ func (s *Server) enqueueWorkSlotLocked(ctx context.Context, item model.WorkQueue
 	s.workSlots[slot.id] = slot
 	s.workWorkers.Add(1)
 	s.experimentQueue = append(s.experimentQueue, slot)
+	if s.summaryRefreshIdleCancel != nil {
+		// Cancellation only requests a yield. The maintenance owner retains
+		// admission until its child and RPC handlers have been fully reaped.
+		s.summaryRefreshIdleCancel()
+	}
 	s.updateQueuePositionsLocked()
 	return slot
 }

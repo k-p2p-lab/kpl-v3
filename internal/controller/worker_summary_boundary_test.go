@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,10 +76,10 @@ func summaryBoundaryAssertReleased(t *testing.T, s *Server) {
 	go func() { s.workWorkers.Wait(); close(done) }()
 	summaryBoundaryWait(t, done, "maintenance/FIFO ownership")
 	s.cancelMu.Lock()
-	active, slots := s.summaryRefreshActive, len(s.workSlots)
+	active, slots, idleCancel := s.summaryRefreshActive, len(s.workSlots), s.summaryRefreshIdleCancel != nil
 	s.cancelMu.Unlock()
-	if active || slots != 0 {
-		t.Fatalf("maintenance ownership survived completion: active=%t slots=%d", active, slots)
+	if active || slots != 0 || idleCancel {
+		t.Fatalf("maintenance ownership survived completion: active=%t slots=%d idleCancel=%t", active, slots, idleCancel)
 	}
 	s.workerMu.Lock()
 	unreaped := len(s.unreapedWorkers)
@@ -241,8 +240,17 @@ func TestLateOldRunCorrectionDoesNotPreemptActiveRun(t *testing.T) {
 	}
 	releaseOnce.Do(func() { close(release) })
 	waitWorkerRuns(t, s)
+	if count, err := summaryBoundaryLateCount(s, old.ID); err != nil || count != 0 {
+		t.Fatalf("B's end boundary recomputed unrelated A history: count=%g err=%v", count, err)
+	}
+	s.state.mu.RLock()
+	dirty := s.state.summaryDirty[old.ID]
+	s.state.mu.RUnlock()
+	if !dirty || !s.tryRefreshIdleRunMetrics(t.Context(), old.ID) {
+		t.Fatal("deferred A correction was lost or could not resume while idle")
+	}
 	if count, err := summaryBoundaryLateCount(s, old.ID); err != nil || count != 1 {
-		t.Fatalf("B's end boundary did not apply A correction: count=%g err=%v", count, err)
+		t.Fatalf("idle correction lost A's late evidence: count=%g err=%v", count, err)
 	}
 	summaryBoundaryAssertReleased(t, s)
 }
@@ -257,6 +265,9 @@ func TestRunMetricBoundaryUsesOnlyItsInitialDueSnapshot(t *testing.T) {
 	}
 	head := queueTestEnqueue(t, s, "experiment")
 	summaryBoundaryWait(t, head.entered, "original experiment slot")
+	s.cancelMu.Lock()
+	head.slot.batch = &repeatBatch{queuedIDs: []string{first.ID, second.ID}}
+	s.cancelMu.Unlock()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var gate atomic.Bool
 	var releaseOnce sync.Once
@@ -298,8 +309,8 @@ func TestRunMetricBoundaryUsesOnlyItsInitialDueSnapshot(t *testing.T) {
 	summaryBoundaryAssertReleased(t, s)
 }
 
-func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testing.T) {
-	for _, mode := range []string{"idle-experiment-first", "idle-analysis-first", "run-start-boundary"} {
+func TestIdleMetricMaintenanceYieldsToNewWorkWithoutReleasingBeforeCleanup(t *testing.T) {
+	for _, mode := range []string{"idle-experiment-first", "idle-analysis-first"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newControllerWorkerFixture(t)
 			s := f.server
@@ -319,14 +330,11 @@ func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testi
 				}
 				return original(kind)
 			}
-			idle := strings.HasPrefix(mode, "idle-")
 			idleDone := make(chan bool, 1)
-			if idle {
-				go func() { idleDone <- s.tryRefreshIdleRunMetrics(t.Context(), old.ID) }()
-				summaryBoundaryWait(t, entered, "idle correction claim")
-				if queue := summaryBoundaryQueue(t, s); len(queue) != 0 {
-					t.Fatalf("idle correction became a queue item: %+v", queue)
-				}
+			go func() { idleDone <- s.tryRefreshIdleRunMetrics(t.Context(), old.ID) }()
+			summaryBoundaryWait(t, entered, "idle correction claim")
+			if queue := summaryBoundaryQueue(t, s); len(queue) != 0 {
+				t.Fatalf("idle correction became a queue item: %+v", queue)
 			}
 			var run model.Experiment
 			var job analysisJobStatus
@@ -340,9 +348,6 @@ func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testi
 			run, err = s.StartScenario(t.Context(), []byte(summaryBoundaryScenario))
 			if err != nil {
 				t.Fatal(err)
-			}
-			if !idle {
-				summaryBoundaryWait(t, entered, "pre-Run correction")
 			}
 			if mode != "idle-analysis-first" {
 				job, err = s.startAnalysisJob(t.Context(), old.ID, false)
@@ -373,19 +378,17 @@ func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testi
 			head := s.experimentQueue[0]
 			opened := head.opened
 			s.cancelMu.Unlock()
-			if !active || idle && opened || !idle && !opened {
-				t.Fatalf("wrong maintenance gate: active=%t idle=%t opened=%t", active, idle, opened)
+			if !active || opened {
+				t.Fatalf("wrong idle maintenance gate: active=%t opened=%t", active, opened)
 			}
-			if idle {
-				select {
-				case <-head.ready:
-					t.Fatal("idle correction released the new FIFO head early")
-				default:
-				}
-				for _, item := range queue {
-					if item.State != "queued" {
-						t.Fatalf("idle admission displayed running work: %+v", queue)
-					}
+			select {
+			case <-head.ready:
+				t.Fatal("idle correction released the new FIFO head early")
+			default:
+			}
+			for _, item := range queue {
+				if item.State != "queued" {
+					t.Fatalf("idle admission displayed running work: %+v", queue)
 				}
 			}
 			s.state.mu.RLock()
@@ -401,15 +404,13 @@ func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testi
 				t.Fatal("new Peer escaped the maintenance gate")
 			}
 			releaseOnce.Do(func() { close(release) })
-			if idle {
-				select {
-				case claimed := <-idleDone:
-					if !claimed {
-						t.Fatal("idle claim was lost")
-					}
-				case <-time.After(8 * time.Second):
-					t.Fatal("idle correction did not release")
+			select {
+			case claimed := <-idleDone:
+				if !claimed {
+					t.Fatal("idle claim was lost")
 				}
+			case <-time.After(8 * time.Second):
+				t.Fatal("idle correction did not release")
 			}
 			waitWorkerRuns(t, s)
 			s.analysisWorkers.Wait()
@@ -417,8 +418,17 @@ func TestMetricMaintenanceGatesNewExperimentAndAnalysisWithoutQueueItem(t *testi
 			if err != nil || status.State != "completed" {
 				t.Fatalf("analysis did not resume in FIFO order: %+v %v", status, err)
 			}
+			if count, err := summaryBoundaryLateCount(s, old.ID); err != nil || count != 0 {
+				t.Fatalf("new work restarted the interrupted historical correction: %g %v", count, err)
+			}
+			s.state.mu.RLock()
+			dirty := s.state.summaryDirty[old.ID]
+			s.state.mu.RUnlock()
+			if !dirty || !s.tryRefreshIdleRunMetrics(t.Context(), old.ID) {
+				t.Fatal("interrupted correction was not retained for idle retry")
+			}
 			if count, err := summaryBoundaryLateCount(s, old.ID); err != nil || count != 1 {
-				t.Fatalf("maintenance did not publish corrected evidence: %g %v", count, err)
+				t.Fatalf("idle retry lost late evidence: %g %v", count, err)
 			}
 			summaryBoundaryAssertReleased(t, s)
 		})

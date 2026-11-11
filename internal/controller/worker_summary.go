@@ -160,7 +160,7 @@ func (s *Server) runWorkerSummaryLoop(ctx context.Context) {
 					continue
 				}
 				if s.tryRefreshIdleRunMetrics(ctx, id) {
-					retryAfter[id] = now.Add(30 * time.Second)
+					retryAfter[id] = time.Now().Add(30 * time.Second)
 					break
 				}
 			}
@@ -171,6 +171,10 @@ func (s *Server) runWorkerSummaryLoop(ctx context.Context) {
 // A boundary owns the experiment's existing slot. An idle correction instead
 // holds admission until its calculation and OS/RPC reclamation have finished.
 func (s *Server) beginRunMetricMaintenance(slot *workSlot) bool {
+	return s.beginRunMetricMaintenanceWithCancel(slot, nil)
+}
+
+func (s *Server) beginRunMetricMaintenanceWithCancel(slot *workSlot, idleCancel context.CancelFunc) bool {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	if s.shuttingDown || s.summaryRefreshActive {
@@ -181,6 +185,7 @@ func (s *Server) beginRunMetricMaintenance(slot *workSlot) bool {
 			return false
 		}
 		s.workWorkers.Add(1)
+		s.summaryRefreshIdleCancel = idleCancel
 	} else if slot.finished || !slot.opened || len(s.experimentQueue) == 0 || s.experimentQueue[0] != slot {
 		return false
 	}
@@ -193,6 +198,7 @@ func (s *Server) beginRunMetricMaintenance(slot *workSlot) bool {
 
 func (s *Server) endRunMetricMaintenance(slot *workSlot) {
 	s.cancelMu.Lock()
+	s.summaryRefreshIdleCancel = nil
 	s.summaryRefreshActive = false
 	s.state.mu.Lock()
 	s.state.runMetricMaintenance = false
@@ -214,6 +220,9 @@ func (s *Server) runMetricRefreshEligible(id string) bool {
 }
 
 func (s *Server) refreshRunMetricSummary(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.state.persistMu.Lock()
 	rebased, err := s.state.rebaseRetiredWorkerSummaryLocked(id, time.Now().UTC())
 	s.state.persistMu.Unlock()
@@ -224,31 +233,48 @@ func (s *Server) refreshRunMetricSummary(ctx context.Context, id string) error {
 }
 
 func (s *Server) tryRefreshIdleRunMetrics(ctx context.Context, id string) bool {
-	if ctx.Err() != nil || !s.beginRunMetricMaintenance(nil) {
+	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	if ctx.Err() != nil || !s.beginRunMetricMaintenanceWithCancel(nil, cancel) {
 		return false
 	}
 	defer s.endRunMetricMaintenance(nil)
 	if !s.runMetricRefreshEligible(id) {
 		return false
 	}
-	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	err := s.recoverWorkCleanup(refreshCtx)
+	started, phase := time.Now(), "recovering-cleanup"
+	s.logger.Info("idle Run metrics started", "run", id, "phase", phase)
+	var err error
+	defer func() {
+		elapsed := time.Since(started)
+		switch {
+		case err == nil:
+			s.logger.Info("idle Run metrics completed", "run", id, "phase", phase, "elapsed", elapsed)
+		case errors.Is(err, context.Canceled):
+			s.logger.Info("idle Run metrics interrupted", "run", id, "phase", phase, "elapsed", elapsed, "error", err)
+		default:
+			s.logger.Warn("idle Run metrics failed", "run", id, "phase", phase, "elapsed", elapsed, "error", err)
+		}
+	}()
+	err = refreshCtx.Err()
 	if err == nil {
+		err = s.recoverWorkCleanup(refreshCtx)
+	}
+	if err == nil {
+		phase = "waiting-for-peer-cleanup"
 		err = s.waitQueueCleanup(refreshCtx, id, scenario.Scenario{JobShutdownTimeout: "3m"})
 	}
 	if err == nil {
+		phase = "calculating"
 		err = s.refreshRunMetricSummary(refreshCtx, id)
-	}
-	if err != nil && ctx.Err() == nil {
-		s.logger.Warn("refresh idle Run metrics", "run", id, "error", err)
 	}
 	return true
 }
 
 // Take a finite snapshot: a late append during calculation is retained for the
-// next boundary instead of keeping this Run alive indefinitely. Future receipt
-// deadlines never delay the next experiment.
+// next boundary instead of keeping this Run alive indefinitely. Only Runs owned
+// by this submission belong to its finalization; unrelated historical repairs
+// remain idle work and never delay a new experiment's start.
 func (s *Server) refreshRunMetricsBoundary(ctx context.Context, slot *workSlot) {
 	if !s.config.RunWorkers || slot == nil || ctx.Err() != nil || !s.beginRunMetricMaintenance(slot) {
 		return
@@ -256,7 +282,22 @@ func (s *Server) refreshRunMetricsBoundary(ctx context.Context, slot *workSlot) 
 	defer s.endRunMetricMaintenance(slot)
 	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	ids := s.state.workerSummaryDue(time.Now().UTC())
+	s.cancelMu.Lock()
+	owned := make(map[string]bool)
+	if slot.batch != nil {
+		for _, id := range slot.batch.queuedIDs {
+			owned[id] = true
+		}
+	} else if slot.item.RunID != "" {
+		owned[slot.item.RunID] = true
+	}
+	s.cancelMu.Unlock()
+	var ids []string
+	for _, id := range s.state.workerSummaryDue(time.Now().UTC()) {
+		if owned[id] {
+			ids = append(ids, id)
+		}
+	}
 	sort.Strings(ids)
 	defer s.updateWorkStatus(slot.id, "", 0)
 	for index, id := range ids {
@@ -315,6 +356,9 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 		s.rememberUnreapedWorker(id, process)
 	}
 	if err := errors.Join(executeErr, closeErr); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	current, err := s.runSourceRevision(id)

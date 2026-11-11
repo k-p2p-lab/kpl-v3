@@ -85,7 +85,14 @@ func NewRunWorkerHandler(ctx context.Context, kind string, raw json.RawMessage, 
 				timersMu.Unlock()
 				return nil, nil
 			}
-			proc.apiURL = update.APIURL
+			// Only the supervisor resolves the real Peer route. Gateway URLs
+			// contain /peers/<IP>, which must not become part of the child-to-
+			// supervisor operation path. This origin is never dialed: the private
+			// transport sends the Node ID and endpoint to the owning supervisor.
+			proc.apiURL = ""
+			if update.APIURL != "" {
+				proc.apiURL = "http://peer-control.invalid"
+			}
 			proc.exited = update.Exited
 			if proc.node.Metadata == nil {
 				proc.node.Metadata = make(map[string]string)

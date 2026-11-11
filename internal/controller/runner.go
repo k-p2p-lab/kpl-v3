@@ -101,8 +101,9 @@ type Server struct {
 	recentWorkCancels          []string
 	hostRebootMu               sync.Mutex
 	hostReboots                map[string]*hostRebootJob
-	hostRebootActiveNodes      map[string]string // cancelMu; blocks manual enable during maintenance
-	queueCleanup               []string          // run IDs whose cleanup must precede new work
+	hostRebootActiveNodes      map[string]string  // cancelMu; blocks manual enable during maintenance
+	queueCleanup               []string           // run IDs whose cleanup must precede new work
+	summaryRefreshIdleCancel   context.CancelFunc // cancelMu; only background metric maintenance yields to new work
 	resultDownloads            map[string]int
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}

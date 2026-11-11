@@ -48,7 +48,7 @@ test('partial refresh names unavailable Agents and preserves a newer SSE update'
   await refreshing;
   assert.equal(state.snapshot.agents[0].state,'online');
   assert.equal(element('#agentRefreshStatus').dataset.error,'true');
-  assert.match(element('#agentRefreshStatus').textContent,/Could not refresh: Worker <A>/);
+  assert.match(element('#agentRefreshStatus').textContent,/Could not refresh: Agent 1/);
 });
 
 test('HTTP errors and timeout keep the current list and unlock refresh', async () => {
@@ -102,6 +102,6 @@ test('discovery warnings and registration failures remain visible alongside succ
   await refreshing;
   assert.equal(element('#agentRefreshStatus').dataset.error,'true');
   assert.match(element('#agentRefreshStatus').textContent,/DNS incomplete/);
-  assert.match(element('#agentRefreshStatus').textContent,/Worker B \(Check Controller URL\)/);
+  assert.match(element('#agentRefreshStatus').textContent,/Agent 2 \(Check Controller URL\)/);
   assert.equal(state.snapshot.nodes[0].id,'peer');
 });

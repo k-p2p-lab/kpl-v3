@@ -6,7 +6,7 @@ const agent=(id='a',nodeId='node-a',bootId='boot-a')=>({id,name:'Agent '+id,host
 function job(payload,state='queued',hostState='queued'){
  return {id:payload.id,state,targets:payload.targets,hosts:payload.targets.map(target=>({...target,hostname:'Linux '+target.nodeId,state:hostState}))};
 }
-function fixture(handler,storage=new Map()){
+function fixture(handler,storage=new Map(),options={}){
  const elements=new Map(),listeners=new Map(),requests=[],timers=new Map(),inputs=[];let nextTimer=0,nextID=0;
  const element=id=>{if(!elements.has(id))elements.set(id,{id,textContent:'',innerHTML:'',hidden:false,disabled:false,open:false,checked:false,indeterminate:false,setAttribute(name,value){this[name]=value;},focus(){document.activeElement=this;},showModal(){this.open=true;},close(){this.open=false;},addEventListener(){}});return elements.get(id);};
  const ids=['selectAgentHosts','agentHostSelection','rebootAgentHosts','clearAgentHosts','viewHostReboot','agentHostStatus','agentHostAvailability','agentHostDialog','agentHostTargets','agentHostDialogSummary','agentHostDialogStatus','confirmAgentHostReboot','closeAgentHostDialog','refreshHostReboot','agentHostDialogError'];
@@ -14,7 +14,7 @@ function fixture(handler,storage=new Map()){
  const document={querySelector:selector=>elements.get(selector.slice(1)),querySelectorAll:()=>inputs,addEventListener(type,handler){if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push(handler);}};
  const environment={document,crypto:{randomUUID:()=>String(++nextID).padStart(8,'0')+'-1122-4333-8444-555566667777'},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},setTimeout(callback,delay){const id=++nextTimer;timers.set(id,{callback,delay});return id;},clearTimeout:id=>timers.delete(id)};
  const api=async(path,options={})=>{requests.push({path,options});return handler?handler(path,options):job(JSON.parse(options.body));};
- const view=createAgentHosts(environment);view.init({api});
+ const view=createAgentHosts(environment);view.init({api,...options});
  const dispatch=(type,event)=>{for(const listener of listeners.get(type)||[])listener(event);};
  const action=id=>dispatch('click',{target:{closest:()=>element(id)},preventDefault(){}});
  const change=(nodeId,checked)=>dispatch('change',{target:{dataset:{hostSelect:nodeId},checked}});
@@ -125,6 +125,24 @@ test('confirmation shows escaped host identity and cancel never submits a reboot
  assert.equal(h.element('agentHostDialog').open,true);assert.equal(h.document.activeElement.id,'closeAgentHostDialog');
  assert.match(h.element('agentHostTargets').innerHTML,/&lt;img src=x onerror=bad&gt;/);assert.doesNotMatch(h.element('agentHostTargets').innerHTML,/<img|<bad>/);
  assert.equal(h.requests.length,0);h.action('closeAgentHostDialog');assert.equal(h.element('agentHostDialog').open,false);assert.equal(h.requests.length,0);assert.equal(h.document.activeElement.id,'rebootAgentHosts');
+});
+
+test('Agent-number labels identify host selection and confirmation without changing reboot targets',async()=>{
+ const value=agent(),alias=agent('b'),labels={a:'Agent 7 <one>',b:'Agent 8'};
+ value.host.hostname='Linux <host>';alias.host.hostname=value.host.hostname;
+ const h=fixture(undefined,new Map(),{agentLabel:id=>labels[id]||''});h.view.update([value,alias]);
+ assert.match(h.view.checkbox(value),/aria-label="Select Linux host Agent 7 &lt;one&gt; \(shared by 2 Agents\)"/);
+ assert.match(h.view.checkbox(value),/title="Select Linux host Agent 7 &lt;one&gt; · Linux &lt;host&gt;"/);
+ assert.match(h.view.checkbox(alias),/aria-label="Select Linux host Agent 8 \(shared by 2 Agents\)"/);
+ const input={dataset:{hostSelect:'node-a',hostAgent:'a'}};h.inputs.push(input);
+ h.master(true);assert.equal(input.title,'Deselect Linux host Agent 7 <one> · Linux <host>');
+ h.action('rebootAgentHosts');
+ const markup=h.element('agentHostTargets').innerHTML;
+ assert.match(markup,/<strong>Agent 7 &lt;one&gt;<\/strong><span class="agent-id">Linux &lt;host&gt;<\/span><code>node-a<\/code>/);
+ assert.doesNotMatch(markup,/<one>|<host>/);
+ h.action('confirmAgentHostReboot');await turn();
+ assert.deepEqual(JSON.parse(h.requests[0].options.body).targets,[{agentId:'a',nodeId:'node-a',bootId:'boot-a',agentStartedAt:'2026-11-07T00:00:00Z'}]);
+ assert.match(h.element('agentHostTargets').innerHTML,/<strong>Agent 7 &lt;one&gt;<\/strong><span class="agent-id">Linux node-a<\/span>/);
 });
 
 test('one confirmed request freezes target identity, deduplicates hosts and blocks double clicks',async()=>{

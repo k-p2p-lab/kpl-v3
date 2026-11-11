@@ -17,6 +17,17 @@ test('service rows show host percentages, partial coverage, and safe names',()=>
  for(const state of ['stale','unknown','not_running','awaiting']){value.state=state;assert.equal(services.describe(value,now).cpu,'N/A');assert.equal(services.describe(value,now).memory,'N/A');}
  value.state='running';assert.equal(services.describe(value,now+31000).state,'stale');assert.equal(services.describe(value,now+31000).memory,'N/A');
 });
+test('service host labels use Agent numbers while retaining escaped host identities and fallbacks',()=>{
+ const value={...row(),nodeName:'manager <one>',nodeId:'node"1'},seen=[];
+ const html=services.tableRows([value],now,entry=>{seen.push(entry);return 'Agent 7 & 9';});
+ assert.deepEqual(seen,[value]);
+ assert.match(html,/class="service-resource-host" title="manager &lt;one&gt; · node&quot;1">Agent 7 &amp; 9<\/td>/);
+ assert.match(services.tableRows([value],now,()=>''),/title="manager &lt;one&gt; · node&quot;1">manager &lt;one&gt;<\/td>/);
+ value.nodeName='';
+ assert.match(services.tableRows([value],now,()=>null),/class="service-resource-host" title="node&quot;1">node&quot;1<\/td>/);
+ value.nodeId='';
+ assert.match(services.tableRows([value],now),/class="service-resource-host" title="">Host not reported<\/td>/);
+});
 test('service totals count a shared host once and weight distinct hosts by capacity',()=>{
  const controller=row(),prometheus={...row(),service:'prometheus'},other={...row(),nodeId:'node2'};
  prometheus.resources.cpuCores=1;
@@ -53,9 +64,9 @@ test('service polling is bounded, pauses when hidden, and avoids overlapping req
  const timers=[],listeners={},doc={hidden:false,querySelector:element,addEventListener(type,fn){listeners[type]=fn}};
  const sandbox={document:doc,KPLAgentResources:resources,setInterval:fn=>timers.push(fn),setTimeout,clearTimeout,AbortController,Date,console};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'static/service-resources.js'),'utf8'),sandbox);
- let calls=0,resolve;
+ let calls=0,resolve,hostLabel='';
  element('#services').hidden=true;
- sandbox.KPLServiceResources.init({api:async()=>{calls++;return new Promise(r=>resolve=r)}});
+ sandbox.KPLServiceResources.init({api:async()=>{calls++;return new Promise(r=>resolve=r)},hostLabel:()=>hostLabel});
  assert.equal(calls,0);
  element('#agents').hidden=true;element('#services').hidden=false;
  listeners['dashboard:tab-change']({detail:{id:'services'}});timers[0]();assert.equal(calls,1);
@@ -63,6 +74,10 @@ test('service polling is bounded, pauses when hidden, and avoids overlapping req
  resolve({generatedAt:new Date(now).toISOString(),controllerUptimeSeconds:60,services:[row()]});await new Promise(r=>setImmediate(r));
  assert.match(element('#serviceResourceRows').innerHTML,/25%/);assert.match(element('#serviceResourceStatus').textContent,/Included in interval/);
  assert.equal(element('#refreshServices').disabled,false);
+ assert.match(element('#serviceResourceRows').innerHTML,/title="manager · node1">manager<\/td>/);
+ hostLabel='Agent 7';timers[0]();
+ assert.match(element('#serviceResourceRows').innerHTML,/title="manager · node1">Agent 7<\/td>/);
+ assert.equal(calls,1,'A late Agent-number mapping updates the displayed label without another resource fetch');
  doc.hidden=true;timers[0]();assert.equal(calls,1);
  doc.hidden=false;element('#services').hidden=true;timers[0]();assert.equal(calls,1);
  element('#services').hidden=false;const refresh=element('#refreshServices').listeners.click();assert.equal(calls,2);

@@ -83,6 +83,22 @@ func TestAutomaticAnalysisPoolUsesDistinctEnabledHostsAfterExperiments(t *testin
 	if !oneOK || !twoOK || hostOne == hostTwo {
 		t.Fatalf("automatic pool chose ineligible or duplicate hosts: %q, %q", remoteOne.slot.analysisWorkerURL, remoteTwo.slot.analysisWorkerURL)
 	}
+	wantAgentIDs := map[string]string{
+		local.slot.id:     "",
+		remoteOne.slot.id: remoteOne.slot.analysisAgent.ID,
+		remoteTwo.slot.id: remoteTwo.slot.analysisAgent.ID,
+	}
+	for _, item := range s.state.snapshot().WorkQueue {
+		if expected, ok := wantAgentIDs[item.ID]; ok {
+			if item.WorkerAgentID != expected {
+				t.Fatalf("analysis reported the wrong assigned Agent identity: got %q, want %q", item.WorkerAgentID, expected)
+			}
+			delete(wantAgentIDs, item.ID)
+		}
+	}
+	if len(wantAgentIDs) != 0 {
+		t.Fatalf("assigned analyses disappeared from the queue: %+v", wantAgentIDs)
+	}
 	select {
 	case <-overflow.entered:
 		t.Fatal("stale, disabled, control or legacy Agent added an extra analysis slot")

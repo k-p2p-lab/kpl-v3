@@ -68,6 +68,7 @@
     const hidden = (id,value) => { const target=element(id); if(target)target.hidden=value; };
     const pending = () => receipt?.uncertain || activeStates.has(receipt?.job?.state);
     const targetFor = group => ({agentId:group.agent.id,nodeId:group.nodeId,bootId:group.agent.host.bootId,agentStartedAt:group.agent.startedAt});
+    const agentLabel = id => id ? options?.agentLabel?.(id) || "" : "";
 
     function store() {
       try { environment.sessionStorage?.setItem(storageKey, JSON.stringify(receipt)); } catch {}
@@ -128,16 +129,19 @@
       hidden("viewHostReboot",!receipt);
       for (const checkbox of document?.querySelectorAll?.("[data-host-select]") || []) {
         const group = groups.get(checkbox.dataset.hostSelect), reason = checkbox.dataset.hostSelect ? selectionUnavailable(group) : "This Agent does not report a host identity for reboot.";
+        const label = agentLabel(checkbox.dataset.hostAgent || group?.agent.id);
+        const identity = [label, group?.hostname].filter(Boolean).join(" · ");
         checkbox.checked = selected.has(checkbox.dataset.hostSelect);
         checkbox.disabled = submitting || !!reason && !checkbox.checked;
-        checkbox.title = (checkbox.checked ? "Deselect Linux host " : "Select Linux host ") + (group?.hostname || "") + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
+        checkbox.title = (checkbox.checked ? "Deselect Linux host " : "Select Linux host ") + identity + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
       }
     }
     function checkbox(agent) {
       const nodeId = agent?.host?.nodeId || "", group = groups.get(nodeId), reason = nodeId ? selectionUnavailable(group) : "This Agent does not report a host identity for reboot.";
       const name = group?.hostname || agent.hostname || agent.name || agent.id;
-      const title = (selected.has(nodeId) ? "Deselect Linux host " : "Select Linux host ") + name + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
-      return '<input class="agent-host-checkbox" type="checkbox" data-host-select="'+escape(nodeId)+'" data-host-agent="'+escape(agent.id)+'" aria-label="'+escape("Select Linux host "+name+(group?.agents.length>1?" (shared by "+group.agents.length+" Agents)":""))+'" title="'+escape(title)+'"'+(selected.has(nodeId)?' checked':'')+(submitting||reason&&!selected.has(nodeId)?' disabled':'')+'>';
+      const label = agentLabel(agent.id), identity = [label, name].filter(Boolean).join(" · ");
+      const title = (selected.has(nodeId) ? "Deselect Linux host " : "Select Linux host ") + identity + (reason || unavailable(group) ? ". " + (reason || unavailable(group)) : "");
+      return '<input class="agent-host-checkbox" type="checkbox" data-host-select="'+escape(nodeId)+'" data-host-agent="'+escape(agent.id)+'" aria-label="'+escape("Select Linux host "+(label||name)+(group?.agents.length>1?" (shared by "+group.agents.length+" Agents)":""))+'" title="'+escape(title)+'"'+(selected.has(nodeId)?' checked':'')+(submitting||reason&&!selected.has(nodeId)?' disabled':'')+'>';
     }
     function update(agents) {
       groups=groupHosts(agents);
@@ -170,7 +174,8 @@
       if(draft&&!submitting&&!receipt?.uncertain)element("closeAgentHostDialog")?.focus?.();
     }
     function hostMarkup(host) {
-      return '<li><strong>'+escape(host.hostname||groups.get(host.nodeId)?.hostname||host.nodeId)+'</strong><code>'+escape(host.nodeId)+'</code>'
+      const group=groups.get(host.nodeId),label=agentLabel(host.agentId||group?.agent.id),hostname=host.hostname||group?.hostname||"";
+      return '<li><strong>'+escape(label||hostname||host.nodeId)+'</strong>'+(label&&hostname?'<span class="agent-id">'+escape(hostname)+'</span>':'')+'<code>'+escape(host.nodeId)+'</code>'
         +(host.state?'<span class="host-reboot-state" data-state="'+escape(host.state)+'">'+escape(labels[host.state]||host.state)+'</span>':'')
         +(host.error?'<span class="host-reboot-error">'+escape(host.error)+'</span>':'')+'</li>';
     }

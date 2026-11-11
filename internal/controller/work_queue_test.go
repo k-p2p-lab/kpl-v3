@@ -169,6 +169,11 @@ func TestWorkQueueParallelAnalysisKeepsDistinctWorkersAndStopsAtExperiment(t *te
 	if local.slot.analysisWorkerURL != "" || remoteOne.slot.analysisWorkerURL != endpoints[0] || remoteTwo.slot.analysisWorkerURL != endpoints[1] {
 		t.Fatal("analysis jobs did not receive distinct workers")
 	}
+	for _, item := range s.state.snapshot().WorkQueue {
+		if item.WorkerAgentID != "" {
+			t.Fatalf("dedicated worker pool reported an Agent identity: %+v", item)
+		}
+	}
 	if err := s.cancelWork(remoteTwo.slot.id); err != nil {
 		t.Fatal(err)
 	}

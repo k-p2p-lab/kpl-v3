@@ -149,6 +149,22 @@ function agentNumber(id) {
   return state.agentNumbers.get(id) || "?";
 }
 
+function agentLabel(id) {
+  return `Agent ${agentNumber(id)}`;
+}
+
+function serviceAgentLabel(row) {
+  if (!row.nodeId) return "";
+  return (state.snapshot?.agents || [])
+    .filter(agent => (agent.host?.nodeId || agent.labels?.swarmNodeId) === row.nodeId)
+    .sort((a, b) => agentNumber(a.id) - agentNumber(b.id))
+    .map(agent => agentLabel(agent.id)).join(", ");
+}
+
+function queueWorkerLabel(item) {
+  return item.workerAgentId ? agentLabel(item.workerAgentId) : item.worker;
+}
+
 function isTopologyPeer(node) {
   return node.state !== "stopping" && node.state !== "stopped" && node.state !== "failed";
 }
@@ -567,7 +583,7 @@ function render(snapshot) {
   setText($("#messageMetricsScope"), metrics.runId
     ? `Run metrics: ${metricRun?.name ? `${metricRun.name} · ` : ""}${metrics.runId}${metricIteration}`
     : "Run metrics: No run selected");
-  rememberAgents([...agents.map((agent) => agent.id), ...nodes.map((node) => node.agentId)]);
+  rememberAgents([...agents.map((agent) => agent.id), ...nodes.map((node) => node.agentId), ...(snapshot.workQueue || []).map(item => item.workerAgentId)]);
   const online = agents.filter((agent) => agent.state === "online").length;
   const capacity = agents.filter((agent) => agent.state === "online" && !agent.disabled).reduce((sum, agent) => sum + Math.max(0, agent.capacity - agent.activeNodes), 0);
   const population = snapshot.topology || peerPopulation(nodes);
@@ -2170,9 +2186,10 @@ async function refreshAgents(discover = false) {
         || (refreshed && Date.parse(current.lastSeen) > Date.parse(refreshed.lastSeen))) agents.set(current.id, current);
     }
     state.snapshot = { ...(state.snapshot || {}), agents: [...agents.values()] };
+    rememberAgents([...agents.keys(), ...result.failures.map(agent => agent.id)]);
     render(state.snapshot);
     status.dataset.error = String(result.failures.length > 0 || Boolean(result.discovery?.error));
-    const failed = result.failures.map(agent => `${agent.name || agent.id}${agent.error ? ` (${agent.error})` : ""}`);
+    const failed = result.failures.map(agent => `${agentLabel(agent.id)}${agent.error ? ` (${agent.error})` : ""}`);
     const summary = result.requested === 0 ? "No Agents are registered. Waiting for Agents to connect."
       : `Refreshed ${result.refreshed} of ${result.requested} Agents.`;
     const discovery = result.discovery
@@ -2208,7 +2225,7 @@ function renderAgents(agents) {
     const resourceNotice = globalThis.KPLAgentResources?.notice(agent, resourceNow) || "";
     return `<tr${resourceNotice ? ' class="resource-has-notice"' : ""}>
       <td data-label="No." class="agent-number"><span class="agent-host-number">${globalThis.KPLAgentHosts?.checkbox(agent) || ""}<span>${agentNumber(agent.id)}</span></span></td>
-      <td data-label="Agent"><span class="agent-name">${escapeHTML(agent.name)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
+      <td data-label="Agent"><span class="agent-name">${agentLabel(agent.id)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
       <td data-label="State"><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
       <td data-label="Host">${escapeHTML(agent.host?.hostname || agent.hostname || "—")}${agent.host?.nodeId ? `<span class="agent-id" title="Docker Swarm node ID">${escapeHTML(agent.host.nodeId)}</span>` : ""}</td>
       <td data-label="Peers">${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
@@ -2219,7 +2236,7 @@ function renderAgents(agents) {
       <td data-label="KPL Memory" class="agent-resource-cell">${globalThis.KPLAgentResources?.cell(agent, "memory", resourceNow) || "N/A"}</td>
       <td data-label="Last seen">${escapeHTML(relativeTime(agent.lastSeen))}</td>
       <td data-label="Metrics">${agentMetricsLink(agent)}</td>
-      <td data-label="Settings" class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}" title="${escapeHTML(`Configure Agent ${agent.name || agent.id}`)}"><span aria-hidden="true">⚙️</span></button></td>
+      <td data-label="Settings" class="agent-settings-cell"><button class="agent-capacity-button" type="button" data-agent-capacity="${escapeHTML(agent.id)}" aria-label="${escapeHTML(`Configure ${agentLabel(agent.id)}`)}" title="${escapeHTML(`Configure ${agentLabel(agent.id)}`)}"><span aria-hidden="true">⚙️</span></button></td>
     </tr>${resourceNotice}`;
   }).join(""));
   globalThis.KPLAgentHosts?.afterRender();
@@ -2229,9 +2246,10 @@ function openAgentCapacity(id) {
   if (state.agentSettingsSaving) return;
   const agent = (state.snapshot?.agents || []).find(agent => agent.id === id);
   if (!agent) return;
+  rememberAgents([id]);
   state.agentSettingsID = id;
   renderAgentAvailability(agent);
-  setText($("#agentCapacityIdentity"), `${agent.name || id} · ${id}${agent.hostname ? ` · ${agent.hostname}` : ""}`);
+  setText($("#agentCapacityIdentity"), `${agentLabel(id)} · ${id}${agent.host?.hostname || agent.hostname ? ` · ${agent.host?.hostname || agent.hostname}` : ""}`);
   setText($("#agentCapacityCurrent"), `${formatNumber(agent.activeNodes)} occupied · ${formatNumber(agent.capacity)} current capacity${agent.state !== "online" ? " · Offline" : ""}`);
   setText($("#agentCapacityDefault"), `CLI default (${formatNumber(agent.defaultCapacity)} Peers)`);
   $("#agentCapacityMode").value = agent.capacityOverride > 0 ? "custom" : "default";
@@ -2340,7 +2358,7 @@ function safeAgentMetricsURL(value) {
 function agentMetricsLink(agent) {
   const href = safeAgentMetricsURL(agent?.metricsUrl);
   if (!href) return "";
-  const name = agent.name || agent.id || "Agent";
+  const name = agentLabel(agent.id);
   return `<a class="agent-metrics-link" href="${escapeHTML(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHTML(`Open ${name} metrics in a new tab`)}">Metrics<span class="visually-hidden"> for ${escapeHTML(name)} (opens in a new tab)</span></a>`;
 }
 
@@ -2915,7 +2933,7 @@ for (const id of ["#refreshResults", "#refreshExperiments"]) $(id).addEventListe
 $("#refreshAgents").addEventListener("click", () => refreshAgents());
 $("#discoverAgents").addEventListener("click", () => refreshAgents(true));
 globalThis.KPLAgentResources?.init({api});
-globalThis.KPLServiceResources?.init({api});
+globalThis.KPLServiceResources?.init({api, hostLabel: serviceAgentLabel});
 $("#resultSearch").addEventListener("input", (event) => {
   state.resultQuery = event.target.value;
   renderSavedResults();
@@ -3176,8 +3194,8 @@ globalThis.KPLResultImages?.init({ api, onJob: job => {
 } });
 setupTopologyControls();
 globalThis.KPLRuntimeVersion?.init({api});
-globalThis.KPLAgentHosts?.init({api});
-globalThis.KPLWorkQueue?.init({api, onOpen: item => item.kind === "host-reboot"
+globalThis.KPLAgentHosts?.init({api, agentLabel});
+globalThis.KPLWorkQueue?.init({api, workerLabel: queueWorkerLabel, onOpen: item => item.kind === "host-reboot"
   ? globalThis.KPLAgentHosts?.openJob(item.operationId) : item.kind === "batch-analysis"
     ? globalThis.KPLResultImages?.openBatch(item.batchId) : globalThis.KPLResultImages?.open(item.runId)});
 setupDashboardTabHandling();

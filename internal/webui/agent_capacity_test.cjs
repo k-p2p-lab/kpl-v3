@@ -21,14 +21,17 @@ function fixture() {
  api.openAgentCapacity('agent/a');
  return {api,state,element,requests,toasts};
 }
-test('Agent settings show the default and escape identity in the table',()=>{
+test('Agent settings and table use the same number while preserving host details',()=>{
  const {api,state,element}=fixture();
  assert.equal(element('#agentCapacityDialog').open,true);
  assert.equal(element('#agentCapacityMode').value,'default');
  assert.equal(element('#agentCapacityValue').disabled,true);
  assert.match(element('#agentCapacityDefault').textContent,/200/);
  api.renderAgents(state.snapshot.agents);
- assert.match(element('#agentRows').innerHTML,/Worker &lt;A&gt;/);
+ assert.match(element('#agentRows').innerHTML,/class="agent-name">Agent 1<\/span>/);
+ assert.doesNotMatch(element('#agentRows').innerHTML,/Worker &lt;A&gt;/);
+ assert.match(element('#agentRows').innerHTML,/data-label="Host">node-a/);
+ assert.equal(element('#agentCapacityIdentity').textContent,'Agent 1 · agent/a · node-a');
  assert.match(element('#agentRows').innerHTML,/data-agent-capacity="agent\/a"/);
  api.closeAgentCapacity();
  api.openAgentCapacity('missing');

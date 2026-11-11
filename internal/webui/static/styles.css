@@ -1021,10 +1021,12 @@ dialog footer { justify-content: flex-end; gap: 0.65rem; margin-top: 0.35rem; }
 .work-queue-card-heading { display: grid; grid-template-columns: 1.8rem minmax(0, 1fr); align-items: start; gap: .6rem; padding-bottom: .6rem; border-bottom: 1px solid var(--line-soft); }
 .work-queue-order { display: grid; place-items: center; height: 1.8rem; border-radius: 50%; color: var(--cyan); background: color-mix(in srgb, var(--cyan) 9%, var(--surface)); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .work-queue-copy { display: grid; gap: .3rem; min-width: 0; }
-.work-queue-item-heading { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
-.work-queue-kind, .work-queue-phase { font-size: .73rem; color: var(--muted); overflow-wrap: anywhere; }
+.work-queue-item-heading { display: flex; align-items: center; gap: .5rem; }
+.work-queue-kind { min-width: 0; }
+.work-queue-kind, .work-queue-phase, .work-queue-worker { font-size: .73rem; color: var(--muted); overflow-wrap: anywhere; }
 .work-queue-copy > strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: .85rem; line-height: 1.4; overflow-wrap: anywhere; }
 .work-queue-body { min-height: 0; min-width: 0; overflow: visible; padding: .6rem .15rem .35rem 0; }
+.work-queue-worker { display: block; margin-top: .35rem; line-height: 1.5; }
 .work-queue-body .run-meta { margin-top: .4rem; font-size: .73rem; }
 .work-queue-body .run-timing { margin-top: .5rem; padding-top: .4rem; }
 .work-queue-body .progress-track { margin: .5rem 0; }

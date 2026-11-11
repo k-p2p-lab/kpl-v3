@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 const markup = fs.readFileSync(path.join(__dirname, 'static/index.html'), 'utf8');
 const functions = source.slice(source.indexOf('function escapeHTML('), source.indexOf('$("#scenarioText").value = defaultScenario;'));
-const sandbox = { URL };
+const sandbox = { URL, state:{agentNumbers:new Map([['agent-a',7],['agent-b',2]])} };
 vm.createContext(sandbox);
 vm.runInContext(functions, sandbox);
 
@@ -34,7 +34,7 @@ test('Agent metrics links accept only absolute credential-free HTTP metrics URLs
   }
 });
 
-test('Agent metrics links escape labels and open safely in a new tab', () => {
+test('Agent metrics links use the existing number and open safely in a new tab', () => {
   const link = sandbox.agentMetricsLink({
     id: 'agent-a',
     name: '<img src=x onerror=alert(1)>',
@@ -42,11 +42,26 @@ test('Agent metrics links escape labels and open safely in a new tab', () => {
   });
   assert.match(link, /href="https:\/\/metrics\.example\.test:18443\/metrics"/);
   assert.match(link, /target="_blank" rel="noopener noreferrer"/);
-  assert.match(link, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(link, /for Agent 7/);
   assert.doesNotMatch(link, /<img/);
   assert.match(link, /opens in a new tab/);
   assert.equal(sandbox.agentMetricsLink({ id: 'agent-a' }), '');
   assert.equal(sandbox.agentMetricsLink({ id: 'agent-a', metricsUrl: 'javascript:alert(1)' }), '');
+});
+
+test('queue and service labels share existing Agent numbers regardless of host names or inventory order', () => {
+  sandbox.state.snapshot = {agents:[
+    {id:'agent-a',hostname:'same-host',host:{nodeId:'host-a'}},
+    {id:'agent-b',hostname:'same-host',labels:{swarmNodeId:'host-a'}},
+  ]};
+  assert.equal(sandbox.queueWorkerLabel({worker:'Agent same-host',workerAgentId:'agent-a'}),'Agent 7');
+  assert.equal(sandbox.queueWorkerLabel({worker:'Controller'}),'Controller');
+  assert.equal(sandbox.queueWorkerLabel({worker:'Analysis worker 1'}),'Analysis worker 1');
+  assert.equal(sandbox.serviceAgentLabel({nodeId:'host-a'}),'Agent 2, Agent 7');
+  assert.equal(sandbox.serviceAgentLabel({nodeId:'other-host'}),'');
+  assert.equal(sandbox.serviceAgentLabel({}),'');
+  sandbox.state.snapshot.agents.reverse();
+  assert.equal(sandbox.serviceAgentLabel({nodeId:'host-a'}),'Agent 2, Agent 7');
 });
 
 test('available slots count only online Agents and clamp occupied capacity at zero', () => {

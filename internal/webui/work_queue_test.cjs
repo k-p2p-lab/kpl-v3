@@ -3,11 +3,11 @@ const assert=require('node:assert/strict');
 const {createWorkQueue,queueMarkup,phaseLabel}=require('./static/work-queue.js');
 const turn=()=>new Promise(setImmediate);
 const item=(id,kind='analysis',position=0)=>({id,kind,name:'Task '+id,runId:'run-'+id,batchId:'batch-'+id,state:position?'queued':'running',position});
-function fixture(api=async()=>({})){
+function fixture(api=async()=>({}),options={}){
   let click,opens=[];
   const elements=new Map(['#workQueue','#workQueueList','#workQueueCount','#workQueueStatus','#workQueueEmpty','#workQueuePrevious','#workQueueNext'].map(key=>[key,{innerHTML:'',textContent:'',hidden:false,scrollLeft:0,clientWidth:0,scrollWidth:0,events:{},addEventListener(type,handler){this.events[type]=handler;},scrollBy(options){this.scrollLeft=Math.max(0,Math.min(this.scrollWidth-this.clientWidth,this.scrollLeft+options.left));this.events.scroll?.();},contains:()=>false,setAttribute(name,value){this[name]=value;}}]));
   const document={querySelector:key=>elements.get(key),addEventListener(type,handler){if(type==='click')click=handler;}};
-  const view=createWorkQueue({document});view.init({api,onOpen:value=>opens.push(value)});
+  const view=createWorkQueue({document});view.init({api,onOpen:value=>opens.push(value),...options});
   function action(id,open=false){click({target:{closest:()=>({dataset:open?{workOpen:id}:{workCancel:id}})},preventDefault(){}});}
   return {view,elements,action,opens,document};
 }
@@ -79,14 +79,19 @@ test('opening a queued analysis preserves its run or batch identity without chan
 });
 
 test('parallel analyses show their assigned workers in the shared queue', () => {
-  const h = fixture();
+  const h = fixture(undefined, {workerLabel:entry=>entry.workerAgentId === 'agent-730' ? 'Agent 7' : entry.worker});
   const local = {...item('local', 'analysis'), worker:'Controller'};
-  const remote = {...item('remote', 'batch-analysis', 1), state:'running', worker:'Analysis worker 1'};
+  const remote = {...item('remote', 'batch-analysis', 1), state:'running', worker:'Agent comnet-PowerEdge-R730',workerAgentId:'agent-730'};
   h.view.update([local, remote, item('next', 'experiment', 2)]);
   const html = h.elements.get('#workQueueList').innerHTML;
   assert.match(html, /aria-label="Queue position 2">2/);
-  assert.match(html, /Run analysis · Controller/);
-  assert.match(html, /Batch mean analysis · Analysis worker 1/);
+  const headers = [...html.matchAll(/<header[^>]*>([\s\S]*?)<\/header>/g)].map(match => match[1]);
+  assert.match(headers[0], /Run analysis/);
+  assert.match(headers[1], /Batch mean analysis/);
+  assert.doesNotMatch(headers.join(''), /Controller|Agent comnet/);
+  assert.match(html, /class="work-queue-body"[^>]*>[\s\S]*?class="work-queue-worker">Controller<\/span>/);
+  assert.match(html, /class="work-queue-worker">Agent 7<\/span>/);
+  assert.doesNotMatch(html, /comnet-PowerEdge-R730/);
   assert.match(html, /2 tasks ahead/);
 });
 

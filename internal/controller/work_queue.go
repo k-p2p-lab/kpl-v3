@@ -153,6 +153,7 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 		if parallel {
 			head.analysisLeader = true
 			head.item.Worker = "Controller"
+			head.item.WorkerAgentID = ""
 		}
 		return []*workSlot{head}
 	}
@@ -171,6 +172,7 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 		if !used[""] {
 			used[""] = true
 			slot.item.Worker = "Controller"
+			slot.item.WorkerAgentID = ""
 			ready = append(ready, slot)
 			continue
 		}
@@ -182,6 +184,10 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 			slot.analysisWorkerURL = worker.url
 			slot.analysisAgent = worker.agent
 			slot.item.Worker = worker.label
+			slot.item.WorkerAgentID = ""
+			if worker.agent != nil {
+				slot.item.WorkerAgentID = worker.agent.ID
+			}
 			ready = append(ready, slot)
 			break
 		}

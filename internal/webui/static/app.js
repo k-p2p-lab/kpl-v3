@@ -2216,7 +2216,7 @@ function renderAgents(agents) {
   rememberAgents(agents.map((agent) => agent.id));
   const totalRow = globalThis.KPLAgentResources?.totalRow(agents, resourceNow) || "";
   if (!agents.length) {
-    setHTML($("#agentRows"), totalRow + '<tr><td colspan="11" class="empty-cell">No Agents registered.</td></tr>');
+    setHTML($("#agentRows"), totalRow + '<tr><td colspan="10" class="empty-cell">No Agents registered.</td></tr>');
     globalThis.KPLAgentHosts?.afterRender();
     return;
   }
@@ -2225,9 +2225,8 @@ function renderAgents(agents) {
     const resourceNotice = globalThis.KPLAgentResources?.notice(agent, resourceNow) || "";
     return `<tr${resourceNotice ? ' class="resource-has-notice"' : ""}>
       <td data-label="No." class="agent-number"><span class="agent-host-number">${globalThis.KPLAgentHosts?.checkbox(agent) || ""}<span>${agentNumber(agent.id)}</span></span></td>
-      <td data-label="Agent"><span class="agent-name">${agentLabel(agent.id)}</span><span class="agent-id">${escapeHTML(agent.id)}</span></td>
+      <td data-label="Agent"><span class="agent-name">${agentLabel(agent.id)}</span><span class="agent-id">${escapeHTML(agent.id)}</span><span class="agent-id agent-hostname" title="${escapeHTML(agent.host?.nodeId ? `Host · Docker Swarm node ID: ${agent.host.nodeId}` : "Host")}">${escapeHTML(agent.host?.hostname || agent.hostname || "—")}</span></td>
       <td data-label="State"><span class="state-dot ${escapeHTML(agent.state)}">${escapeHTML(agent.state)}</span>${agent.disabled ? '<span class="agent-capacity-note">Disabled</span>' : ""}</td>
-      <td data-label="Host">${escapeHTML(agent.host?.hostname || agent.hostname || "—")}${agent.host?.nodeId ? `<span class="agent-id" title="Docker Swarm node ID">${escapeHTML(agent.host.nodeId)}</span>` : ""}</td>
       <td data-label="Peers">${formatNumber(agent.activeNodes)} / ${formatNumber(agent.capacity)}
         <span class="agent-capacity-note">${agent.capacityOverride > 0 ? `Override ${formatNumber(agent.capacityOverride)}` : `CLI default${agent.defaultCapacity > 0 ? ` ${formatNumber(agent.defaultCapacity)}` : ""}`}${agent.capacityPending ? " · Applying…" : ""}</span>
       </td>

@@ -7,8 +7,10 @@ test('host counts deduplicate Docker node identity while preserving older hostna
  const first={...agent('one'),hostname:'container-one',host:{nodeId:'host-node'}};
  const duplicate={...agent('two'),hostname:'container-two',labels:{swarmNodeId:'host-node'}};
  const legacy={...agent('three'),hostname:'old-host'};
- assert.match(resources.totalRow([first,duplicate,legacy],now),/2 hosts/);
- assert.doesNotMatch(resources.totalRow([first,duplicate,legacy],now),/3 hosts/);
+ const html=resources.totalRow([first,duplicate,legacy],now),summary=html.split('</tr>')[0];
+ assert.match(summary,/<th scope="row" data-label="Agent">[\s\S]*<span class="agent-capacity-note" title="[^"]+">2 hosts<\/span><\/th>/);
+ assert.doesNotMatch(summary,/3 hosts|data-label="Host"/);
+ assert.equal((summary.match(/<(?:td|th)\b/g)||[]).length,10);
 });
 test('KPL CPU uses the whole host as 100% and shows memory working set',()=>{
  const a=agent();const d=resources.describe(a,now);
@@ -243,12 +245,12 @@ test('Agent notices consolidate scope coverage and shared failures in one full-w
  a.resources.peers={cpuCores:1,memoryUsageBytes:3072,memoryWorkingSetBytes:2304,containers:3,measuredContainers:2,complete:false};
  for(const metric of ['cpu','memory']) assert.doesNotMatch(resources.cell(a,metric,now),/agent-capacity-note/);
  const footer=resources.notice(a,now);
- assert.equal((footer.match(/<tr /g)||[]).length,1);assert.match(footer,/colspan="11"/);
+ assert.equal((footer.match(/<tr /g)||[]).length,1);assert.match(footer,/colspan="10"/);
  assert.equal((footer.match(/Partial measurement/g)||[]).length,1);
  assert.match(footer,/Total: 3\/4 containers; Peers: 2\/3 containers/);
  const total=resources.totalRow([a],now).split('</tr>');
  assert.equal((total[1].match(/Partial measurement/g)||[]).length,1);
- assert.match(total[1],/colspan="11"/);
+ assert.match(total[1],/colspan="10"/);
  assert.doesNotMatch(total[0],/class="agent-capacity-note agent-resource-partial"/);
  a.resources.cpuCapacityCores=0;
  assert.equal((resources.notice(a,now).match(/Host CPU count unavailable/g)||[]).length,1);

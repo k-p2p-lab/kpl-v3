@@ -24,7 +24,7 @@ func postServiceResources(s *Server, report model.ServiceResourceReport, token s
 	return response
 }
 func TestServiceResourcesAuthenticationCoverageAndStaleness(t *testing.T) {
-	s := New(ServerConfig{DataDir: t.TempDir(), Token: "monitor-token"}, nil)
+	s := New(ServerConfig{DataDir: t.TempDir(), Token: "monitor-token", ControlNodeID: "control1"}, nil)
 	now := time.Now().UTC()
 	partial := resourceFixture(now, 2)
 	partial.Complete = false
@@ -51,6 +51,17 @@ func TestServiceResourcesAuthenticationCoverageAndStaleness(t *testing.T) {
 	rows := s.serviceResourceSnapshot(time.Now())
 	if len(rows) != 3 || rows[0].Service != "controller" {
 		t.Fatalf("unexpected rows %+v", rows)
+	}
+	resourceResponse := resultRequest(s, "GET", "/api/v1/services/resources")
+	var inventory struct {
+		ControllerNodeID string                `json:"controllerNodeId"`
+		Services         []serviceResourceView `json:"services"`
+	}
+	if resourceResponse.Code != 200 || json.Unmarshal(resourceResponse.Body.Bytes(), &inventory) != nil {
+		t.Fatalf("service resource response: %d %s", resourceResponse.Code, resourceResponse.Body)
+	}
+	if inventory.ControllerNodeID != "control1" || len(inventory.Services) != 3 || inventory.Services[0].NodeID != inventory.ControllerNodeID {
+		t.Fatalf("Controller host identity does not match service inventory: %+v", inventory)
 	}
 	response := resultRequest(s, "GET", "/api/v1/agents/resources?format=csv")
 	csvRows, err := csv.NewReader(response.Body).ReadAll()

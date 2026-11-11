@@ -47,8 +47,11 @@
     if (total.cpuCapacityCores > 0) total.cpuPercent = 100 * cpuCores / total.cpuCapacityCores;
     return total;
   }
-  function tableRows(rows, now = Date.now(), hostLabel) {
+  function tableRows(rows, now = Date.now(), hostLabel, controllerNodeId) {
     const a = aggregate(rows, now);
+    const controllerHosts = new Set(controllerNodeId ? [controllerNodeId] : rows
+      .filter(row => row.service === "controller" && row.state === "running" && row.nodeId)
+      .map(row => row.nodeId));
     const partial = a.partial || a.measured < a.total || a.cpuMeasured < a.measured;
     const messages = [`${number(a.measured)} / ${number(a.total)} services measured`];
     if (a.partial) messages.push(`Partial · ${number(a.measuredContainers)}/${number(a.containers)} containers`);
@@ -70,7 +73,7 @@
         if (!Number.isFinite(d.cpuPercent)) messages.push("Host CPU count unavailable");
       }
       const footer = root.KPLAgentResources.noticeRow(messages.join(" · "), {columns:6});
-      const host = hostLabel?.(row) || row.nodeName || row.nodeId || "Host not reported";
+      const host = controllerHosts.has(row.nodeId) ? "Controller" : hostLabel?.(row) || row.nodeName || row.nodeId || "Host not reported";
       const hostIdentity = [row.nodeName, row.nodeId].filter(Boolean).join(" · ");
       return `<tr${footer ? ' class="resource-has-notice"' : ""} data-service="${escape(row.service)}"><th scope="row" data-label="Service" class="service-resource-name">${escape(d.name)}</th><td data-label="State"><span class="service-resource-state" data-state="${escape(d.state)}">${escape(d.status)}</span></td><td data-label="Host" class="service-resource-host" title="${escape(hostIdentity)}">${escape(host)}</td><td data-label="CPU" class="agent-resource-value" title="${escape(d.title)}">${escape(d.cpu)}</td><td data-label="Memory" class="agent-resource-value" title="${escape(d.title)}">${escape(d.memory)}</td><td data-label="Coverage">${d.available ? `${number(row.resources.measuredContainers)}/${number(row.resources.containers)} containers` : "—"}</td></tr>${footer}`;
     }).join("") : '<tr><td colspan="6" class="empty-cell">No service resources reported.</td></tr>');
@@ -83,7 +86,7 @@
     const visible = () => !root.document.hidden && !$("#services")?.hidden;
     function render() {
       if (!data) { if (failure) note.textContent = failure; return; }
-      const html = tableRows(data.services, Date.now(), hostLabel);
+      const html = tableRows(data.services, Date.now(), hostLabel, data.controllerNodeId);
       if (html !== lastHTML) { container.innerHTML = html; lastHTML = html; }
       const age = Math.max(0, Math.floor((Date.now()-receivedAt)/1000));
       const uptime = Math.max(0, Math.floor((data.controllerUptimeSeconds+age)/60));

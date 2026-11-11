@@ -363,6 +363,7 @@ tbody:last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
 .host-reboot-error { font-size: .8rem; color: var(--red); }
 @media (max-width: 520px) { .agent-host-actions { margin-left: 0; flex: 1 1 100%; } .agent-host-actions button { flex: 1 1 auto; } }
 .agent-id { display: block; margin-top: 0.18rem; color: var(--muted); font-size: 0.7rem; }
+.agent-hostname { white-space: normal; overflow-wrap: anywhere; }
 .agent-metrics-link { position: relative; color: var(--cyan); font-size: 0.78rem; font-weight: 650; text-decoration: none; text-underline-offset: 0.2em; }
 .agent-metrics-link:hover { color: #62e4df; text-decoration: underline; }
 .agent-metrics-link:focus-visible { border-radius: 0.2rem; outline: 2px solid var(--cyan); outline-offset: 0.2rem; }

@@ -138,8 +138,9 @@ func (s *Server) handleServiceResources(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 200, struct {
 		GeneratedAt             time.Time             `json:"generatedAt"`
 		ControllerUptimeSeconds float64               `json:"controllerUptimeSeconds"`
+		ControllerNodeID        string                `json:"controllerNodeId,omitempty"`
 		Services                []serviceResourceView `json:"services"`
-	}{now, now.Sub(s.startedAt).Seconds(), s.serviceResourceSnapshot(now)})
+	}{now, now.Sub(s.startedAt).Seconds(), s.config.ControlNodeID, s.serviceResourceSnapshot(now)})
 }
 
 type serviceResourceCollector struct {

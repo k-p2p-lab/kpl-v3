@@ -18,7 +18,7 @@ test('service rows show host percentages, partial coverage, and safe names',()=>
  value.state='running';assert.equal(services.describe(value,now+31000).state,'stale');assert.equal(services.describe(value,now+31000).memory,'N/A');
 });
 test('service host labels use Agent numbers while retaining escaped host identities and fallbacks',()=>{
- const value={...row(),nodeName:'manager <one>',nodeId:'node"1'},seen=[];
+ const value={...row(),service:'prometheus',nodeName:'manager <one>',nodeId:'node"1'},seen=[];
  const html=services.tableRows([value],now,entry=>{seen.push(entry);return 'Agent 7 & 9';});
  assert.deepEqual(seen,[value]);
  assert.match(html,/class="service-resource-host" title="manager &lt;one&gt; · node&quot;1">Agent 7 &amp; 9<\/td>/);
@@ -27,6 +27,16 @@ test('service host labels use Agent numbers while retaining escaped host identit
  assert.match(services.tableRows([value],now,()=>null),/class="service-resource-host" title="node&quot;1">node&quot;1<\/td>/);
  value.nodeId='';
  assert.match(services.tableRows([value],now),/class="service-resource-host" title="">Host not reported<\/td>/);
+});
+test('all services on the Controller host use Controller while other hosts retain Agent labels',()=>{
+ const values=[row(),{...row(),service:'grafana'},{...row(),service:'resource-monitor',nodeId:'node2'},
+  {...row(),state:'not_running',resources:null,nodeId:'node2'}];
+ const hosts=html=>[...html.matchAll(/class="service-resource-host"[^>]*>([^<]*)<\/td>/g)].map(match=>match[1]);
+ assert.deepEqual(hosts(services.tableRows(values,now,()=> 'Agent 7')),['Controller','Controller','Agent 7','Agent 7']);
+ // Configured identity remains authoritative even if an older report names another Controller host.
+ const html=services.tableRows(values,now,()=> 'Agent 7','node2');
+ assert.deepEqual(hosts(html),['Agent 7','Agent 7','Controller','Controller']);
+ assert.match(html,/title="manager · node2">Controller<\/td>/);
 });
 test('service totals count a shared host once and weight distinct hosts by capacity',()=>{
  const controller=row(),prometheus={...row(),service:'prometheus'},other={...row(),nodeId:'node2'};
@@ -71,7 +81,7 @@ test('service polling is bounded, pauses when hidden, and avoids overlapping req
  element('#agents').hidden=true;element('#services').hidden=false;
  listeners['dashboard:tab-change']({detail:{id:'services'}});timers[0]();assert.equal(calls,1);
  assert.equal(element('#refreshServices').disabled,true);
- resolve({generatedAt:new Date(now).toISOString(),controllerUptimeSeconds:60,services:[row()]});await new Promise(r=>setImmediate(r));
+ resolve({generatedAt:new Date(now).toISOString(),controllerUptimeSeconds:60,services:[{...row(),service:'prometheus'}]});await new Promise(r=>setImmediate(r));
  assert.match(element('#serviceResourceRows').innerHTML,/25%/);assert.match(element('#serviceResourceStatus').textContent,/Included in interval/);
  assert.equal(element('#refreshServices').disabled,false);
  assert.match(element('#serviceResourceRows').innerHTML,/title="manager · node1">manager<\/td>/);

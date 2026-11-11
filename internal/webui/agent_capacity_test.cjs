@@ -14,7 +14,7 @@ function fixture() {
  vm.createContext(api);
  vm.runInContext(source.slice(0,source.indexOf('const defaultScenario ='))+source.slice(source.indexOf('function escapeHTML('),source.indexOf('$("#scenarioText").value = defaultScenario;')),api);
  const state=vm.runInContext('state',api);
- state.snapshot={agents:[{id:'agent/a',name:'Worker <A>',hostname:'node-a',state:'online',capacity:200,defaultCapacity:200,activeNodes:150}]};
+ state.snapshot={agents:[{id:'agent/a',name:'Worker <A>',hostname:'container-node-a',host:{hostname:'node-a',nodeId:'swarm-node-a'},state:'online',capacity:200,defaultCapacity:200,activeNodes:150}]};
  api.render=()=>{};
  api.showToast=message=>toasts.push(message);
  api.api=(url,options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}));
@@ -30,9 +30,15 @@ test('Agent settings and table use the same number while preserving host details
  api.renderAgents(state.snapshot.agents);
  assert.match(element('#agentRows').innerHTML,/class="agent-name">Agent 1<\/span>/);
  assert.doesNotMatch(element('#agentRows').innerHTML,/Worker &lt;A&gt;/);
- assert.match(element('#agentRows').innerHTML,/data-label="Host">node-a/);
+ assert.match(element('#agentRows').innerHTML,/<td data-label="Agent"><span class="agent-name">Agent 1<\/span><span class="agent-id">agent\/a<\/span><span class="agent-id agent-hostname" title="Host · Docker Swarm node ID: swarm-node-a">node-a<\/span><\/td>/);
+ assert.doesNotMatch(element('#agentRows').innerHTML,/data-label="Host"/);
+ assert.equal((element('#agentRows').innerHTML.match(/<td\b/g)||[]).length,10);
  assert.equal(element('#agentCapacityIdentity').textContent,'Agent 1 · agent/a · node-a');
  assert.match(element('#agentRows').innerHTML,/data-agent-capacity="agent\/a"/);
+ state.snapshot.agents[0].host.hostname='<host & name>';
+ api.renderAgents(state.snapshot.agents);
+ assert.match(element('#agentRows').innerHTML,/>&lt;host &amp; name&gt;<\/span>/);
+ assert.doesNotMatch(element('#agentRows').innerHTML,/<host/);
  api.closeAgentCapacity();
  api.openAgentCapacity('missing');
  assert.equal(element('#agentCapacityDialog').open,false);

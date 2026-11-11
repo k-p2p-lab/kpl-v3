@@ -4,13 +4,14 @@
   const R = typeof module !== "undefined" && module.exports ? require("./research-charts.js") : root.KPLResearch;
   const finite = value => typeof value === "number" && Number.isFinite(value);
   function validate(data, id) {
-    if (data?.version !== 1 || data.aggregation !== "equal-run-mean-v1" || data.batchId !== id || !Array.isArray(data.runs) || data.runs.length < 2 || data.runs.length > 100 || !Array.isArray(data.excluded) || !data.summary)
+    if (data?.version !== 1 || data.aggregation !== "equal-run-mean-v1" || data.batchId !== id || !Array.isArray(data.runs) || data.runs.length < 2 || data.runs.length > 100 || (data.excluded != null && !Array.isArray(data.excluded)) || !data.summary)
       throw new Error("Invalid batch analysis response.");
     const ids = new Set();
     for (const run of data.runs) {
       if (!run.result?.id || ids.has(run.result.id) || run.result.batchId !== id || run.result.state !== "completed") throw new Error("Batch analysis contains an unrelated or duplicate run.");
       ids.add(run.result.id);
     }
+    return data.excluded == null ? { ...data, excluded: [] } : data;
   }
   function points(input) {
     const map = new Map();
@@ -95,7 +96,7 @@
   }
   const cumulativeIDs = new Set(["latency-cdf", "degree-cdf", "research-propagationCDF", "research-duplicateCDF", "research-hopCDF", "propagation-log-time", "eager-lazy-latency", "mean-receivers-time", "mean-receivers-hop"]);
   function build(data, buildRunCharts) {
-    validate(data, data.batchId);
+    data = validate(data, data.batchId);
     const histograms = commonHistograms(data.runs.flatMap(run => [run, ...(run.research?.receiverGroups || [])])), chartMap = new Map();
     let histogramIndex = 0;
     const protocols = [...new Set(data.runs.flatMap(a => (a.bandwidthTimeline || []).flatMap(b => (b.protocols || []).map(p => p.protocol))))];
@@ -168,7 +169,7 @@
     return [["metric", "label", "mean", "sample_sd", "n"], ...Object.entries(summary).sort(([a], [b]) => a.localeCompare(b)).map(([key, stat]) => [key, label(key), stat.average, stat.deviation, stat.count])].map(row => row.map(quote).join(",")).join("\n") + "\n";
   }
   function description(data) {
-    const excluded = data.excluded.map(r => `Run ${r.iteration || r.id}: ${r.state}`).join("; ");
+    const excluded = (data.excluded ?? []).map(r => `Run ${r.iteration || r.id}: ${r.state}`).join("; ");
     return `${data.runs.length}/${data.expectedRuns} runs included · equal run weight · ${data.missingRuns} missing/unreadable${excluded ? ` · Excluded: ${excluded}` : ""}`;
   }
   function reliabilityMarkup(data, escape) {

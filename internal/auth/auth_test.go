@@ -38,6 +38,19 @@ func TestHostRebootCredentialIsSeparateFromPeerCredential(t *testing.T) {
 	}
 }
 
+func TestAnalysisWorkerCredentialIsSeparateFromPeerAndHostCredentials(t *testing.T) {
+	user, password := "fake-analyst", "fake-password-for-analysis-auth-test"
+	key := AnalysisWorkerToken(user, password)
+	if len(key) != 64 || !Equal(key, AnalysisWorkerToken(user, password)) || Equal(key, password) ||
+		Equal(key, InternalToken(user, password)) || Equal(key, HostRebootToken(user, password)) {
+		t.Fatal("analysis key is not independently domain-separated and deterministic")
+	}
+	if Equal(key, AnalysisWorkerToken("other-analyst", password)) || Equal(key, AnalysisWorkerToken(user, "different-password")) ||
+		Equal(key, AnalysisWorkerToken(user, InternalToken(user, password))) {
+		t.Fatal("analysis credential rotation or separation from the Peer credential failed")
+	}
+}
+
 func TestHostRebootSignatureBindsRequestWithoutExposingKey(t *testing.T) {
 	key := HostRebootToken("fake-operator", "fake-password-for-signature-test")
 	payload := []byte(`{"operationId":"first-operation","nodeId":"worker-node"}`)

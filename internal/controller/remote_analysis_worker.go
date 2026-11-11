@@ -23,6 +23,8 @@ import (
 )
 
 type remoteAnalysisWorker struct {
+	ctx          context.Context
+	cancel       context.CancelFunc
 	tokenHash    [sha256.Size]byte
 	runtimeImage string
 	logger       *slog.Logger
@@ -32,7 +34,44 @@ type remoteAnalysisWorker struct {
 }
 
 func newRemoteAnalysisWorker(token string, logger *slog.Logger, command func(string) *exec.Cmd) *remoteAnalysisWorker {
-	return &remoteAnalysisWorker{tokenHash: sha256.Sum256([]byte(token)), runtimeImage: strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")), logger: logger, command: command, slot: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &remoteAnalysisWorker{ctx: ctx, cancel: cancel, tokenHash: sha256.Sum256([]byte(token)), runtimeImage: strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")), logger: logger, command: command, slot: make(chan struct{}, 1)}
+}
+
+// NewAgentAnalysisWorker serves calculation requests on the existing Agent API.
+// Its stop function waits until the accepted job and its OS child are reclaimed.
+func NewAgentAnalysisWorker(ctx context.Context, token, runtimeImage string, logger *slog.Logger) (http.Handler, func(context.Context) error) {
+	worker := newRemoteAnalysisWorker(token, logger, nil)
+	worker.runtimeImage = strings.TrimSpace(runtimeImage)
+	stopParent := context.AfterFunc(ctx, worker.cancel)
+	if ctx.Err() != nil {
+		worker.cancel()
+	}
+	return worker, func(stopCtx context.Context) error {
+		stopParent()
+		return worker.stop(stopCtx)
+	}
+}
+
+func (w *remoteAnalysisWorker) stop(ctx context.Context) error {
+	w.closed.Store(true)
+	w.cancel()
+	select {
+	case w.slot <- struct{}{}:
+		<-w.slot
+		return nil
+	default:
+	}
+	select {
+	case w.slot <- struct{}{}:
+		<-w.slot
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 var (
@@ -75,7 +114,7 @@ func (w *remoteAnalysisWorker) ServeHTTP(response http.ResponseWriter, request *
 		http.Error(response, "analysis worker busy", http.StatusTooManyRequests)
 		return
 	}
-	if w.closed.Load() || request.Context().Err() != nil {
+	if w.closed.Load() || w.ctx.Err() != nil || request.Context().Err() != nil {
 		http.Error(response, "analysis worker stopping", http.StatusServiceUnavailable)
 		return
 	}
@@ -88,9 +127,13 @@ func (w *remoteAnalysisWorker) ServeHTTP(response http.ResponseWriter, request *
 	if err != nil {
 		return
 	}
-	jobCtx, cancelJob := context.WithCancel(request.Context())
+	connectionCtx, cancelConnection := context.WithCancel(request.Context())
+	defer cancelConnection()
+	stopWorker := context.AfterFunc(w.ctx, cancelConnection)
+	defer stopWorker()
+	jobCtx, cancelJob := context.WithCancel(connectionCtx)
 	defer cancelJob()
-	socket := openRemoteAnalysisSocket(request.Context(), conn, cancelJob)
+	socket := openRemoteAnalysisSocket(connectionCtx, conn, cancelJob)
 	defer socket.close()
 	stopDisconnect := context.AfterFunc(socket.ctx, cancelJob)
 	defer stopDisconnect()
@@ -265,7 +308,7 @@ func RunAnalysisWorker(ctx context.Context, listen, token string, logger *slog.L
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	worker := newRemoteAnalysisWorker(token, logger, nil)
+	worker, stopWorker := NewAgentAnalysisWorker(ctx, token, os.Getenv("KPL_RUNTIME_IMAGE"), logger)
 	server := &http.Server{Addr: listen, Handler: worker, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10,
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
@@ -278,16 +321,9 @@ func RunAnalysisWorker(ctx context.Context, listen, token string, logger *slog.L
 	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
 		err = nil
 	}
-	worker.closed.Store(true)
 	cancel()
 	// HTTP Server.Close does not wait for upgraded WebSocket connections.
 	shutdown, stopShutdown := context.WithTimeout(context.Background(), 20*time.Second)
 	defer stopShutdown()
-	select {
-	case worker.slot <- struct{}{}:
-		<-worker.slot
-	case <-shutdown.Done():
-		err = errors.Join(err, errors.New("analysis worker did not finish shutdown"))
-	}
-	return err
+	return errors.Join(err, stopWorker(shutdown))
 }

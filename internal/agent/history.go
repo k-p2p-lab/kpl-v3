@@ -137,6 +137,10 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 			s.mu.Unlock()
 			return errors.New("agent is shutting down")
 		}
+		if s.analysisActive {
+			s.mu.Unlock()
+			return errors.New("Agent is calculating a result analysis")
+		}
 		if s.host != nil && s.host.RebootPending {
 			s.mu.Unlock()
 			return errors.New("Agent host reboot is pending")

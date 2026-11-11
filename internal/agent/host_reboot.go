@@ -307,7 +307,7 @@ func (s *Server) rebootHost(ctx context.Context, request model.HostRebootRequest
 		return reject(http.StatusConflict, errors.New("Agent instance changed; refresh before requesting reboot."))
 	}
 	s.mu.Lock()
-	if !s.startupReconciled || s.shuttingDown || s.fencingAll || s.host != nil && s.host.RebootPending {
+	if !s.startupReconciled || s.shuttingDown || s.fencingAll || s.analysisActive || s.host != nil && s.host.RebootPending {
 		s.mu.Unlock()
 		return reject(http.StatusConflict, errors.New("Agent startup, shutdown or host maintenance is in progress."))
 	}

@@ -227,6 +227,25 @@ test('batch validation rejects unrelated, duplicate, partial, and single-run inp
   assert.throws(() => batch.validate(data([a, a]), 'batch'));
   assert.throws(() => batch.validate(data([a, { ...b, result: { ...b.result, batchId: 'other' } }]), 'batch'));
   assert.throws(() => batch.validate(data([a, { ...b, result: { ...b.result, state: 'running' } }]), 'batch'));
+  for (const excluded of [false, 0, '', {}, 'none']) {
+    assert.throws(() => batch.validate({ ...data([a, b]), excluded }, 'batch'));
+  }
+});
+
+test('saved batches with null or omitted exclusions keep the same charts and source JSON', () => {
+  const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T01:00:00Z', 20);
+  const expected = data([a, b]);
+  for (const excluded of [null, undefined]) {
+    const source = { ...expected, excluded };
+    if (excluded === undefined) delete source.excluded;
+    const original = JSON.stringify(source);
+    Object.freeze(source);
+    const normalized = batch.validate(source, 'batch');
+    assert.deepEqual(normalized.excluded, []);
+    assert.deepEqual(batch.build(source, images.buildCharts), batch.build(expected, images.buildCharts));
+    assert.equal(batch.description(source), batch.description(expected));
+    assert.equal(JSON.stringify(source), original);
+  }
 });
 
 test('summary CSV preserves missing values, run counts and escaped metric names', () => {

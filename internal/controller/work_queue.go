@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"math"
 	"slices"
 	"time"
@@ -29,6 +28,7 @@ type workSlot struct {
 	resultAnalysis    bool
 	analysisLeader    bool
 	analysisWorkerURL string
+	analysisAgent     *model.Agent
 }
 
 // Admission holds cancelMu and has checked shuttingDown before registering the
@@ -126,12 +126,14 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 	queue := s.experimentQueue
 	if len(queue) == 0 {
 		s.analysisGroupReady = false
+		s.analysisGroupWorkers = nil
 		return nil
 	}
 	head := queue[0]
-	parallel := len(s.config.AnalysisWorkerURLs) != 0 && head.resultAnalysis
+	parallel := head.resultAnalysis
 	if !parallel {
 		s.analysisGroupReady = false
+		s.analysisGroupWorkers = nil
 	}
 	if s.summaryRefreshActive {
 		return nil
@@ -155,7 +157,7 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 		return []*workSlot{head}
 	}
 	end := 0
-	used := make(map[string]bool, 1+len(s.config.AnalysisWorkerURLs))
+	used := make(map[string]bool, 1+len(s.analysisGroupWorkers))
 	for ; end < len(queue) && queue[end].resultAnalysis; end++ {
 		if queue[end].opened {
 			used[queue[end].analysisWorkerURL] = true
@@ -172,13 +174,14 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 			ready = append(ready, slot)
 			continue
 		}
-		for i, endpoint := range s.config.AnalysisWorkerURLs {
-			if used[endpoint] {
+		for _, worker := range s.analysisGroupWorkers {
+			if used[worker.url] {
 				continue
 			}
-			used[endpoint] = true
-			slot.analysisWorkerURL = endpoint
-			slot.item.Worker = fmt.Sprintf("Analysis worker %d", i+1)
+			used[worker.url] = true
+			slot.analysisWorkerURL = worker.url
+			slot.analysisAgent = worker.agent
+			slot.item.Worker = worker.label
 			ready = append(ready, slot)
 			break
 		}
@@ -242,7 +245,7 @@ func (s *Server) waitWork(ctx context.Context, slot *workSlot) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(s.config.AnalysisWorkerURLs) != 0 && slot.resultAnalysis && !slot.analysisLeader {
+	if slot.resultAnalysis && !slot.analysisLeader {
 		return nil
 	}
 	if err := s.waitAnalysisWorkerCleanup(ctx, slot); err != nil {
@@ -271,6 +274,7 @@ func (s *Server) waitWork(ctx context.Context, slot *workSlot) error {
 			return err
 		}
 		if len(s.queueCleanup) == 0 {
+			s.analysisGroupWorkers = s.analysisWorkerTargetsLocked()
 			s.analysisGroupReady = true
 			s.updateQueuePositionsLocked()
 			s.cancelMu.Unlock()

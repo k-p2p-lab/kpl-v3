@@ -238,11 +238,15 @@ func (s *Server) computeAssignedAnalysis(ctx context.Context, slot *workSlot, in
 		return s.computeAnalysisProcess(ctx, input, snapshots, root, progress, metadata)
 	}
 	input.RuntimeImage = s.config.RuntimeImage
-	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL); err != nil {
+	var owner []model.Agent
+	if slot.analysisAgent != nil {
+		owner = []model.Agent{*slot.analysisAgent}
+	}
+	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL, owner...); err != nil {
 		return nil, analysisProcessResult{}, err
 	}
 	source := s.remoteAnalysisSnapshotSource(snapshots)
-	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.config.AnalysisWorkerToken, input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond)
+	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.analysisWorkerCredential(slot), input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond)
 	if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
 		err = errors.Join(err, s.clearAnalysisWorker(slot.analysisWorkerURL))
 	}

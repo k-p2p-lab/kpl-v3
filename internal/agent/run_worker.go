@@ -111,6 +111,13 @@ type runWorkerSnapshots struct {
 
 func (s *Server) ensureRunWorker(ctx context.Context, runID string) (*agentRunWorker, error) {
 	s.runWorkersMu.Lock()
+	s.mu.RLock()
+	analysisActive := s.analysisActive
+	s.mu.RUnlock()
+	if analysisActive {
+		s.runWorkersMu.Unlock()
+		return nil, errors.New("Agent is calculating a result analysis")
+	}
 	if existing := s.runWorkers[runID]; existing != nil {
 		s.runWorkersMu.Unlock()
 		select {

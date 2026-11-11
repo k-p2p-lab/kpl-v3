@@ -151,6 +151,26 @@ test('batch JSON reuses the last completed snapshot while verification or replac
   }
 });
 
+test('legacy batch exclusions remain byte-identical in selected analysis JSON downloads', async () => {
+  for (const source of [
+    batchArtifact('batch', 'old').replace(/"excluded": \[[\s\S]*?\],/, '"excluded": null,'),
+    batchArtifact('batch', 'old').replace(/  "excluded": \[[\s\S]*?\],\n/, ''),
+  ]) {
+    const calls = [], f = fixture(async (path, options) => {
+      calls.push([path, options.method]);
+      return path.includes('/result?') ? source : {batchId:'batch', state:'failed', id:'replacement', savedAnalysisId:'old'};
+    }, [{id:'member', batchId:'batch', repetitions:3}]);
+    await f.download('results', ['batch:batch']);
+    assert.deepEqual(calls, [
+      ['/api/v1/batch-analysis-jobs/batch', undefined],
+      ['/api/v1/batch-analysis-jobs/batch/result?jobId=old&saved=1', undefined],
+    ]);
+    const files = entries(await f.downloads[0].arrayBuffer());
+    assert.equal(files.length, 1);
+    assert.deepEqual(files[0].data, Buffer.from(source));
+  }
+});
+
 test('missing batch analysis is queued once with its observed attempt and finished before the next selected result',async()=>{
   const calls=[],progress=[];let reads=0;
   const f=fixture(async(path,options)=>{

@@ -10,6 +10,7 @@ services:
     command: [run, controller, --listen, ':8080', --data-dir, /var/lib/kpl/data]
     environment:
       KPL_RUNTIME_IMAGE: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
+      KPL_CONTROL_NODE_ID: "${KPL_CONTROL_NODE_ID:?Set KPL_CONTROL_NODE_ID}"
       KPL_USER: "${KPL_USER:?Set KPL_USER}"
       KPL_PASSWORD: "${KPL_PASSWORD:?Set KPL_PASSWORD}"
       KPL_RUN_MIN_FREE_BYTES: "${KPL_RUN_MIN_FREE_BYTES:-1073741824}"
@@ -57,6 +58,7 @@ services:
       KPL_AGENT_CAPACITY: "${KPL_AGENT_CAPACITY:-20}"
       KPL_AGENT_METRICS_PORT: "${KPL_AGENT_METRICS_PORT:-9091}"
       KPL_CONTROLLER_URL: http://${KPL_STACK_NAME:-kpl}_controller:8080
+      KPL_RUNTIME_IMAGE: "${KPL_IMAGE:?Set KPL_IMAGE to a registry image tag or digest}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-data:/var/lib/kpl/agent

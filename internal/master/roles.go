@@ -221,6 +221,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	}
 	server := controller.New(controller.ServerConfig{
 		RunWorkers:                   true,
+		ControlNodeID:                strings.TrimSpace(os.Getenv("KPL_CONTROL_NODE_ID")),
 		RuntimeImage:                 strings.TrimSpace(os.Getenv("KPL_RUNTIME_IMAGE")),
 		NetworkManagerURL:            strings.TrimSpace(*networkManager),
 		AgentDiscoveryDNS:            strings.TrimSpace(*agentDiscoveryDNS),
@@ -340,7 +341,10 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err := auth.Validate(user, password); err != nil {
 		return err
 	}
+	analysisHandler, stopAnalysis := controller.NewAgentAnalysisWorker(ctx, auth.AnalysisWorkerToken(user, password), os.Getenv("KPL_RUNTIME_IMAGE"), logger)
 	server, err := agent.New(authenticatedAgentConfig(user, password, agent.Config{
+		AnalysisHandler: analysisHandler,
+		StopAnalysis:    stopAnalysis,
 		RunWorkerFactory: func(workerCtx context.Context, config agent.RunWorkerConfig, broker workerproc.Handler) (*workerproc.Process, error) {
 			return workerproc.Start(workerCtx, "agent-run", config, broker)
 		},
@@ -354,6 +358,7 @@ func runAgent(ctx context.Context, logger *slog.Logger, args []string) error {
 		DockerBinary: *dockerBinary, DockerImage: *dockerImage, DockerNetwork: *dockerNetwork,
 	}), logger)
 	if err != nil {
+		_ = stopAnalysis(context.Background())
 		return err
 	}
 	healthCtx, stopHealth := context.WithCancel(context.WithoutCancel(ctx))

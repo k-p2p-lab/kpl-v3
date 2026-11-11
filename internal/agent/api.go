@@ -28,14 +28,55 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/network/", s.handleExperimentNetwork)
 	mux.HandleFunc("/api/v1/host/reboot", s.handleHostReboot)
 	mux.HandleFunc("/api/v1/host/reboot-status", s.handleHostRebootStatus)
+	if s.config.AnalysisHandler != nil {
+		mux.HandleFunc("/internal/result-analysis", s.handleResultAnalysis)
+		mux.HandleFunc("/internal/analysis-idle", s.handleAnalysisIdle)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if s.config.AnalysisHandler != nil && (r.URL.Path == "/internal/result-analysis" || r.URL.Path == "/internal/analysis-idle") {
+			mux.ServeHTTP(w, r)
+			return
+		}
 		if s.config.Token != "" && r.Method != http.MethodGet && r.Header.Get("Authorization") != "Bearer "+s.config.Token {
 			writeError(w, http.StatusUnauthorized, "valid bearer token required")
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleAnalysisIdle(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	active := s.analysisActive
+	s.mu.RUnlock()
+	if active {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "Agent is calculating a result analysis")
+		return
+	}
+	s.config.AnalysisHandler.ServeHTTP(w, r)
+}
+
+func (s *Server) handleResultAnalysis(w http.ResponseWriter, r *http.Request) {
+	s.runWorkersMu.Lock()
+	s.mu.Lock()
+	ready := s.startupReconciled && !s.shuttingDown && !s.fencingAll && !s.analysisActive && (s.host == nil || !s.host.RebootPending) && s.capacityUsedLocked() == 0 && len(s.runWorkers) == 0
+	if ready {
+		s.analysisActive = true
+	}
+	s.mu.Unlock()
+	s.runWorkersMu.Unlock()
+	if !ready {
+		writeError(w, http.StatusServiceUnavailable, "Agent is not ready for result analysis")
+		return
+	}
+	defer func() {
+		s.mu.Lock()
+		s.analysisActive = false
+		s.mu.Unlock()
+	}()
+	s.config.AnalysisHandler.ServeHTTP(w, r)
 }
 
 func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {

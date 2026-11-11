@@ -22,6 +22,7 @@ type Agent struct {
 	PeerImage         string            `json:"peerImage,omitempty"`
 	RunDrain          bool              `json:"runDrain,omitempty"`
 	RunProcesses      bool              `json:"runProcesses,omitempty"`
+	AnalysisProcesses bool              `json:"analysisProcesses,omitempty"`
 	ID                string            `json:"id"`
 	Name              string            `json:"name"`
 	URL               string            `json:"url"`

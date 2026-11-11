@@ -30,6 +30,14 @@ func InternalToken(user, password string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// AnalysisWorkerToken authorizes saved-result calculation independently of the
+// base service credential distributed to Peers.
+func AnalysisWorkerToken(user, password string) string {
+	mac := hmac.New(sha256.New, []byte(password))
+	_, _ = mac.Write([]byte("kpl/analysis-worker-auth/v1\x00" + user))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // HostRebootToken is independent of the base credential available to Peers.
 // Only Controller and Agent processes derive it from the login credentials.
 func HostRebootToken(user, password string) string {

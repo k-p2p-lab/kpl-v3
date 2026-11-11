@@ -31,7 +31,9 @@ import (
 var errCapacityReached = errors.New("agent capacity reached")
 
 type Config struct {
-	RunWorkerFactory  RunWorkerFactory `json:"-"`
+	RunWorkerFactory  RunWorkerFactory            `json:"-"`
+	AnalysisHandler   http.Handler                `json:"-"`
+	StopAnalysis      func(context.Context) error `json:"-"`
 	HostRebootEnabled bool
 	HostRebootToken   string
 	ControlNodeID     string
@@ -120,6 +122,7 @@ type Server struct {
 	processes                 map[string]*process
 	runFences                 map[string]uint64
 	shuttingDown              bool
+	analysisActive            bool // mu; reserves this host against Peer admission
 	eventsMu                  sync.Mutex
 	events                    []model.TraceEvent
 	eventsInFlight            int
@@ -221,7 +224,12 @@ func New(config Config, logger *slog.Logger) (*Server, error) {
 // Server after shutdown; other callers must close it after operations finish.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
-		s.closeErr = errors.Join(s.closeRunWorkers(), s.history.close())
+		if s.config.StopAnalysis != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			s.closeErr = s.config.StopAnalysis(ctx)
+			cancel()
+		}
+		s.closeErr = errors.Join(s.closeErr, s.closeRunWorkers(), s.history.close())
 		if s.dataLock != nil {
 			s.closeErr = errors.Join(s.closeErr, s.dataLock.Close())
 		}
@@ -477,17 +485,18 @@ func (s *Server) agentStatusLocked(hostname string) model.Agent {
 		image = s.docker.image
 	}
 	return model.Agent{
-		RunProcesses: s.config.RunWorkerFactory != nil,
-		Host:         s.hostStatusLocked(),
-		CreateReplay: true,
-		Resources:    s.resources,
-		ID:           s.config.ID,
-		Name:         s.config.Name,
-		URL:          strings.TrimRight(s.config.AdvertiseURL, "/"),
-		MetricsURL:   s.config.MetricsURL,
-		Hostname:     hostname,
-		Version:      model.BuildVersion(),
-		PeerImage:    image, RunDrain: true, StartupReconciled: s.startupReconciled,
+		RunProcesses:      s.config.RunWorkerFactory != nil,
+		AnalysisProcesses: s.config.AnalysisHandler != nil,
+		Host:              s.hostStatusLocked(),
+		CreateReplay:      true,
+		Resources:         s.resources,
+		ID:                s.config.ID,
+		Name:              s.config.Name,
+		URL:               strings.TrimRight(s.config.AdvertiseURL, "/"),
+		MetricsURL:        s.config.MetricsURL,
+		Hostname:          hostname,
+		Version:           model.BuildVersion(),
+		PeerImage:         image, RunDrain: true, StartupReconciled: s.startupReconciled,
 		Capacity:         s.capacityLocked(),
 		DefaultCapacity:  s.config.Capacity,
 		CapacityRevision: s.capacityRevision,

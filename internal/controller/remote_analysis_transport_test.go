@@ -119,6 +119,9 @@ func readRemoteAnalysisArtifact(t *testing.T, root *os.Root, artifacts *workerAn
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
+	if result.Excluded == nil {
+		t.Fatal("batch artifact must encode an empty excluded array when every Run contributes")
+	}
 	// The output publication timestamp is measured at completion.
 	result.AsOf = time.Time{}
 	return result
@@ -329,5 +332,63 @@ func TestRemoteAnalysisTransportCancelReapsChild(t *testing.T) {
 	}
 	if command == nil || command.ProcessState == nil {
 		t.Fatal("worker admitted another analysis before reaping its canceled child")
+	}
+}
+
+func TestAgentAnalysisWorkerStopReapsAcceptedCalculation(t *testing.T) {
+	s, input, _, root := remoteAnalysisTransportFixture(t)
+	roleCtx, cancelRole := context.WithCancel(t.Context())
+	defer cancelRole()
+	image := "registry.example/kpl@sha256:" + strings.Repeat("a", 64)
+	handler, stopWorker := NewAgentAnalysisWorker(roleCtx, remoteTestToken, image, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	worker := handler.(*remoteAnalysisWorker)
+	if worker.runtimeImage != image {
+		t.Fatal("Agent analysis handler lost its deployment image identity")
+	}
+	var command *exec.Cmd
+	worker.command = func(kind string) *exec.Cmd {
+		command = s.workerCommand(kind)
+		return command
+	}
+	endpoint := httptest.NewServer(handler)
+	defer endpoint.Close()
+	entered := make(chan struct{}, 1)
+	finished := make(chan error, 1)
+	go func() {
+		_, _, err := computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, input, root, func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+			entered <- struct{}{}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}, nil, nil, 0)
+		finished <- err
+	}()
+	select {
+	case <-entered:
+	case err := <-finished:
+		t.Fatalf("Agent analysis stopped before reading its source: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent analysis did not start")
+	}
+	stopCtx, cancelStop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelStop()
+	if err := stopWorker(stopCtx); err != nil {
+		t.Fatal(err)
+	}
+	if command == nil || command.ProcessState == nil {
+		t.Fatal("Agent stop returned before its analysis child was reaped")
+	}
+	select {
+	case err := <-finished:
+		if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
+			t.Fatalf("interrupted Agent connection did not preserve its cleanup obligation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent shutdown left a Controller transfer blocked")
+	}
+	if err := probeRemoteAnalysisIdle(t.Context(), endpoint.URL, remoteTestToken); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("stopped Agent analysis handler accepted a new request: %v", err)
+	}
+	if err := stopWorker(stopCtx); err != nil {
+		t.Fatalf("repeated Agent analysis stop failed: %v", err)
 	}
 }

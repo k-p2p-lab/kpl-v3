@@ -111,8 +111,8 @@
       if (typeof analysisID !== "string" || !analysisID) throw new Error("Analysis snapshot identity is missing.");
       progress("Loading completed analysis");
       const source = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${savedID ? "&saved=1" : ""}`, format === "json" ? {responseType:"text"} : {}, signal);
-      const data = format === "json" ? JSON.parse(source) : source;
-      if (isBatch) batch.validate(data, id); else images.validateResponse(data, id);
+      let data = format === "json" ? JSON.parse(source) : source;
+      if (isBatch) data = batch.validate(data, id); else images.validateResponse(data, id);
       if (data.analysisId !== analysisID) throw new Error("The saved analysis changed. Download again to capture the current snapshot.");
       return {data, source};
     }

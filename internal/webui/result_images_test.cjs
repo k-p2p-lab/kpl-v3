@@ -166,6 +166,33 @@ test('saved-only batch preview keeps charts and JSON available without missing-s
  element('resultImagesDialog').close();
 });
 
+test('saved-only batch preview opens legacy null exclusions using its original snapshot', async () => {
+  const data = {
+    version:1, analysisId:'saved', batchId:'batch', name:'Saved mean', aggregation:'equal-run-mean-v1',
+    expectedRuns:2, missingRuns:0, excluded:null, summary:{},
+    runs:['a', 'b'].map(id => ({...sample(id), result:{...sample(id).result, batchId:'batch'}})),
+  };
+  const original = JSON.stringify(data), calls = [];
+  const {ui, element} = fixture(async (path, options) => {
+    calls.push([path, options.method]);
+    return path.includes('/result?') ? data : {batchId:'batch', state:'idle', id:'saved', stale:true};
+  });
+  try {
+    await ui.openBatch('batch', {savedOnly:true});
+    assert.deepEqual(calls, [
+      ['/api/v1/batch-analysis-jobs/batch', undefined],
+      ['/api/v1/batch-analysis-jobs/batch/result?jobId=saved&saved=1', undefined],
+    ]);
+    assert.match(element('resultImagesGrid').innerHTML, /Run Mean/);
+    assert.match(element('resultImagesDate').textContent, /2\/2 runs included/);
+    assert.equal(element('downloadResultAnalysis').hidden, false);
+    assert.equal(element('retryResultImages').hidden, true);
+    assert.equal(JSON.stringify(data), original);
+  } finally {
+    element('resultImagesDialog').close();
+  }
+});
+
 test("dashboard has one per-result image dialog and no comparison workspace", () => {
   const html = fs.readFileSync(__dirname + "/static/index.html", "utf8");
   assert.match(html, /<dialog[^>]+id="resultImagesDialog"/);

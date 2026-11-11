@@ -1155,7 +1155,7 @@
         if (data?.analysisId !== analysisID) {
           // Construct the same-origin URL locally, including for saved previews.
           data = await request(`${path}/result?jobId=${encodeURIComponent(analysisID)}${saved ? "&saved=1" : ""}`, {}, view.signal);
-          if (isBatch) batch.validate(data, id); else validateResponse(data, id);
+          if (isBatch) data = batch.validate(data, id); else validateResponse(data, id);
           if (data.analysisId !== analysisID)
             throw new Error("The saved analysis changed. Reopen this result.");
         }

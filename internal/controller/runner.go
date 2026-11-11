@@ -32,6 +32,7 @@ type ServerConfig struct {
 	// RunWorkers is enabled by the production Controller role.
 	RunWorkers                   bool
 	RuntimeImage                 string // Deployment-selected image reference, not a Docker Engine observation.
+	ControlNodeID                string
 	NetworkManagerURL            string
 	AgentDiscoveryDNS            string
 	PrometheusURL                string
@@ -39,6 +40,7 @@ type ServerConfig struct {
 	ArchiveMiBPerSecond          *uint64 // nil uses the default; zero disables idle throttling.
 	AnalysisWorkerURLs           []string
 	AnalysisWorkerToken          string
+	AnalysisAgentToken           string
 	AnalysisTransferMiBPerSecond uint64 // Zero uses the default transfer budget.
 	User                         string
 	Password                     string
@@ -90,8 +92,9 @@ type Server struct {
 	runs                       sync.WaitGroup
 	nodeSeq                    atomic.Uint64
 	repeatBatches              map[string]*repeatBatch
-	experimentQueue            []*workSlot // cancelMu; shared experiment/analysis FIFO
-	analysisGroupReady         bool        // cancelMu; the head analysis group cleared Peer cleanup
+	experimentQueue            []*workSlot            // cancelMu; shared experiment/analysis FIFO
+	analysisGroupReady         bool                   // cancelMu; the head analysis group cleared Peer cleanup
+	analysisGroupWorkers       []analysisWorkerTarget // cancelMu; frozen at group admission
 	analysisWorkerCleanupMu    sync.Mutex
 	workWorkers                sync.WaitGroup
 	workSlots                  map[string]*workSlot
@@ -150,6 +153,7 @@ func New(config ServerConfig, logger *slog.Logger) *Server {
 	if config.User != "" && config.Password != "" {
 		config.Token = auth.InternalToken(config.User, config.Password)
 		config.HostRebootToken = auth.HostRebootToken(config.User, config.Password)
+		config.AnalysisAgentToken = auth.AnalysisWorkerToken(config.User, config.Password)
 	}
 	if config.Listen == "" {
 		config.Listen = ":8080"

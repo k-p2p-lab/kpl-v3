@@ -161,6 +161,11 @@ func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *wo
 			return analysisProcessResult{Outputs: []analysisOutputInfo{full, compact}, SourceHash: snapshot.result.SourceHash}, err
 		}
 		result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: input.AnalysisID, BatchID: input.BatchID, Name: input.Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: input.ExpectedRuns, MissingRuns: input.MissingRuns, Excluded: input.Excluded, Runs: []resultAnalysis{}}
+		// The optional bootstrap field can be omitted for an empty slice.
+		// Persist the public artifact's empty collection as an array.
+		if result.Excluded == nil {
+			result.Excluded = []savedResult{}
+		}
 		hashes := make(map[string]string, len(input.Snapshots))
 		for index, descriptor := range input.Snapshots {
 			snapshot := workerSnapshotFromDescriptor(ctx, peer, index, descriptor)

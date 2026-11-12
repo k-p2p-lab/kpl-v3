@@ -27,7 +27,7 @@ func newAnalysisPrefetchFixture() analysisPrefetchFixture {
 			if name == "scenario.yaml" {
 				size = 8192
 			}
-			pattern := []byte(fmt.Sprintf("snapshot-%d-file-%d-0123456789abcdefghijklmnopqrstuvwxyz\n", snapshot, index))
+			pattern := fmt.Appendf(nil, "snapshot-%d-file-%d-0123456789abcdefghijklmnopqrstuvwxyz\n", snapshot, index)
 			data := bytes.Repeat(pattern, size/len(pattern)+1)[:size]
 			files = append(files, data)
 			descriptor.Files = append(descriptor.Files, workerSourceDescriptor{Name: name, Size: int64(len(data))})

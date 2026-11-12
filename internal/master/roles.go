@@ -183,6 +183,15 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		}
 	}
 	analysisTransfer := flags.Uint64("analysis-transfer-mib-per-second", analysisRate, "remote result analysis transfer limit per worker in MiB/s (1-1024)")
+	analysisPrefetch := uint64(64)
+	var analysisPrefetchErr error
+	if raw := os.Getenv("KPL_ANALYSIS_PREFETCH_MIB"); raw != "" {
+		analysisPrefetch, analysisPrefetchErr = strconv.ParseUint(raw, 10, 64)
+		if analysisPrefetchErr != nil {
+			analysisPrefetchErr = errors.New("invalid KPL_ANALYSIS_PREFETCH_MIB")
+		}
+	}
+	analysisPrefetchMiB := flags.Uint64("analysis-prefetch-mib", analysisPrefetch, "remote result analysis read-ahead queue per worker in MiB (1-1024)")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
@@ -202,6 +211,12 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	}
 	if *analysisTransfer < 1 || *analysisTransfer > 1024 {
 		return errors.New("analysis transfer limit must be between 1 and 1024 MiB/s")
+	}
+	if err := roleDefaultError(flags, "analysis-prefetch-mib", analysisPrefetchErr); err != nil {
+		return err
+	}
+	if *analysisPrefetchMiB < 1 || *analysisPrefetchMiB > 1024 {
+		return errors.New("analysis prefetch queue must be between 1 and 1024 MiB")
 	}
 	analysisToken, err := analysisWorkerTokenFromEnv()
 	if err != nil {
@@ -232,6 +247,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		AnalysisWorkerURLs:           analysisWorkers,
 		AnalysisWorkerToken:          analysisToken,
 		AnalysisTransferMiBPerSecond: *analysisTransfer,
+		AnalysisPrefetchMiB:          *analysisPrefetchMiB,
 		User:                         user,
 		Password:                     password,
 		MetricsURL:                   *metricsURL,

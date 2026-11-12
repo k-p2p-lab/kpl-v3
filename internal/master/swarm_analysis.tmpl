@@ -6,6 +6,7 @@ services:
       KPL_ANALYSIS_WORKER_URLS: '{{.Origins}}'
       KPL_ANALYSIS_WORKER_TOKEN_FILE: /run/secrets/kpl-analysis
       KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND: '${KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND:-32}'
+      KPL_ANALYSIS_PREFETCH_MIB: '${KPL_ANALYSIS_PREFETCH_MIB:-64}'
     networks: [analysis]
     secrets:
       - {source: analysis-auth, target: kpl-analysis, uid: '100', gid: '101', mode: 0400}

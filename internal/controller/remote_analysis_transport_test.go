@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -66,6 +67,75 @@ func TestRemoteAnalysisBuildCompatibility(t *testing.T) {
 				if compatibleRemoteAnalysis(hello, tc.workerBuild, tc.workerImage) {
 					t.Fatal("mismatched analysis definition accepted")
 				}
+			}
+		})
+	}
+}
+
+func TestRemoteAnalysisPrefetchCompatibilityLimits(t *testing.T) {
+	build := "sha256:" + strings.Repeat("1", 64)
+	for _, size := range []uint64{0, 1, 64, 1024, 1025} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			hello := remoteAnalysisHello{Protocol: remoteAnalysisProtocol, AnalysisVersion: currentAnalysisVersion, Build: build, PrefetchMiB: size}
+			if got, want := compatibleRemoteAnalysis(hello, build, ""), size <= 1024; got != want {
+				t.Fatalf("prefetch=%d MiB compatibility=%t, want %t", size, got, want)
+			}
+		})
+	}
+}
+
+func TestRemoteAnalysisPrefetchRejectsOversizedBudgetBeforeDial(t *testing.T) {
+	_, _, err := computeRemoteAnalysis(t.Context(), "invalid endpoint", remoteTestToken, analysisProcessInput{}, nil, nil, nil, nil, 0, 1025)
+	if err == nil || !strings.Contains(err.Error(), "analysis prefetch must be between 1 and 1024 MiB") {
+		t.Fatalf("invalid prefetch reached endpoint dialing: %v", err)
+	}
+}
+
+func TestRemoteAnalysisPrefetchForwardsConfiguredBudget(t *testing.T) {
+	for _, configured := range []uint64{0, 128} {
+		t.Run(fmt.Sprint(configured), func(t *testing.T) {
+			hellos := make(chan remoteAnalysisHello, 1)
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				frame, err := readRemoteAnalysisFrame(conn)
+				var hello remoteAnalysisHello
+				if err != nil || frame.Method != "start" || json.Unmarshal(frame.Body, &hello) != nil {
+					return
+				}
+				hellos <- hello
+				body, _ := json.Marshal("prefetch handshake test complete")
+				if err := conn.WriteJSON(remoteAnalysisFrame{Method: "error", Body: body}); err != nil {
+					return
+				}
+				// Keep the socket open until Controller processes this terminal
+				// frame and closes it; an early EOF could mask the handshake.
+				_, _, _ = conn.ReadMessage()
+			}))
+			defer endpoint.Close()
+			root, err := os.OpenRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			_, _, err = computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, analysisProcessInput{}, root, nil, nil, nil, 0, configured)
+			if err == nil || !strings.Contains(err.Error(), "prefetch handshake test complete") {
+				t.Fatalf("test worker did not complete its handshake: %v", err)
+			}
+			select {
+			case hello := <-hellos:
+				want := configured
+				if want == 0 {
+					want = 64
+				}
+				if hello.PrefetchMiB != want {
+					t.Fatalf("worker received %d MiB, want %d", hello.PrefetchMiB, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Controller did not send the configured prefetch budget")
 			}
 		})
 	}
@@ -168,7 +238,7 @@ func TestRemoteAnalysisTransportMatchesLocalProcess(t *testing.T) {
 		return source(ctx, method, body)
 	}, func(progress analysisProcessProgress) {
 		processed += progress.Bytes
-	}, metadata, 0)
+	}, metadata, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +274,7 @@ func TestRemoteAnalysisTransportSingleRunReturnsBothArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.discard()
-	remote, _, err := computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, input, root, workerSourceHandler(snapshots), nil, nil, 0)
+	remote, _, err := computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, input, root, workerSourceHandler(snapshots), nil, nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +344,7 @@ func TestRemoteAnalysisTransportRejectsCorruptBinaryFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	artifacts, _, err := computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, analysisProcessInput{}, root, nil, nil, nil, 0)
+	artifacts, _, err := computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, analysisProcessInput{}, root, nil, nil, nil, 0, 0)
 	if artifacts != nil {
 		defer artifacts.discard()
 	}
@@ -305,7 +375,7 @@ func TestRemoteAnalysisTransportCancelReapsChild(t *testing.T) {
 			entered <- struct{}{}
 			<-callCtx.Done()
 			return nil, callCtx.Err()
-		}, nil, nil, 0)
+		}, nil, nil, 0, 0)
 		finished <- err
 	}()
 	select {
@@ -359,7 +429,7 @@ func TestAgentAnalysisWorkerStopReapsAcceptedCalculation(t *testing.T) {
 			entered <- struct{}{}
 			<-ctx.Done()
 			return nil, ctx.Err()
-		}, nil, nil, 0)
+		}, nil, nil, 0, 0)
 		finished <- err
 	}()
 	select {

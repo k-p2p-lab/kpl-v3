@@ -37,6 +37,7 @@ var (
 type remoteAnalysisHello struct {
 	Protocol        int                  `json:"protocol"`
 	AnalysisVersion int                  `json:"analysisVersion"`
+	PrefetchMiB     uint64               `json:"prefetchMiB,omitempty"`
 	Build           string               `json:"build"`
 	Input           analysisProcessInput `json:"input"`
 }
@@ -378,7 +379,13 @@ func probeRemoteAnalysisIdle(ctx context.Context, endpoint, token string) error 
 	return nil
 }
 
-func computeRemoteAnalysis(ctx context.Context, endpoint, token string, input analysisProcessInput, root *os.Root, source workerproc.Handler, progress func(analysisProcessProgress), metadata workerproc.Handler, transferRate uint64) (_ *workerAnalysisArtifacts, result analysisProcessResult, finalErr error) {
+func computeRemoteAnalysis(ctx context.Context, endpoint, token string, input analysisProcessInput, root *os.Root, source workerproc.Handler, progress func(analysisProcessProgress), metadata workerproc.Handler, transferRate, prefetchMiB uint64) (_ *workerAnalysisArtifacts, result analysisProcessResult, finalErr error) {
+	if prefetchMiB == 0 {
+		prefetchMiB = defaultAnalysisPrefetchMiB
+	}
+	if prefetchMiB > maxAnalysisPrefetchMiB {
+		return nil, result, errors.New("analysis prefetch must be between 1 and 1024 MiB")
+	}
 	conn, err := dialRemoteAnalysisWorker(ctx, endpoint, token)
 	if err != nil {
 		return nil, result, err
@@ -409,7 +416,7 @@ func computeRemoteAnalysis(ctx context.Context, endpoint, token string, input an
 			}
 		}
 	}()
-	if err := socket.send("start", remoteAnalysisHello{Protocol: remoteAnalysisProtocol, AnalysisVersion: currentAnalysisVersion, Build: build, Input: input}, nil); err != nil {
+	if err := socket.send("start", remoteAnalysisHello{Protocol: remoteAnalysisProtocol, AnalysisVersion: currentAnalysisVersion, PrefetchMiB: prefetchMiB, Build: build, Input: input}, nil); err != nil {
 		return nil, result, err
 	}
 

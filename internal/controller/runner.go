@@ -42,6 +42,7 @@ type ServerConfig struct {
 	AnalysisWorkerToken          string
 	AnalysisAgentToken           string
 	AnalysisTransferMiBPerSecond uint64 // Zero uses the default transfer budget.
+	AnalysisPrefetchMiB          uint64 // Zero uses the default remote read-ahead queue size.
 	User                         string
 	Password                     string
 	Listen                       string

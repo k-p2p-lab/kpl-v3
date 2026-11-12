@@ -246,7 +246,7 @@ func (s *Server) computeAssignedAnalysis(ctx context.Context, slot *workSlot, in
 		return nil, analysisProcessResult{}, err
 	}
 	source := s.remoteAnalysisSnapshotSource(snapshots)
-	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.analysisWorkerCredential(slot), input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond)
+	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.analysisWorkerCredential(slot), input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond, s.config.AnalysisPrefetchMiB)
 	if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
 		err = errors.Join(err, s.clearAnalysisWorker(slot.analysisWorkerURL))
 	}

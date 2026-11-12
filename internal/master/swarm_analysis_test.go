@@ -44,7 +44,7 @@ func TestDedicatedAnalysisStackIsolation(t *testing.T) {
 		"PATH=" + os.Getenv("PATH"), "DOCKER_CONFIG=" + t.TempDir(), "DOCKER_HOST=unix:///nonexistent-kpl-offline-config.sock",
 		"KPL_IMAGE=fixture.invalid/kpl@sha256:" + strings.Repeat("c", 64), "KPL_CONTROL_NODE_ID=control", "KPL_USER=fixture-user", "KPL_PASSWORD=fixture-password",
 		"GRAFANA_ADMIN_PASSWORD=fixture-grafana", "KPL_CONTROLLER_METRICS_URL=http://fixture:8080/metrics", "KPL_PROMETHEUS_EXTERNAL_URL=http://fixture:9090/",
-		"KPL_ANALYSIS_SECRET=fixture-analysis", "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND=11",
+		"KPL_ANALYSIS_SECRET=fixture-analysis", "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND=11", "KPL_ANALYSIS_PREFETCH_MIB=128",
 		"KPL_ANALYSIS_CPUS=3", "KPL_ANALYSIS_MEMORY_MIB=2048",
 	}
 	automatic := exec.CommandContext(ctx, docker, append([]string{"stack", "config"}, base...)...)
@@ -61,6 +61,9 @@ func TestDedicatedAnalysisStackIsolation(t *testing.T) {
 	}
 	if automaticStack.Services["controller"].Environment["KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND"] != "11" {
 		t.Fatal("automatic Agent analysis ignored the configured transfer limit")
+	}
+	if automaticStack.Services["controller"].Environment["KPL_ANALYSIS_PREFETCH_MIB"] != "128" {
+		t.Fatal("automatic Agent analysis ignored the configured prefetch queue")
 	}
 	for name := range automaticStack.Services {
 		if strings.HasPrefix(name, analysisWorkerPrefix) {
@@ -133,6 +136,9 @@ func TestDedicatedAnalysisStackIsolation(t *testing.T) {
 	}
 	if len(controller.Networks) != 3 || controller.Environment["KPL_ANALYSIS_WORKER_URLS"] != "http://analysis-worker-1:8093 http://analysis-worker-2:8093" || controller.Environment["KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND"] != "11" {
 		t.Fatalf("wrong worker or Controller environment or network configuration")
+	}
+	if controller.Environment["KPL_ANALYSIS_PREFETCH_MIB"] != "128" {
+		t.Fatal("dedicated analysis workers ignored the configured prefetch queue")
 	}
 	for _, service := range append(workers, controller) {
 		if len(service.Secrets) != 1 {

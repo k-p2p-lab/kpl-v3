@@ -80,7 +80,7 @@ var (
 )
 
 func compatibleRemoteAnalysis(hello remoteAnalysisHello, build, image string) bool {
-	if hello.Protocol != remoteAnalysisProtocol || hello.AnalysisVersion != currentAnalysisVersion ||
+	if hello.Protocol != remoteAnalysisProtocol || hello.AnalysisVersion != currentAnalysisVersion || hello.PrefetchMiB > maxAnalysisPrefetchMiB ||
 		!analysisBinaryHash.MatchString(build) || !analysisBinaryHash.MatchString(hello.Build) {
 		return false
 	}
@@ -170,7 +170,12 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		return nil, result, errors.New("incompatible remote analysis request")
 	}
 	var mu sync.Mutex
+	var exchangeMu sync.Mutex
 	exchange := func(ctx context.Context, method string, value any, data []byte) (remoteAnalysisFrame, error) {
+		// Replies have no request IDs: a background source fetch and a
+		// foreground control callback must share the whole exchange.
+		exchangeMu.Lock()
+		defer exchangeMu.Unlock()
 		if err := ctx.Err(); err != nil {
 			return remoteAnalysisFrame{}, err
 		}
@@ -193,8 +198,22 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		}
 		return reply, nil
 	}
-	var bufferedRead workerSourceRead
-	var readBuffer []byte
+	prefetchMiB := hello.PrefetchMiB
+	if prefetchMiB == 0 {
+		prefetchMiB = defaultAnalysisPrefetchMiB
+	}
+	prefetch := newAnalysisPrefetch(jobCtx, hello.Input, int64(prefetchMiB)<<20, func(ctx context.Context, read workerSourceRead) (workerSourceBytes, error) {
+		reply, err := exchange(ctx, "source.read", read, nil)
+		if err != nil {
+			return workerSourceBytes{}, err
+		}
+		var eof bool
+		if err := json.Unmarshal(reply.Body, &eof); err != nil {
+			return workerSourceBytes{}, errors.New("invalid remote analysis source block")
+		}
+		return workerSourceBytes{Data: reply.data, EOF: eof}, nil
+	})
+	defer prefetch.close()
 	var pendingProgress analysisProcessProgress
 	var lastProgress time.Time
 	flushProgress := func(ctx context.Context) error {
@@ -206,8 +225,8 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		return nil
 	}
 	broker := func(ctx context.Context, method string, body json.RawMessage) (any, error) {
-		// The private child can have concurrent callbacks. Each remote exchange
-		// and its single-block read cache stay serialized within this job.
+		// Serialize child callbacks independently of the background producer.
+		// Cache hits can proceed while its next network exchange is in flight.
 		mu.Lock()
 		defer mu.Unlock()
 		if err := ctx.Err(); err != nil {
@@ -219,35 +238,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 			if err := json.Unmarshal(body, &read); err != nil {
 				return nil, err
 			}
-			length, eof, err := remoteAnalysisReadBoundary(hello.Input, read)
-			if err != nil || length == 0 {
-				return workerSourceBytes{EOF: eof}, err
-			}
-			start := read.Offset - bufferedRead.Offset
-			if read.Snapshot == bufferedRead.Snapshot && read.File == bufferedRead.File &&
-				start >= 0 && start <= int64(len(readBuffer))-int64(length) {
-				return workerSourceBytes{Data: readBuffer[start : start+int64(length)], EOF: eof}, nil
-			}
-			// Sequential log scans request 64 KiB blocks. Fetch ahead up to the
-			// existing 1 MiB source cap and leave small random samples alone.
-			fetch := read
-			if fetch.Length >= 64<<10 {
-				fetch.Length = workerSourceChunk
-			}
-			fetchLength, fetchEOF, err := remoteAnalysisReadBoundary(hello.Input, fetch)
-			if err != nil {
-				return nil, err
-			}
-			reply, err := exchange(ctx, method, fetch, nil)
-			if err != nil {
-				return nil, err
-			}
-			var actualEOF bool
-			if json.Unmarshal(reply.Body, &actualEOF) != nil || actualEOF != fetchEOF || len(reply.data) != fetchLength {
-				return nil, errors.New("invalid remote analysis source block")
-			}
-			bufferedRead, readBuffer = fetch, reply.data
-			return workerSourceBytes{Data: readBuffer[:length], EOF: eof}, nil
+			return prefetch.read(ctx, read)
 		case "analysis.progress":
 			var update analysisProcessProgress
 			if json.Unmarshal(body, &update) != nil || update.Bytes < 0 || update.Bytes > workerproc.MaxMessageBytes {
@@ -268,6 +259,9 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 			}
 			return nil, nil
 		case "analysis.batch-metadata":
+			// The Controller closes source admission at this exchange. Drain
+			// the final in-flight prefetch reply before crossing that boundary.
+			prefetch.close()
 			if pendingProgress.Bytes != 0 {
 				if err := flushProgress(ctx); err != nil {
 					return nil, err
@@ -276,6 +270,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 			reply, err := exchange(ctx, method, body, nil)
 			return reply.Body, err
 		case "analysis.write":
+			prefetch.close()
 			if pendingProgress.Bytes != 0 {
 				if err := flushProgress(ctx); err != nil {
 					return nil, err
@@ -297,6 +292,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 	}
 	w.logger.Info("remote analysis calculation started", "batchId", hello.Input.BatchID, "analysisId", hello.Input.AnalysisID, "workerPid", process.PID())
 	computeErr := process.Call(jobCtx, "analyze", nil, &result)
+	prefetch.close()
 	stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	return process, result, errors.Join(computeErr, process.CloseContext(stopCtx))

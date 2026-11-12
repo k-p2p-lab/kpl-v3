@@ -60,6 +60,7 @@ func TestConfigSettingValidation(t *testing.T) {
 	valid := map[string][]string{
 		"KPL_AGENT_HOST_REBOOT_ENABLED": {"true", "false"},
 		"KPL_ARCHIVE_MIB_PER_SECOND":    {"0", "32", "128", "18446744073709551615"},
+		"KPL_ANALYSIS_PREFETCH_MIB":     {"1", "64", "1024"},
 		"KPL_ARCHIVE_HOST_PATH":         {"", "/mnt/nas/kpl/runs", "/mnt/archive space/$literal/${VALUE}/quote\"/한글"},
 		"KPL_STACK_NAME":                {"kpl", "other-stack_2"}, "KPL_CONTROL_NODE_ID": {"manager1"}, "KPL_PEER_NETWORK": {"kpl-peers"},
 		"KPL_PEER_SUBNET": {"", "10.11.0.0/16", "0.0.0.0/1"}, "KPL_RUN_MIN_FREE_BYTES": {"0", "2147483648"},
@@ -76,6 +77,7 @@ func TestConfigSettingValidation(t *testing.T) {
 	invalid := map[string][]string{
 		"KPL_AGENT_HOST_REBOOT_ENABLED": {"", "1", "0", "TRUE", "False", " true", "false ", "yes"},
 		"KPL_ARCHIVE_MIB_PER_SECOND":    {"-1", "01", "1.5", "abc", "18446744073709551616"},
+		"KPL_ANALYSIS_PREFETCH_MIB":     {"", "0", "-1", "01", "1.5", "abc", "1025", "18446744073709551616"},
 		"KPL_ARCHIVE_HOST_PATH":         {"runs", "../runs", "./runs", "/", "//mnt/runs", "/mnt/../runs", "/mnt/./runs", "/mnt/runs/", "C:\\runs", "/mnt/tab\there", "/mnt/new\nline", "/mnt/\x7f", "/mnt/\u0085", "/mnt/\xff"},
 		"UNKNOWN":                       {"ignored"}, "KPL_STACK_NAME": {"Kpl", "_kpl", "-kpl", "kpl.name", "two stacks"}, "KPL_CONTROL_NODE_ID": {"", "-manager", "node/id"},
 		"KPL_PEER_NETWORK": {"", "-peers", "peers/name"}, "KPL_PEER_SUBNET": {"10.11.0.1/24", "010.11.0.0/24", "10.0.0.0/08", "10.0.0.0/31", "::/64", "10.11.0.0/33", "10.0.0.0/24 extra"},

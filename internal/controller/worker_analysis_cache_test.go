@@ -123,7 +123,7 @@ func TestBatchAnalysisWorkersReuseCachedRunProjectionWithoutRawSources(t *testin
 				worker := newRemoteAnalysisWorker(remoteTestToken, s.logger, s.workerCommand)
 				endpoint := httptest.NewServer(worker)
 				defer endpoint.Close()
-				artifacts, result, err = computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, input, root, workerSourceHandler(snapshots), progress, metadata, 1024)
+				artifacts, result, err = computeRemoteAnalysis(t.Context(), endpoint.URL, remoteTestToken, input, root, workerSourceHandler(snapshots), progress, metadata, 1024, 0)
 			} else {
 				artifacts, result, err = s.computeAnalysisProcess(t.Context(), input, snapshots, root, progress, metadata)
 			}

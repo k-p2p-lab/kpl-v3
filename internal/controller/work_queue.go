@@ -125,8 +125,8 @@ func (s *Server) updateQueuePositionsLocked() {
 	s.state.notify()
 }
 
-// The Controller runs one analysis child locally. Each configured endpoint
-// adds one worker for the contiguous analysis prefix, after Peer cleanup.
+// The Controller runs one analysis child locally. Each eligible Agent host
+// adds one calculation for the contiguous analysis prefix, after Peer cleanup.
 func (s *Server) readyWorkSlotsLocked() []*workSlot {
 	queue := s.experimentQueue
 	if len(queue) == 0 {

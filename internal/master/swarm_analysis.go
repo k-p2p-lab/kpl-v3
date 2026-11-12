@@ -2,147 +2,144 @@ package master
 
 import (
 	"context"
-	_ "embed"
-	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
-	"text/template"
+	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/controller"
 )
 
-const maxAnalysisWorkers = 16
-const analysisWorkerPrefix = "analysis-worker-"
-
-//go:embed swarm_analysis.tmpl
-var analysisComposeSource string
-
-var analysisCompose = template.Must(template.New("analysis-compose").Parse(analysisComposeSource))
-
-func validateAnalysisNodeIDs(value string) error {
-	nodes := strings.Fields(value)
-	if len(nodes) > maxAnalysisWorkers {
-		return fmt.Errorf("KPL_ANALYSIS_NODE_IDS supports up to %d nodes", maxAnalysisWorkers)
-	}
-	seen := make(map[string]bool, len(nodes))
-	for _, node := range nodes {
-		if !nodeIDPattern.MatchString(node) || seen[node] {
-			return errors.New("KPL_ANALYSIS_NODE_IDS must contain distinct exact Swarm node IDs separated by spaces")
-		}
-		seen[node] = true
-	}
-	return nil
-}
-
-func analysisWorkerIndex(component string) (int, bool) {
-	number, ok := strings.CutPrefix(component, analysisWorkerPrefix)
+// Recognize only previously deployed, owned services during migration. There
+// is no role, Compose definition or configurable deployment for these names.
+func legacyAnalysisWorker(component string) bool {
+	number, ok := strings.CutPrefix(component, "analysis-worker-")
 	if !ok {
-		return 0, false
+		return false
 	}
 	index, err := strconv.Atoi(number)
-	if err != nil || index < 1 || index > maxAnalysisWorkers || strconv.Itoa(index) != number {
-		return 0, false
-	}
-	return index - 1, true
+	return err == nil && index >= 1 && index <= 16 && strconv.Itoa(index) == number
 }
 
-func writeAnalysisCompose(writer io.Writer, value string) error {
-	if err := validateAnalysisNodeIDs(value); err != nil {
-		return err
-	}
-	type worker struct{ Name, NodeID string }
-	nodes := strings.Fields(value)
-	workers := make([]worker, 0, len(nodes))
-	origins := make([]string, 0, len(nodes))
-	for i, node := range nodes {
-		name := analysisWorkerPrefix + strconv.Itoa(i+1)
-		workers = append(workers, worker{Name: name, NodeID: node})
-		origins = append(origins, "http://"+name+":8093")
-	}
-	return analysisCompose.Execute(writer, struct {
-		Origins string
-		Workers []worker
-	}{Origins: strings.Join(origins, " "), Workers: workers})
-}
+type legacyAnalysisService struct{ name, id string }
 
-func checkAnalysisSwarm(c Config, docker func(...string) (string, error)) error {
-	nodes := strings.Fields(c["KPL_ANALYSIS_NODE_IDS"])
-	if len(nodes) == 0 {
-		return nil
-	}
-	format := "{{.ID}} {{.Description.Platform.OS}} {{.Status.State}} {{.Spec.Availability}}"
-	metadata, err := docker(append([]string{"node", "inspect", "--format", format}, nodes...)...)
-	if err != nil {
-		return fmt.Errorf("inspect analysis nodes: %w", err)
-	}
-	expected := make(map[string]bool, len(nodes))
-	for _, node := range nodes {
-		expected[node+" linux ready active"] = true
-	}
-	for _, record := range strings.Split(metadata, "\n") {
-		if !expected[record] {
-			return errors.New("KPL_ANALYSIS_NODE_IDS must identify exact Linux, Ready, Active Swarm nodes")
-		}
-		delete(expected, record)
-	}
-	if len(expected) != 0 {
-		return errors.New("Docker returned an incomplete analysis node inventory")
-	}
-	secret := c["KPL_ANALYSIS_SECRET"]
-	name, err := docker("secret", "inspect", "--format", "{{.Spec.Name}}", secret)
-	if err != nil {
-		return fmt.Errorf("inspect analysis Docker secret: %w", err)
-	}
-	if name != secret {
-		return errors.New("KPL_ANALYSIS_SECRET must identify an existing Docker secret by name")
-	}
-	return nil
-}
-
-func (s *swarm) checkAnalysisSwarm(ctx context.Context) error {
-	return checkAnalysisSwarm(s.config, func(args ...string) (string, error) { return s.output(ctx, args...) })
-}
-
-type deployedAnalysisWorker struct {
-	name, id string
-	index    int
-}
-
-func (s *swarm) analysisWorkers() []deployedAnalysisWorker {
-	var workers []deployedAnalysisWorker
+func (s *swarm) legacyAnalysisServices() []legacyAnalysisService {
+	var workers []legacyAnalysisService
 	for i, name := range s.services {
-		index, ok := analysisWorkerIndex(strings.TrimPrefix(name, s.stack+"_"))
-		if ok {
-			workers = append(workers, deployedAnalysisWorker{name: name, id: s.serviceIDs[i], index: index})
+		if legacyAnalysisWorker(strings.TrimPrefix(name, s.stack+"_")) {
+			workers = append(workers, legacyAnalysisService{name: name, id: s.serviceIDs[i]})
 		}
 	}
 	return workers
 }
 
-// A move or removal requires the verified service shutdown performed by restart.
-func (s *swarm) checkAnalysisPlacementUnchanged(ctx context.Context) error {
-	nodes := strings.Fields(s.config["KPL_ANALYSIS_NODE_IDS"])
-	for _, worker := range s.analysisWorkers() {
-		if worker.index >= len(nodes) {
-			return errors.New("use kpl swarm restart to remove analysis workers")
+const retiredAnalysisEnvironment = "KPL_RETIRED_ANALYSIS_ENDPOINTS"
+const retiredAnalysisEnvironmentFormat = `{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{if eq (index (split . "=") 0) "KPL_RETIRED_ANALYSIS_ENDPOINTS"}}{{println .}}{{end}}{{end}}`
+
+// Read only the non-secret retirement proof from an ownership-verified
+// Controller service. Keeping it in the desired service environment preserves
+// it across a failed Controller startup and the next deployment attempt.
+func (s *swarm) loadRetiredAnalysisProof(ctx context.Context) error {
+	if !s.present["controller"] {
+		return nil
+	}
+	var serviceID string
+	for index, name := range s.services {
+		if name == s.stack+"_controller" {
+			serviceID = s.serviceIDs[index]
+			break
 		}
-		constraints, err := s.output(ctx, "service", "inspect", "--format", "{{range .Spec.TaskTemplate.Placement.Constraints}}{{println .}}{{end}}", worker.id)
+	}
+	if serviceID == "" {
+		return fmt.Errorf("Controller service ownership is unavailable")
+	}
+	value, err := s.output(ctx, "service", "inspect", "--format", retiredAnalysisEnvironmentFormat, serviceID)
+	if err != nil {
+		return fmt.Errorf("inspect retired analysis proof: %w", err)
+	}
+	var endpoints []string
+	for _, line := range strings.Split(value, "\n") {
+		if line == "" {
+			continue
+		}
+		proof, ok := strings.CutPrefix(line, retiredAnalysisEnvironment+"=")
+		if !ok {
+			return fmt.Errorf("invalid retired analysis proof metadata")
+		}
+		endpoints = append(endpoints, strings.Fields(proof)...)
+	}
+	if err := controller.ValidateRetiredAnalysisEndpoints(endpoints); err != nil {
+		return err
+	}
+	var records []analysisRetirementRecord
+	for _, endpoint := range endpoints {
+		records = append(records, analysisRetirementRecord{Endpoint: endpoint, SourceControllerID: serviceID, ObservedAt: time.Now().UTC()})
+	}
+	// Preserve already accepted, ownership-verified Controller provenance
+	// before a restart/republish can destroy its desired service environment.
+	return s.persistAnalysisRetirements(ctx, records)
+}
+
+func (s *swarm) rememberRetiredAnalysisEndpoint(endpoint string) {
+	for _, existing := range s.retiredAnalysisEndpoints {
+		if existing == endpoint {
+			return
+		}
+	}
+	s.retiredAnalysisEndpoints = append(s.retiredAnalysisEndpoints, endpoint)
+}
+
+func (s *swarm) withRetiredAnalysisProof() {
+	proof := strings.Join(s.retiredAnalysisEndpoints, " ")
+	s.a = s.a.WithEnv(map[string]*string{retiredAnalysisEnvironment: &proof})
+}
+
+// The old Controller can still own remote calculations. Stop admission and
+// verify its cleanup before stopping/removing the retired service endpoints.
+func (s *swarm) stopLegacyAnalysisServices(ctx context.Context) error {
+	workers := s.legacyAnalysisServices()
+	if len(workers) == 0 {
+		return nil
+	}
+	for _, worker := range workers {
+		if _, err := s.captureTasks(ctx, worker.id, ""); err != nil {
+			return err
+		}
+	}
+	if s.present["controller"] {
+		if err := s.stopService(ctx, s.stack+"_controller", s.controllerTimeout); err != nil {
+			return err
+		}
+	}
+	for _, worker := range workers {
+		if err := s.stopService(ctx, worker.id, s.agentTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *swarm) removeLegacyAnalysisServices(ctx context.Context) error {
+	for _, worker := range s.legacyAnalysisServices() {
+		// Recheck task evidence at the removal boundary; a successful earlier
+		// stop is not a substitute for observing the final owned tasks.
+		tasks, err := s.captureTasks(ctx, worker.id, "")
 		if err != nil {
-			return fmt.Errorf("inspect analysis worker placement: %w", err)
+			return err
 		}
-		var pinnedNode string
-		for _, constraint := range strings.Split(constraints, "\n") {
-			left, right, ok := strings.Cut(constraint, "==")
-			if ok && strings.TrimSpace(left) == "node.id" {
-				if pinnedNode != "" {
-					return errors.New("analysis worker has conflicting node constraints")
-				}
-				pinnedNode = strings.TrimSpace(right)
-			}
+		if err := s.waitTasks(ctx, tasks, s.agentTimeout); err != nil {
+			return err
 		}
-		if pinnedNode != nodes[worker.index] {
-			return errors.New("use kpl swarm restart to move analysis workers")
+		if err := s.recordAnalysisRetirement(ctx, worker, tasks); err != nil {
+			return err
 		}
+		if err := s.run(ctx, "service", "rm", worker.id); err != nil {
+			return fmt.Errorf("remove retired analysis service: %w", err)
+		}
+		// The name came from ownership-checked inventory and all tasks were
+		// verified stopped before removal. Absence alone is never proof.
+		component := strings.TrimPrefix(worker.name, s.stack+"_")
+		s.rememberRetiredAnalysisEndpoint("http://" + component + ":8093")
 	}
 	return nil
 }

@@ -7,10 +7,10 @@ import (
 	"sync/atomic"
 )
 
-// Keep one execution lane available for telemetry on multi-CPU Controllers.
-// The existing shared analysis slot still bounds full event indexes in memory.
+// Analysis runs in an isolated child with its own execution budget. Graph
+// calculations can use that budget without reserving a Controller service lane.
 func analysisParallelism() int {
-	return min(4, max(1, runtime.GOMAXPROCS(0)-1))
+	return max(1, runtime.GOMAXPROCS(0))
 }
 
 // Each index has one owner. Wait for every worker before returning so callers

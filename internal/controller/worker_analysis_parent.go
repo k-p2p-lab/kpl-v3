@@ -113,6 +113,11 @@ func (a *workerAnalysisArtifacts) seal(ctx context.Context, infos []analysisOutp
 // Only bounded source blocks and encoded output blocks cross the connection.
 // The full analysis, graph arrays and batch accumulators stay in the child.
 func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProcessInput, snapshots []*resultSnapshot, root *os.Root, progress func(analysisProcessProgress), metadata workerproc.Handler) (*workerAnalysisArtifacts, analysisProcessResult, error) {
+	input = s.analysisProcessResources(input)
+	options, err := analysisProcessOptions(input, s.workerCommand)
+	if err != nil {
+		return nil, analysisProcessResult{}, err
+	}
 	names := []string{"full"}
 	if input.BatchID == "" {
 		names = append(names, "compact")
@@ -163,7 +168,7 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 		}
 		return nil, invalidAnalysisOperation(method)
 	}
-	process, err := workerproc.Start(ctx, "controller-analysis", input, broker, workerproc.Options{Command: s.workerCommand})
+	process, err := workerproc.Start(ctx, "controller-analysis", input, broker, options)
 	if err != nil {
 		if process != nil {
 			s.rememberUnreapedWorker(input.RunID, process)
@@ -180,11 +185,12 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 			cancel()
 		}
 	}()
-	s.logger.Info("analysis worker started", "run", input.RunID, "analysis", input.AnalysisID, "workerPid", process.PID(), "workerEpoch", process.Epoch())
+	s.logger.Info("analysis worker started", "run", input.RunID, "analysis", input.AnalysisID, "workerPid", process.PID(), "workerEpoch", process.Epoch(), "cpus", options.MaxProcs, "memoryTargetBytes", options.MemoryLimitBytes)
 	var result analysisProcessResult
 	if err := process.Call(ctx, "analyze", nil, &result); err != nil {
 		return nil, result, err
 	}
+	s.logger.Info("analysis calculation resources", "analysis", input.AnalysisID, "cpus", result.CPUs, "memoryTargetBytes", result.MemoryLimitBytes)
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	err = process.CloseContext(closeCtx)
 	cancel()
@@ -234,19 +240,19 @@ func (s *Server) captureAnalysisSource(ctx context.Context, slot *workSlot, id s
 }
 
 func (s *Server) computeAssignedAnalysis(ctx context.Context, slot *workSlot, input analysisProcessInput, snapshots []*resultSnapshot, root *os.Root, progress func(analysisProcessProgress), metadata workerproc.Handler) (*workerAnalysisArtifacts, analysisProcessResult, error) {
+	input = s.analysisProcessResources(input)
 	if slot.analysisWorkerURL == "" {
 		return s.computeAnalysisProcess(ctx, input, snapshots, root, progress, metadata)
 	}
 	input.RuntimeImage = s.config.RuntimeImage
-	var owner []model.Agent
-	if slot.analysisAgent != nil {
-		owner = []model.Agent{*slot.analysisAgent}
+	if slot.analysisAgent == nil {
+		return nil, analysisProcessResult{}, errors.New("remote analysis requires an assigned Agent identity")
 	}
-	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL, owner...); err != nil {
+	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL, *slot.analysisAgent); err != nil {
 		return nil, analysisProcessResult{}, err
 	}
 	source := s.remoteAnalysisSnapshotSource(snapshots)
-	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.analysisWorkerCredential(slot), input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond, s.config.AnalysisPrefetchMiB)
+	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.config.AnalysisAgentToken, input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond, s.config.AnalysisPrefetchMiB)
 	if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
 		err = errors.Join(err, s.clearAnalysisWorker(slot.analysisWorkerURL))
 	}

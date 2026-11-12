@@ -31,20 +31,22 @@ type swarmOptions struct {
 }
 
 type swarm struct {
-	a                     *App
-	config                Config
-	configuredImage       string
-	options               swarmOptions
-	stack, network, label string
-	timeout               time.Duration
-	pullTimeout           time.Duration
-	buildTimeout          time.Duration
-	pushTimeout           time.Duration
-	agentTimeout          time.Duration
-	controllerTimeout     time.Duration
-	services              []string
-	serviceIDs            []string
-	present               map[string]bool
+	a                        *App
+	config                   Config
+	configuredImage          string
+	options                  swarmOptions
+	stack, network, label    string
+	timeout                  time.Duration
+	pullTimeout              time.Duration
+	buildTimeout             time.Duration
+	pushTimeout              time.Duration
+	agentTimeout             time.Duration
+	controllerTimeout        time.Duration
+	services                 []string
+	serviceIDs               []string
+	retiredAnalysisEndpoints []string
+	retirementClusterID      string
+	present                  map[string]bool
 }
 
 func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
@@ -75,9 +77,7 @@ func parseSwarmOptions(name string, args []string) (swarmOptions, error) {
 		switch o.component {
 		case "controller", "agent", "network-manager", "resource-monitor", "prometheus", "grafana", "access", "auth":
 		default:
-			if _, ok := analysisWorkerIndex(o.component); !ok {
-				return bad("unknown log component")
-			}
+			return bad("unknown log component")
 		}
 		for len(args) > 0 {
 			if len(args) < 2 {
@@ -302,11 +302,6 @@ func (a *App) RunSwarm(ctx context.Context, name string, args []string) error {
 				return err
 			}
 		}
-		for _, worker := range s.analysisWorkers() {
-			if err := s.run(ctx, "service", "ps", "--no-trunc", worker.id); err != nil {
-				return err
-			}
-		}
 		fmt.Fprintf(a.Stdout, "\nAgent placement label: %s=true\n", s.label)
 		return s.run(ctx, "node", "ls", "--filter", "node.label="+s.label+"=true")
 	case "deploy", "restart":
@@ -377,7 +372,7 @@ func (s *swarm) loadServices(ctx context.Context) error {
 		switch component {
 		case "controller", "agent", "prometheus", "grafana", "resource-monitor", "network-manager":
 		default:
-			if _, ok := analysisWorkerIndex(component); !ok {
+			if !legacyAnalysisWorker(component) {
 				return errors.New("existing stack contains an unrecognized service; no changes made")
 			}
 		}

@@ -56,7 +56,7 @@ test('queue and service labels share existing Agent numbers regardless of host n
   ]};
   assert.equal(sandbox.queueWorkerLabel({worker:'Agent same-host',workerAgentId:'agent-a'}),'Agent 7');
   assert.equal(sandbox.queueWorkerLabel({worker:'Controller'}),'Controller');
-  assert.equal(sandbox.queueWorkerLabel({worker:'Analysis worker 1'}),'Analysis worker 1');
+  assert.equal(sandbox.queueWorkerLabel({worker:'Custom executor'}),'Custom executor');
   assert.equal(sandbox.serviceAgentLabel({nodeId:'host-a'}),'Agent 2, Agent 7');
   assert.equal(sandbox.serviceAgentLabel({nodeId:'other-host'}),'');
   assert.equal(sandbox.serviceAgentLabel({}),'');

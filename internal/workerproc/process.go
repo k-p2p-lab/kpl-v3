@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,8 @@ type Options struct {
 	HandshakeTimeout time.Duration
 	GracePeriod      time.Duration
 	KillWait         time.Duration
+	MaxProcs         int   // Zero inherits the current environment.
+	MemoryLimitBytes int64 // Zero inherits the current environment; this is a Go GC soft target.
 }
 
 type Process struct {
@@ -65,6 +68,9 @@ func Start(ctx context.Context, kind string, bootstrap any, parent Handler, opti
 	var opts Options
 	if len(options) == 1 {
 		opts = options[0]
+	}
+	if opts.MaxProcs < 0 || opts.MemoryLimitBytes < 0 {
+		return nil, errors.New("private worker resource settings must not be negative")
 	}
 	body, err := marshalBody(bootstrap)
 	if err != nil {
@@ -128,6 +134,13 @@ func Start(ctx context.Context, kind string, bootstrap any, parent Handler, opti
 	}
 	cmd.ExtraFiles = []*os.File{toChild, fromChild}
 	cmd.Env = privateEnvironment(cmd.Env)
+	if opts.MaxProcs > 0 {
+		lanes := min(opts.MaxProcs, max(1, runtime.NumCPU()), max(1, runtime.GOMAXPROCS(0)))
+		cmd.Env = replacePrivateSetting(cmd.Env, "GOMAXPROCS", strconv.Itoa(lanes))
+	}
+	if opts.MemoryLimitBytes > 0 {
+		cmd.Env = replacePrivateSetting(cmd.Env, "GOMEMLIMIT", strconv.FormatInt(opts.MemoryLimitBytes, 10)+"B")
+	}
 	if opts.Stdout != nil {
 		cmd.Stdout = opts.Stdout
 	} else if cmd.Stdout == nil {
@@ -330,6 +343,16 @@ func (p *Process) startStop() {
 			}
 		}()
 	})
+}
+
+func replacePrivateSetting(env []string, key, value string) []string {
+	result := env[:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, key+"=") {
+			result = append(result, entry)
+		}
+	}
+	return append(result, key+"="+value)
 }
 
 func privateEnvironment(base []string) []string {

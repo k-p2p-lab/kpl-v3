@@ -14,10 +14,9 @@ import (
 )
 
 func TestAnalysisWorkerCleanupSurvivesRestartAndCanceledWait(t *testing.T) {
-	const unused = "http://unused-analysis-worker:8093"
-	config := ServerConfig{DataDir: t.TempDir(), AnalysisWorkerURLs: []string{unused}, AnalysisWorkerToken: strings.Repeat("x", 32)}
+	config := ServerConfig{DataDir: t.TempDir(), AnalysisAgentToken: remoteTestToken}
 	first := New(config, nil)
-	worker := newRemoteAnalysisWorker(config.AnalysisWorkerToken, first.logger, nil)
+	worker := newRemoteAnalysisWorker(config.AnalysisAgentToken, first.logger, nil)
 	worker.slot <- struct{}{}
 	probed := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,17 +27,20 @@ func TestAnalysisWorkerCleanupSurvivesRestartAndCanceledWait(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	agent := analysisPoolAgent("recorded-agent", "recorded-host", server.URL)
+	registerAnalysisPoolAgent(t, first, agent)
 	slot := &workSlot{id: "next-experiment"}
 	ctx, stop := context.WithTimeout(t.Context(), 5*time.Second)
 	defer stop()
 	if err := first.waitAnalysisWorkerCleanup(ctx, slot); err != nil {
 		t.Fatalf("unused worker affected the queue: %v", err)
 	}
-	if err := first.trackAnalysisWorker(ctx, server.URL); err != nil {
+	if err := first.trackAnalysisWorker(ctx, server.URL, agent); err != nil {
 		t.Fatal(err)
 	}
 	restarted := New(config, nil)
-	if err := restarted.trackAnalysisWorker(ctx, server.URL); !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
+	registerAnalysisPoolAgent(t, restarted, agent)
+	if err := restarted.trackAnalysisWorker(ctx, server.URL, agent); !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
 		t.Fatalf("worker reused while cleanup was pending: %v", err)
 	}
 	wait, cancelWait := context.WithCancel(ctx)
@@ -73,10 +75,11 @@ func TestAnalysisWorkerCleanupSurvivesRestartAndCanceledWait(t *testing.T) {
 
 func TestAnalysisWorkerCleanupRetainsConcurrentEndpoints(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
-	endpoints := []string{"http://analysis-a:8093", "http://analysis-b:8093"}
+	endpoints := []string{"http://agent-a:9091", "http://agent-b:9091"}
 	done := make(chan error, len(endpoints))
-	for _, endpoint := range endpoints {
-		go func() { done <- s.trackAnalysisWorker(t.Context(), endpoint) }()
+	for index, endpoint := range endpoints {
+		agent := analysisPoolAgent([]string{"agent-a", "agent-b"}[index], []string{"host-a", "host-b"}[index], endpoint)
+		go func() { done <- s.trackAnalysisWorker(t.Context(), endpoint, agent) }()
 	}
 	for range endpoints {
 		if err := <-done; err != nil {

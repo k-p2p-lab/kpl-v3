@@ -38,11 +38,12 @@ type ServerConfig struct {
 	PrometheusURL                string
 	RunMinFreeBytes              uint64
 	ArchiveMiBPerSecond          *uint64 // nil uses the default; zero disables idle throttling.
-	AnalysisWorkerURLs           []string
-	AnalysisWorkerToken          string
 	AnalysisAgentToken           string
-	AnalysisTransferMiBPerSecond uint64 // Zero uses the default transfer budget.
-	AnalysisPrefetchMiB          uint64 // Zero uses the default remote read-ahead queue size.
+	AnalysisCPUs                 uint64
+	AnalysisMemoryMiB            uint64
+	RetiredAnalysisEndpoints     []string // Verified retirement proof supplied by Swarm migration.
+	AnalysisTransferMiBPerSecond uint64   // Zero uses the default transfer budget.
+	AnalysisPrefetchMiB          uint64   // Zero uses the default remote read-ahead queue size.
 	User                         string
 	Password                     string
 	Listen                       string

@@ -65,7 +65,7 @@ func TestDecodedAnalysisPreservesSerialValuesAndOrder(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, workers := range []int{1, 2, 4} {
+	for _, workers := range []int{1, 2, 4, 8} {
 		t.Run(fmt.Sprint(workers), func(t *testing.T) {
 			var decoded []row
 			if err := scanDecodedAnalysisFileWithWorkers(t.Context(), file, workers, func(value row) error {
@@ -263,12 +263,15 @@ func (row *decodedAnalysisBlockingRow) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func TestDecodedAnalysisUsesConcurrentDecoders(t *testing.T) {
+func TestDecodedAnalysisUsesConfiguredDecoderConcurrency(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	gates := make([]*decodedAnalysisTestGate, 2)
+	gates := make([]*decodedAnalysisTestGate, 6)
 	var text bytes.Buffer
-	want := []string{t.Name() + "/first", t.Name() + "/second"}
+	want := make([]string, len(gates))
+	for index := range want {
+		want[index] = fmt.Sprintf("%s/%d", t.Name(), index)
+	}
 	for i, token := range want {
 		gate := &decodedAnalysisTestGate{started: make(chan struct{}), release: make(chan struct{})}
 		gates[i] = gate
@@ -285,7 +288,7 @@ func TestDecodedAnalysisUsesConcurrentDecoders(t *testing.T) {
 	done := make(chan error, 1)
 	var got []string
 	go func() {
-		done <- scanDecodedAnalysisFileWithWorkers(ctx, file, 2, func(value decodedAnalysisBlockingRow) error {
+		done <- scanDecodedAnalysisFileWithWorkers(ctx, file, len(gates), func(value decodedAnalysisBlockingRow) error {
 			got = append(got, value.Token)
 			return nil
 		})
@@ -297,8 +300,9 @@ func TestDecodedAnalysisUsesConcurrentDecoders(t *testing.T) {
 			t.Fatal("JSON decoders did not overlap")
 		}
 	}
-	// Defer owns each close. Two blocked decoders prove there is real overlap;
-	// cancellation then exercises cleanup of more than one outstanding batch.
+	// Defer owns each close. Six blocked decoders prove configured concurrency
+	// exceeds the old four-worker cap, independently of physical CPU timing.
+	// Cancellation exercises cleanup of every outstanding batch.
 	cancel()
 	for _, gate := range gates {
 		gate.release <- struct{}{}

@@ -45,9 +45,6 @@ func (a *App) Preflight(ctx context.Context, cfg Config, configOnly bool) error 
 	if control != c["KPL_CONTROL_NODE_ID"]+" linux ready active manager" {
 		return errors.New("the exact control node must be a Linux, Ready, Active Swarm manager")
 	}
-	if err := checkAnalysisSwarm(c, dock); err != nil {
-		return err
-	}
 	network, err := dock("network", "inspect", "--format", "{{.Name}} {{.Driver}} {{.Attachable}}", c["KPL_PEER_NETWORK"])
 	if err != nil {
 		return fmt.Errorf("inspect Peer network: %w", err)

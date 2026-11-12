@@ -41,7 +41,9 @@ func gatedAnalysisWorker(t *testing.T, s *Server) (entered <-chan struct{}, rele
 		}
 	}))
 	t.Cleanup(func() { release(); server.Close() })
-	s.config.AnalysisWorkerURLs, s.config.AnalysisWorkerToken = []string{server.URL}, token
+	s.config.ControlNodeID = "controller-host"
+	s.config.AnalysisAgentToken = token
+	registerAnalysisPoolAgent(t, s, analysisPoolAgent("remote-agent", "remote-host", server.URL))
 	return started, release, func() bool {
 		queueTestAwait(t, finished, "remote child cleanup")
 		processes := commands()
@@ -51,7 +53,9 @@ func gatedAnalysisWorker(t *testing.T, s *Server) (entered <-chan struct{}, rele
 
 func TestRemoteBatchAnalysisLeavesPendingSourceInExecutionQueue(t *testing.T) {
 	s, _ := isolatedAnalysisServer(t)
-	s.config.AnalysisWorkerURLs = []string{"http://analysis-worker:8093"}
+	s.config.ControlNodeID = "controller-host"
+	s.config.AnalysisAgentToken = remoteTestToken
+	registerAnalysisPoolAgent(t, s, analysisPoolAgent("remote-agent", "remote-host", "http://remote-agent:9091"))
 	batchFixture(t, s, "batch", "first", "completed", 1, 2, 1)
 	batchFixture(t, s, "batch", "second", "queued", 2, 2, 0)
 	experiment := queueTestEnqueue(t, s, "experiment")
@@ -118,7 +122,7 @@ func TestRemoteBatchAnalysisRunsInAnalysisGroupAndMatchesLocalWorker(t *testing.
 	queueTestAwait(t, entered, "remote analysis alongside local analysis")
 	queue := s.state.snapshot().WorkQueue
 	if len(queue) != 3 || queue[0].Worker != "Controller" || queue[0].State != "running" ||
-		queue[1].Worker != "Analysis worker 1" || queue[1].State != "running" || queue[2].State != "queued" {
+		queue[1].Worker != "Agent remote-agent" || queue[1].WorkerAgentID != "remote-agent" || queue[1].State != "running" || queue[2].State != "queued" {
 		t.Fatalf("analysis group did not open together: %+v", queue)
 	}
 	localHold.once.Do(func() { close(localHold.release) })

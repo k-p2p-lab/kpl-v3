@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -21,7 +20,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
-var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer", "analysis-worker"}
+var roleCommands = []string{"controller", "agent", "swarm-agent", "resource-monitor", "network-manager", "network-gateway", "peer"}
 
 func IsRuntimeCommand(name string) bool {
 	if name == "internal-worker" {
@@ -70,8 +69,6 @@ func (a *App) executeRuntime(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "controller":
 		err = runController(ctx, logger, args[1:])
-	case "analysis-worker":
-		err = runAnalysisWorker(ctx, logger, args[1:])
 	case "agent":
 		err = runAgent(ctx, logger, args[1:])
 	case "swarm-agent":
@@ -173,7 +170,6 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		}
 	}
 	archiveMiB := flags.Uint64("archive-mib-per-second", archiveRate, "idle archive copy/verification limit in MiB/s (0 disables throttling; experiment pauses remain)")
-	analysisWorkerURLs := flags.String("analysis-worker-urls", os.Getenv("KPL_ANALYSIS_WORKER_URLS"), "space-separated private analysis worker HTTP(S) origins")
 	analysisRate := uint64(32)
 	var analysisRateErr error
 	if raw := os.Getenv("KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND"); raw != "" {
@@ -192,6 +188,10 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		}
 	}
 	analysisPrefetchMiB := flags.Uint64("analysis-prefetch-mib", analysisPrefetch, "remote result analysis read-ahead queue per worker in MiB (1-1024)")
+	analysisCPUs, analysisCPUsErr := analysisResourceDefault("KPL_ANALYSIS_CPUS", 4)
+	analysisCPUCount := flags.Uint64("analysis-cpus", analysisCPUs, "maximum Go execution lanes per analysis process (1-4096, bounded by available CPUs)")
+	analysisMemory, analysisMemoryErr := analysisResourceDefault("KPL_ANALYSIS_MEMORY_MIB", 4096)
+	analysisMemoryMiB := flags.Uint64("analysis-memory-mib", analysisMemory, "Go soft memory target per analysis process in MiB")
 	user, password := os.Getenv("KPL_USER"), os.Getenv("KPL_PASSWORD")
 	metricsURL := flags.String("metrics-url", os.Getenv("KPL_CONTROLLER_METRICS_URL"), "public Controller /metrics URL advertised to Prometheus")
 	prometheusURL := flags.String("prometheus-url", os.Getenv("KPL_PROMETHEUS_URL"), "Controller-reachable Prometheus base URL for resource history exports (default http://127.0.0.1:9090)")
@@ -218,12 +218,20 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	if *analysisPrefetchMiB < 1 || *analysisPrefetchMiB > 1024 {
 		return errors.New("analysis prefetch queue must be between 1 and 1024 MiB")
 	}
-	analysisToken, err := analysisWorkerTokenFromEnv()
-	if err != nil {
+	if err := roleDefaultError(flags, "analysis-cpus", analysisCPUsErr); err != nil {
 		return err
 	}
-	analysisWorkers := strings.Fields(*analysisWorkerURLs)
-	if err := controller.ValidateAnalysisWorkerConnections(analysisWorkers, analysisToken); err != nil {
+	if *analysisCPUCount < 1 || *analysisCPUCount > 4096 {
+		return errors.New("analysis CPU count must be between 1 and 4096")
+	}
+	if err := roleDefaultError(flags, "analysis-memory-mib", analysisMemoryErr); err != nil {
+		return err
+	}
+	if *analysisMemoryMiB < 1 || *analysisMemoryMiB > uint64(^uint64(0)>>1)/(1<<20) {
+		return errors.New("analysis memory target exceeds the supported range")
+	}
+	retiredAnalysisEndpoints := strings.Fields(os.Getenv("KPL_RETIRED_ANALYSIS_ENDPOINTS"))
+	if err := controller.ValidateRetiredAnalysisEndpoints(retiredAnalysisEndpoints); err != nil {
 		return err
 	}
 	parsedPrometheusPort, err := parsePort(*prometheusPort, 9090, "Prometheus")
@@ -244,10 +252,11 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 		DataDir:                      *dataDir,
 		RunMinFreeBytes:              *runMinFree,
 		ArchiveMiBPerSecond:          archiveMiB,
-		AnalysisWorkerURLs:           analysisWorkers,
-		AnalysisWorkerToken:          analysisToken,
 		AnalysisTransferMiBPerSecond: *analysisTransfer,
 		AnalysisPrefetchMiB:          *analysisPrefetchMiB,
+		AnalysisCPUs:                 *analysisCPUCount,
+		AnalysisMemoryMiB:            *analysisMemoryMiB,
+		RetiredAnalysisEndpoints:     retiredAnalysisEndpoints,
 		User:                         user,
 		Password:                     password,
 		MetricsURL:                   *metricsURL,
@@ -263,54 +272,16 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 	return server.Run(ctx)
 }
 
-func analysisWorkerTokenFromEnv() (string, error) {
-	token, path := os.Getenv("KPL_ANALYSIS_WORKER_TOKEN"), os.Getenv("KPL_ANALYSIS_WORKER_TOKEN_FILE")
-	if path == "" {
-		return token, nil
+func analysisResourceDefault(key string, fallback uint64) (uint64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
 	}
-	if token != "" {
-		return "", errors.New("set only one of KPL_ANALYSIS_WORKER_TOKEN and KPL_ANALYSIS_WORKER_TOKEN_FILE")
-	}
-	file, err := os.Open(path)
+	value, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
-		return "", fmt.Errorf("open analysis worker token file: %w", err)
+		return 0, fmt.Errorf("invalid %s", key)
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "", fmt.Errorf("stat analysis worker token file: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() > 258 {
-		return "", errors.New("analysis worker token file must be a regular file of at most 258 bytes")
-	}
-	data, err := io.ReadAll(io.LimitReader(file, 259))
-	if err != nil {
-		return "", fmt.Errorf("read analysis worker token file: %w", err)
-	}
-	if len(data) > 258 {
-		return "", errors.New("analysis worker token file exceeds size limit")
-	}
-	token = strings.TrimRight(string(data), "\r\n")
-	if err := controller.ValidateAnalysisWorkerToken(token); err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
-func runAnalysisWorker(ctx context.Context, logger *slog.Logger, args []string) error {
-	flags := flag.NewFlagSet("kpl run analysis-worker", flag.ContinueOnError)
-	listen := flags.String("listen", ":8093", "private analysis HTTP listen address")
-	if err := parseRoleFlags(flags, args); err != nil {
-		return err
-	}
-	token, err := analysisWorkerTokenFromEnv()
-	if err != nil {
-		return err
-	}
-	healthCtx, stopHealth := context.WithCancel(ctx)
-	defer stopHealth()
-	go runtimehealth.Run(healthCtx, logger, "analysis-worker")
-	return controller.RunAnalysisWorker(ctx, *listen, token, logger)
+	return value, nil
 }
 
 func parsePort(raw string, fallback int, name string) (int, error) {

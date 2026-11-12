@@ -19,7 +19,7 @@ const (
 // Decode can occupy both CPUs of a small analysis worker. The caller owns
 // reads, progress and reduction; decoder workers never touch shared metrics.
 func analysisDecodeParallelism() int {
-	return min(4, max(1, runtime.GOMAXPROCS(0)))
+	return max(1, runtime.GOMAXPROCS(0))
 }
 
 type analysisDecodeBatch[T any] struct {
@@ -65,7 +65,7 @@ func scanDecodedAnalysisFileWithWorkers[T any](ctx context.Context, file resultF
 			workers = 1
 		}
 	}
-	workers = min(4, max(1, workers))
+	workers = max(1, workers)
 	if workers == 1 {
 		return scanAnalysisFile(ctx, file, func(data []byte) error {
 			var value T

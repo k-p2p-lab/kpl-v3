@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -169,6 +168,10 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		!compatibleRemoteAnalysis(hello, build, w.runtimeImage) {
 		return nil, result, errors.New("incompatible remote analysis request")
 	}
+	options, err := analysisProcessOptions(hello.Input, w.command)
+	if err != nil {
+		return nil, result, err
+	}
 	var mu sync.Mutex
 	var exchangeMu sync.Mutex
 	exchange := func(ctx context.Context, method string, value any, data []byte) (remoteAnalysisFrame, error) {
@@ -286,40 +289,17 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 			return nil, invalidAnalysisOperation(method)
 		}
 	}
-	process, err := workerproc.Start(jobCtx, "controller-analysis", hello.Input, broker, workerproc.Options{Command: w.command})
+	process, err := workerproc.Start(jobCtx, "controller-analysis", hello.Input, broker, options)
 	if err != nil {
 		return process, result, err
 	}
-	w.logger.Info("remote analysis calculation started", "batchId", hello.Input.BatchID, "analysisId", hello.Input.AnalysisID, "workerPid", process.PID())
+	w.logger.Info("Agent analysis calculation started", "batchId", hello.Input.BatchID, "analysisId", hello.Input.AnalysisID, "workerPid", process.PID(), "cpus", options.MaxProcs, "memoryTargetBytes", options.MemoryLimitBytes)
 	computeErr := process.Call(jobCtx, "analyze", nil, &result)
+	if computeErr == nil {
+		w.logger.Info("Agent analysis calculation resources", "analysisId", hello.Input.AnalysisID, "cpus", result.CPUs, "memoryTargetBytes", result.MemoryLimitBytes)
+	}
 	prefetch.close()
 	stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	return process, result, errors.Join(computeErr, process.CloseContext(stopCtx))
-}
-
-func RunAnalysisWorker(ctx context.Context, listen, token string, logger *slog.Logger) error {
-	if err := ValidateAnalysisWorkerToken(token); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	worker, stopWorker := NewAgentAnalysisWorker(ctx, token, os.Getenv("KPL_RUNTIME_IMAGE"), logger)
-	server := &http.Server{Addr: listen, Handler: worker, ReadHeaderTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10,
-		BaseContext: func(net.Listener) context.Context { return ctx }}
-	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
-	defer stop()
-	if ctx.Err() != nil {
-		return nil
-	}
-	logger.Info("analysis worker listening", "address", listen)
-	err := server.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
-		err = nil
-	}
-	cancel()
-	// HTTP Server.Close does not wait for upgraded WebSocket connections.
-	shutdown, stopShutdown := context.WithTimeout(context.Background(), 20*time.Second)
-	defer stopShutdown()
-	return errors.Join(err, stopWorker(shutdown))
 }

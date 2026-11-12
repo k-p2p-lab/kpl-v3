@@ -137,10 +137,10 @@ func TestParallelAnalysisCancelsSiblingsAndRetainsFailure(t *testing.T) {
 	}
 }
 
-func TestAnalysisParallelismReservesCapacityAndIsBounded(t *testing.T) {
+func TestAnalysisParallelismUsesAvailableCPUs(t *testing.T) {
 	previous := runtime.GOMAXPROCS(0)
 	defer runtime.GOMAXPROCS(previous)
-	for _, check := range []struct{ cpus, workers int }{{1, 1}, {2, 1}, {3, 2}, {4, 3}, {8, 4}, {32, 4}} {
+	for _, check := range []struct{ cpus, workers int }{{1, 1}, {2, 2}, {3, 3}, {4, 4}, {8, 8}, {32, 32}} {
 		runtime.GOMAXPROCS(check.cpus)
 		if got := analysisParallelism(); got != check.workers {
 			t.Fatalf("%d CPUs: got %d workers, want %d", check.cpus, got, check.workers)

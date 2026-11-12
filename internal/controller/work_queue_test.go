@@ -152,8 +152,10 @@ func TestWorkQueueCancellationRemovesWaitersAndRetainsRunningCleanup(t *testing.
 }
 
 func TestWorkQueueParallelAnalysisKeepsDistinctWorkersAndStopsAtExperiment(t *testing.T) {
-	endpoints := []string{"http://analysis-worker-1:8093", "http://analysis-worker-2:8093"}
-	s := New(ServerConfig{DataDir: t.TempDir(), AnalysisWorkerURLs: endpoints}, nil)
+	endpoints := []string{"http://first-agent:9091", "http://second-agent:9091"}
+	s := New(ServerConfig{DataDir: t.TempDir(), ControlNodeID: "controller-host", AnalysisAgentToken: remoteTestToken}, nil)
+	registerAnalysisPoolAgent(t, s, analysisPoolAgent("first-agent", "host-one", endpoints[0]))
+	registerAnalysisPoolAgent(t, s, analysisPoolAgent("second-agent", "host-two", endpoints[1]))
 	first := queueTestEnqueue(t, s, "experiment")
 	local := queueTestEnqueue(t, s, "analysis")
 	remoteOne := queueTestEnqueue(t, s, "batch-analysis")
@@ -169,9 +171,10 @@ func TestWorkQueueParallelAnalysisKeepsDistinctWorkersAndStopsAtExperiment(t *te
 	if local.slot.analysisWorkerURL != "" || remoteOne.slot.analysisWorkerURL != endpoints[0] || remoteTwo.slot.analysisWorkerURL != endpoints[1] {
 		t.Fatal("analysis jobs did not receive distinct workers")
 	}
+	identities := map[string]string{local.slot.id: "", remoteOne.slot.id: "first-agent", remoteTwo.slot.id: "second-agent"}
 	for _, item := range s.state.snapshot().WorkQueue {
-		if item.WorkerAgentID != "" {
-			t.Fatalf("dedicated worker pool reported an Agent identity: %+v", item)
+		if expected, assigned := identities[item.ID]; assigned && item.WorkerAgentID != expected {
+			t.Fatalf("analysis queue lost its assigned Agent identity: %+v, want %q", item, expected)
 		}
 	}
 	if err := s.cancelWork(remoteTwo.slot.id); err != nil {

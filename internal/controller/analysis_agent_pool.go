@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -18,13 +17,6 @@ type analysisWorkerTarget struct {
 // cancelMu protects host maintenance holds. A group's executor set is captured
 // after Peer cleanup, so every host is used by at most one calculation.
 func (s *Server) analysisWorkerTargetsLocked() []analysisWorkerTarget {
-	if len(s.config.AnalysisWorkerURLs) != 0 {
-		workers := make([]analysisWorkerTarget, 0, len(s.config.AnalysisWorkerURLs))
-		for i, endpoint := range s.config.AnalysisWorkerURLs {
-			workers = append(workers, analysisWorkerTarget{url: endpoint, label: fmt.Sprintf("Analysis worker %d", i+1)})
-		}
-		return workers
-	}
 	if s.config.ControlNodeID == "" || s.config.AnalysisAgentToken == "" {
 		return nil
 	}
@@ -62,11 +54,4 @@ func (s *Server) analysisWorkerTargetsLocked() []analysisWorkerTarget {
 		workers = append(workers, analysisWorkerTarget{url: agent.URL, label: "Agent " + name, agent: &workerAgent})
 	}
 	return workers
-}
-
-func (s *Server) analysisWorkerCredential(slot *workSlot) string {
-	if slot.analysisAgent != nil {
-		return s.config.AnalysisAgentToken
-	}
-	return s.config.AnalysisWorkerToken
 }

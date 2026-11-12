@@ -338,6 +338,9 @@ func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, erro
 		return cliImageLayout, nil
 	}
 	if a[0] == "info" {
+		if strings.Contains(joined, "Cluster.ID") {
+			return "fixturecluster", nil
+		}
 		if strings.Contains(joined, "NodeID") {
 			return "control", nil
 		}
@@ -390,6 +393,9 @@ func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, erro
 			}
 			return "controller agent monitor", nil
 		case "inspect":
+			if a[3] == retiredAnalysisEnvironmentFormat {
+				return "", nil
+			}
 			component := map[string]string{"controller": "controller", "agent": "agent", "monitor": "prometheus"}[last]
 			return "kpl_" + component + "|" + swarmApplication, nil
 		case "ps":

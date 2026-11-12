@@ -252,14 +252,6 @@ func (s *swarm) deploymentComposeFiles() ([]string, func(), error) {
 	if err := ValidateSetting("KPL_ARCHIVE_HOST_PATH", source); err != nil {
 		return nil, cleanup, err
 	}
-	if nodes := s.config["KPL_ANALYSIS_NODE_IDS"]; len(strings.Fields(nodes)) != 0 {
-		if err := addOverride("kpl-analysis-stack-*.yaml", func(file io.Writer) error {
-			return writeAnalysisCompose(file, nodes)
-		}); err != nil {
-			cleanup()
-			return nil, func() {}, err
-		}
-	}
 	if source == "" {
 		return args, cleanup, nil
 	}
@@ -289,12 +281,7 @@ func (s *swarm) deploy(ctx context.Context) error {
 	if err := s.a.Preflight(ctx, s.config, true); err != nil {
 		return err
 	}
-	if s.options.name == "deploy" {
-		if err := s.checkAnalysisPlacementUnchanged(ctx); err != nil {
-			return err
-		}
-	}
-	if err := s.checkAnalysisSwarm(ctx); err != nil {
+	if err := s.loadAnalysisRetirementJournal(ctx); err != nil {
 		return err
 	}
 	host, err := s.controlHost(ctx)
@@ -357,9 +344,6 @@ func (s *swarm) deploy(ctx context.Context) error {
 		if err := s.loadServices(ctx); err != nil {
 			return err
 		}
-		if err := s.checkAnalysisPlacementUnchanged(ctx); err != nil {
-			return err
-		}
 	}
 	networks, err := s.output(ctx, "network", "ls", "--quiet", "--filter", "name=^"+regexp.QuoteMeta(s.network)+"$")
 	if err != nil {
@@ -398,6 +382,9 @@ func (s *swarm) deploy(ctx context.Context) error {
 			}
 		}
 	}
+	if err := s.loadRetiredAnalysisProof(ctx); err != nil {
+		return err
+	}
 	if s.options.name == "restart" {
 		// An image pull can take minutes. Confirm ownership again before any stop;
 		// a service with the same name may have been replaced in that interval.
@@ -425,13 +412,15 @@ func (s *swarm) deploy(ctx context.Context) error {
 		if err := s.waitTasks(ctx, tasks, s.agentTimeout); err != nil {
 			return err
 		}
-		configuredWorkers := len(strings.Fields(s.config["KPL_ANALYSIS_NODE_IDS"]))
-		for _, worker := range s.analysisWorkers() {
-			if worker.index >= configuredWorkers {
-				if err := s.run(ctx, "service", "rm", worker.id); err != nil {
-					return fmt.Errorf("remove stopped analysis worker: %w", err)
-				}
-			}
+		if err := s.removeLegacyAnalysisServices(ctx); err != nil {
+			return err
+		}
+	} else {
+		if err := s.stopLegacyAnalysisServices(ctx); err != nil {
+			return err
+		}
+		if err := s.removeLegacyAnalysisServices(ctx); err != nil {
+			return err
 		}
 	}
 	for _, node := range nodes {
@@ -442,6 +431,7 @@ func (s *swarm) deploy(ctx context.Context) error {
 	if err := s.a.Preflight(ctx, s.config, false); err != nil {
 		return err
 	}
+	s.withRetiredAnalysisProof()
 	deployArgs := append([]string{"stack", "deploy", "--with-registry-auth", "--resolve-image", "always", "--detach=true"}, compose...)
 	if err := s.run(ctx, append(deployArgs, s.stack)...); err != nil {
 		return err

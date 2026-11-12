@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // restartRepublish intentionally uses remove semantics, retaining persistent
@@ -13,7 +14,7 @@ func (s *swarm) restartRepublish(ctx context.Context) error {
 	if err := s.a.Preflight(ctx, s.config, true); err != nil {
 		return err
 	}
-	if err := s.checkAnalysisSwarm(ctx); err != nil {
+	if err := s.loadAnalysisRetirementJournal(ctx); err != nil {
 		return err
 	}
 	if s.config["GRAFANA_ADMIN_PASSWORD"] == "" {
@@ -84,29 +85,24 @@ func (s *swarm) restartRepublish(ctx context.Context) error {
 	if int64(len(nodes)) < minimum {
 		return fmt.Errorf("republish requires at least %d eligible Agent nodes; specify nodes or a selector", minimum)
 	}
-	if workers := s.analysisWorkers(); len(workers) != 0 {
-		// Republish reuses worker service names. Confirm the old tasks have
-		// stopped before creating new tasks at the same analysis endpoints.
-		for _, worker := range workers {
-			if _, err := s.captureTasks(ctx, worker.id, ""); err != nil {
-				return err
-			}
-		}
-		if s.present["controller"] {
-			if err := s.stopService(ctx, s.stack+"_controller", s.controllerTimeout); err != nil {
-				return err
-			}
-		}
-		for _, worker := range workers {
-			if err := s.stopService(ctx, worker.id, s.agentTimeout); err != nil {
-				return err
-			}
-		}
+	if err := s.loadRetiredAnalysisProof(ctx); err != nil {
+		return err
+	}
+	if err := s.stopLegacyAnalysisServices(ctx); err != nil {
+		return err
+	}
+	if err := s.journalLegacyAnalysisServices(ctx); err != nil {
+		return err
 	}
 	s.reportNodes(nodes)
 	fmt.Fprintln(s.a.Stdout, "Republish 1/3: removing stack services; persistent data volumes and the Peer network are retained.")
 	if err := s.remove(ctx); err != nil {
 		return fmt.Errorf("republish stopped during removal; image publishing and deployment were not started: %w", err)
+	}
+	// stopLegacyAnalysisServices verified these task exits before remove;
+	// remember their endpoints only after the owned stack removal succeeds.
+	for _, worker := range s.legacyAnalysisServices() {
+		s.rememberRetiredAnalysisEndpoint("http://" + strings.TrimPrefix(worker.name, s.stack+"_") + ":8093")
 	}
 	fmt.Fprintln(s.a.Stdout, "Republish 2/3: building and publishing the configured image tag.")
 	if err := s.publish(ctx); err != nil {

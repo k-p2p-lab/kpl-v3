@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,6 +44,32 @@ func TestAnalysisAgentCleanupPersistsInstanceAndUsesAgentCredential(t *testing.T
 	}
 	if records, err := restarted.pendingAnalysisWorkerCleanup(); err != nil || len(records) != 0 {
 		t.Fatalf("authenticated original idle proof did not clear ownership: %v, %v", records, err)
+	}
+}
+
+func TestAnalysisAgentCleanupAdmissionRequiresVerifiedInstance(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir(), AnalysisAgentToken: remoteTestToken}, nil)
+	original := analysisPoolAgent("registered-agent", "registered-host", "http://agent:9091")
+	for _, check := range []struct {
+		name string
+		edit func(*model.Agent)
+	}{
+		{"missing Agent", func(agent *model.Agent) { *agent = model.Agent{} }},
+		{"different endpoint", func(agent *model.Agent) { agent.URL = "http://another-agent:9091" }},
+		{"missing host", func(agent *model.Agent) { agent.Host = nil; agent.Labels = nil }},
+		{"missing process identity", func(agent *model.Agent) { agent.StartedAt = time.Time{} }},
+		{"contradictory host identity", func(agent *model.Agent) { agent.Labels["swarmNodeId"] = "different-host" }},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			agent := analysisPoolAgent(original.ID, original.Host.NodeID, original.URL)
+			check.edit(&agent)
+			if err := s.trackAnalysisWorker(t.Context(), original.URL, agent); err == nil {
+				t.Fatal("analysis admitted an endpoint without a verified Agent instance")
+			}
+			if pending, err := s.pendingAnalysisWorkerCleanup(); err != nil || len(pending) != 0 {
+				t.Fatalf("failed admission created cleanup ownership: %v %v", pending, err)
+			}
+		})
 	}
 }
 
@@ -104,10 +134,13 @@ func TestAnalysisAgentCleanupVerifiesReplacementHostAndStartup(t *testing.T) {
 	}
 }
 
-func TestAnalysisWorkerCleanupReadsLegacyDedicatedEndpoints(t *testing.T) {
-	s := New(ServerConfig{DataDir: t.TempDir(), AnalysisWorkerToken: remoteTestToken}, nil)
-	worker := newRemoteAnalysisWorker(remoteTestToken, s.logger, nil)
-	endpoint := httptest.NewServer(worker)
+func TestAnalysisAgentCleanupRetainsUnverifiedLegacyEndpoints(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir(), AnalysisAgentToken: remoteTestToken}, nil)
+	var probes atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probes.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	defer endpoint.Close()
 	legacy, err := json.Marshal([]string{endpoint.URL})
 	if err != nil {
@@ -116,10 +149,92 @@ func TestAnalysisWorkerCleanupReadsLegacyDedicatedEndpoints(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.config.DataDir, analysisWorkerCleanupFile), legacy, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.waitAnalysisWorkerCleanup(t.Context(), &workSlot{id: "next"}); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := s.waitAnalysisWorkerCleanup(ctx, &workSlot{id: "next"}); err == nil {
+		t.Fatal("legacy endpoint without verified retirement released the experiment barrier")
 	}
-	if pending, err := s.pendingAnalysisWorkerCleanup(); err != nil || len(pending) != 0 {
-		t.Fatalf("legacy dedicated worker was not cleared after idle proof: %v %v", pending, err)
+	if pending, err := s.pendingAnalysisWorkerCleanup(); err != nil || len(pending) != 1 || pending[0] != endpoint.URL {
+		t.Fatalf("unverified legacy ownership was lost: %v %v", pending, err)
+	}
+	if probes.Load() != 0 {
+		t.Fatal("Agent credentials were sent to an unverified legacy endpoint")
+	}
+}
+
+func TestAnalysisAgentCleanupRetiresOnlyProvenLegacyEndpoints(t *testing.T) {
+	const endpoint = "http://analysis-worker-1:8093"
+	for _, agentOwned := range []bool{false, true} {
+		name := "legacy service"
+		if agentOwned {
+			name = "Agent instance"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := New(ServerConfig{DataDir: t.TempDir(), AnalysisAgentToken: remoteTestToken, RetiredAnalysisEndpoints: []string{endpoint}}, nil)
+			var document any = []string{endpoint}
+			if agentOwned {
+				agent := analysisPoolAgent("owned-agent", "owned-host", endpoint)
+				document = analysisWorkerCleanupLedger{Version: 1, Workers: []analysisWorkerCleanupRecord{{Endpoint: endpoint, AgentID: agent.ID, HostID: agentHostNodeID(agent), StartedAt: agent.StartedAt}}}
+			}
+			data, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.config.DataDir, analysisWorkerCleanupFile), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			err = s.waitAnalysisWorkerCleanup(ctx, &workSlot{id: "next"})
+			pending, readErr := s.pendingAnalysisWorkerCleanup()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if agentOwned {
+				if err == nil || len(pending) != 1 {
+					t.Fatalf("legacy service retirement released live Agent ownership: pending=%v error=%v", pending, err)
+				}
+			} else if err != nil || len(pending) != 0 {
+				t.Fatalf("verified retired service blocked the analysis queue: pending=%v error=%v", pending, err)
+			}
+		})
+	}
+}
+
+func TestAnalysisAgentCleanupRejectsMissingForeignAndInvalidRetirementEvidence(t *testing.T) {
+	const endpoint = "http://analysis-worker-1:8093"
+	tooMany := make([]string, 17)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("http://analysis-worker-%d:8093", index+1)
+	}
+	for _, check := range []struct {
+		name      string
+		endpoints []string
+	}{
+		{"missing", nil},
+		{"different service", []string{"http://analysis-worker-2:8093"}},
+		{"foreign host", []string{"http://another-host:8093"}},
+		{"noncanonical endpoint", []string{endpoint + "/"}},
+		{"duplicate evidence", []string{endpoint, endpoint}},
+		{"excessive evidence", tooMany},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			s := New(ServerConfig{DataDir: t.TempDir(), AnalysisAgentToken: remoteTestToken, RetiredAnalysisEndpoints: check.endpoints}, nil)
+			data, err := json.Marshal([]string{endpoint})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(s.config.DataDir, analysisWorkerCleanupFile), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			if err := s.waitAnalysisWorkerCleanup(ctx, &workSlot{id: "next"}); err == nil {
+				t.Fatal("unverified deployment evidence released the experiment barrier")
+			}
+			if pending, err := s.pendingAnalysisWorkerCleanup(); err != nil || len(pending) != 1 || pending[0] != endpoint {
+				t.Fatalf("unverified deployment evidence removed ownership: pending=%v error=%v", pending, err)
+			}
+		})
 	}
 }

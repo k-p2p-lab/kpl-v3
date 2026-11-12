@@ -8,6 +8,8 @@ import (
 	"errors"
 	"hash"
 	"io"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -18,6 +20,8 @@ type analysisProcessInput struct {
 	RunID        string                     `json:"runId"`
 	AnalysisID   string                     `json:"analysisId"`
 	RuntimeImage string                     `json:"runtimeImage,omitempty"`
+	CPUs         uint64                     `json:"cpus,omitempty"`
+	MemoryMiB    uint64                     `json:"memoryMiB,omitempty"`
 	BatchID      string                     `json:"batchId,omitempty"`
 	Name         string                     `json:"name,omitempty"`
 	ExpectedRuns int                        `json:"expectedRuns,omitempty"`
@@ -45,8 +49,10 @@ type analysisOutputInfo struct {
 }
 
 type analysisProcessResult struct {
-	Outputs    []analysisOutputInfo `json:"outputs"`
-	SourceHash string               `json:"sourceHash,omitempty"`
+	Outputs          []analysisOutputInfo `json:"outputs"`
+	SourceHash       string               `json:"sourceHash,omitempty"`
+	CPUs             int                  `json:"cpus,omitempty"`
+	MemoryLimitBytes int64                `json:"memoryLimitBytes,omitempty"`
 }
 
 type analysisBatchMetadataRequest struct {
@@ -199,7 +205,7 @@ func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *wo
 				return nil, err
 			}
 			compact, err := writeAnalysisProcessJSON(ctx, peer, "compact", compactSingleAnalysis(analysis))
-			return analysisProcessResult{Outputs: []analysisOutputInfo{full, compact}, SourceHash: snapshot.result.SourceHash}, err
+			return analysisProcessResult{Outputs: []analysisOutputInfo{full, compact}, SourceHash: snapshot.result.SourceHash, CPUs: runtime.GOMAXPROCS(0), MemoryLimitBytes: debug.SetMemoryLimit(-1)}, err
 		}
 		result := batchAnalysisResult{Version: batchAnalysisVersion, AnalysisVersion: currentAnalysisVersion, AnalysisID: input.AnalysisID, BatchID: input.BatchID, Name: input.Name, AsOf: time.Now().UTC(), Aggregation: "equal-run-mean-v1", ExpectedRuns: input.ExpectedRuns, MissingRuns: input.MissingRuns, Excluded: input.Excluded, Runs: []resultAnalysis{}}
 		// The optional bootstrap field can be omitted for an empty slice.
@@ -255,7 +261,7 @@ func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *wo
 		result.Reliability, result.SourceHash = metadata.Reliability, metadata.SourceHash
 		result.Summary, result.AsOf = batchSummary(result.Runs), time.Now().UTC()
 		full, err := writeAnalysisProcessJSON(ctx, peer, "full", result)
-		return analysisProcessResult{Outputs: []analysisOutputInfo{full}, SourceHash: result.SourceHash}, err
+		return analysisProcessResult{Outputs: []analysisOutputInfo{full}, SourceHash: result.SourceHash, CPUs: runtime.GOMAXPROCS(0), MemoryLimitBytes: debug.SetMemoryLimit(-1)}, err
 	}, nil
 }
 

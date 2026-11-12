@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -232,41 +231,6 @@ func ValidateAnalysisWorkerToken(token string) error {
 		return r < '!' || r > '~'
 	}) >= 0 {
 		return errors.New("analysis worker token must contain 32 to 256 printable non-space ASCII characters")
-	}
-	return nil
-}
-
-func ValidateAnalysisWorkerConnections(endpoints []string, token string) error {
-	if len(endpoints) == 0 {
-		if token == "" {
-			return nil
-		}
-		return errors.New("analysis worker token requires at least one analysis worker URL")
-	}
-	if len(endpoints) > 16 {
-		return errors.New("configure at most 16 analysis worker URLs")
-	}
-	if err := ValidateAnalysisWorkerToken(token); err != nil {
-		return err
-	}
-	seen := make(map[string]bool, len(endpoints))
-	for _, endpoint := range endpoints {
-		u, err := remoteAnalysisURL(endpoint)
-		if err != nil {
-			return err
-		}
-		port := u.Port()
-		if port == "" {
-			port = "80"
-			if u.Scheme == "wss" {
-				port = "443"
-			}
-		}
-		origin := u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
-		if seen[origin] {
-			return errors.New("analysis worker URLs must have distinct origins")
-		}
-		seen[origin] = true
 	}
 	return nil
 }

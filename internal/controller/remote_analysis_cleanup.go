@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,25 @@ import (
 )
 
 const analysisWorkerCleanupFile = ".analysis-worker-cleanup.json"
+
+var retiredAnalysisEndpoint = regexp.MustCompile(`^http://analysis-worker-([1-9]|1[0-6]):8093$`)
+
+// This is deployment retirement evidence, not another execution mode. Swarm
+// supplies exact endpoints only after their owned tasks have stopped and their
+// services have been removed. An absent service alone is not such evidence.
+func ValidateRetiredAnalysisEndpoints(endpoints []string) error {
+	if len(endpoints) > 16 {
+		return errors.New("too many retired analysis service endpoints")
+	}
+	seen := make(map[string]bool, len(endpoints))
+	for _, endpoint := range endpoints {
+		if !retiredAnalysisEndpoint.MatchString(endpoint) || seen[endpoint] {
+			return errors.New("invalid or duplicate retired analysis service endpoint")
+		}
+		seen[endpoint] = true
+	}
+	return nil
+}
 
 type analysisWorkerCleanupRecord struct {
 	Endpoint  string    `json:"endpoint"`
@@ -86,22 +106,16 @@ func writeAnalysisWorkerCleanup(ctx context.Context, root *os.Root, records []an
 
 // Record admission durably before sending any start message. The scheduler
 // assigns at most one active job to an endpoint.
-func (s *Server) trackAnalysisWorker(ctx context.Context, endpoint string, agents ...model.Agent) error {
+func (s *Server) trackAnalysisWorker(ctx context.Context, endpoint string, agent model.Agent) error {
 	if _, err := remoteAnalysisURL(endpoint); err != nil {
 		return err
 	}
 	record := analysisWorkerCleanupRecord{Endpoint: endpoint}
-	if len(agents) > 1 {
-		return errors.New("analysis cleanup expects one Agent identity")
-	}
-	if len(agents) == 1 {
-		agent := agents[0]
-		record.AgentID, record.HostID, record.StartedAt = agent.ID, agentHostNodeID(agent), agent.StartedAt
-		validIdentity := validResultID(record.AgentID) && validResultID(record.HostID) && !record.StartedAt.IsZero() && agent.URL == endpoint
-		labelHost := agent.Labels["swarmNodeId"]
-		if !validIdentity || labelHost != "" && labelHost != record.HostID {
-			return errors.New("cannot record analysis ownership without a verified Agent and host identity")
-		}
+	record.AgentID, record.HostID, record.StartedAt = agent.ID, agentHostNodeID(agent), agent.StartedAt
+	validIdentity := validResultID(record.AgentID) && validResultID(record.HostID) && !record.StartedAt.IsZero() && agent.URL == endpoint
+	labelHost := agent.Labels["swarmNodeId"]
+	if !validIdentity || labelHost != "" && labelHost != record.HostID {
+		return errors.New("cannot record analysis ownership without a verified Agent and host identity")
 	}
 	s.analysisWorkerCleanupMu.Lock()
 	defer s.analysisWorkerCleanupMu.Unlock()
@@ -177,7 +191,7 @@ func (s *Server) pendingAnalysisWorkerCleanup() ([]string, error) {
 
 func (s *Server) analysisWorkerCleanupTarget(record analysisWorkerCleanupRecord) (string, string, error) {
 	if record.AgentID == "" {
-		return record.Endpoint, s.config.AnalysisWorkerToken, nil
+		return "", "", fmt.Errorf("%w: legacy analysis service %s requires verified retirement through Swarm deployment", errRemoteAnalysisCleanupUnconfirmed, record.Endpoint)
 	}
 	var replacement *model.Agent
 	for _, agent := range s.state.agentInventory() {
@@ -204,7 +218,7 @@ func (s *Server) analysisWorkerCleanupTarget(record analysisWorkerCleanupRecord)
 
 // The queue calls this before opening a new analysis group or admitting the
 // next experiment. At this boundary no tracked endpoint can receive a new job.
-// Keep probing recorded endpoints even if configuration removed them.
+// Old service ownership is cleared only with deployment retirement evidence.
 func (s *Server) waitAnalysisWorkerCleanup(ctx context.Context, slot *workSlot) error {
 	records, err := s.pendingAnalysisWorkerCleanupRecords()
 	if err != nil {
@@ -214,6 +228,19 @@ func (s *Server) waitAnalysisWorkerCleanup(ctx context.Context, slot *workSlot) 
 		return ctx.Err()
 	}
 	for _, record := range records {
+		if record.AgentID == "" {
+			if err := ValidateRetiredAnalysisEndpoints(s.config.RetiredAnalysisEndpoints); err != nil {
+				return err
+			}
+			if !slices.Contains(s.config.RetiredAnalysisEndpoints, record.Endpoint) {
+				_, _, err := s.analysisWorkerCleanupTarget(record)
+				return err
+			}
+			if err := s.clearAnalysisWorker(record.Endpoint); err != nil {
+				return fmt.Errorf("clear retired analysis service cleanup: %w", err)
+			}
+			continue
+		}
 		s.updateWorkStatus(slot.id, "Waiting for analysis worker cleanup", 0)
 		reported := false
 		for {

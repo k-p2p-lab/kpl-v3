@@ -5,12 +5,21 @@ const {createDownloads} = require('./static/result-analysis-downloads.js');
 const images = require('./static/result-images.js');
 const research = require('./static/research-charts.js');
 const files = require('./static/research-files.js');
+const batch = require('./static/batch-analysis.js');
 
 function artifact(id, analysisId='saved-'+id) {
   return {version:1,analysisId,result:{id,name:'한글 CSV / 실험',state:'completed'},asOf:'2026-10-13T00:00:00Z',
     binSeconds:2,metrics:{definition:'session-window-v1',deliveryWindows:['1s'],latencySamples:2,averageLatencyMs:15,p95LatencyMs:20},
     latencyCDF:[{x:10,y:.5},{x:20,y:1}],latencyHistogram:[{x:10,y:1},{x:20,y:1}],
     timeline:[{at:'2026-10-13T00:00:00Z',publish:2,deliver:4,duplicate:0}],observations:[]};
+}
+
+function batchArtifact(id, analysisId='saved-'+id) {
+  return {version:1,analysisVersion:9,analysisId,batchId:id,name:'한글 CSV / 실험',aggregation:'equal-run-mean-v1',
+    asOf:'2026-10-13T01:00:00Z',sourceHash:'sha256:batch-source',
+    expectedRuns:3,missingRuns:0,excluded:[{id:'old-attempt',state:'failed'}],
+    runs:['one','two'].map(run=>({...artifact(id+'-'+run),result:{id:id+'-'+run,name:'한글 CSV / 실험',batchId:id,state:'completed',startedAt:'2026-10-13T00:00:00Z',sourceRevision:'captured-'+run}})),
+    summary:{'metrics.averageLatencyMs':{average:15,deviation:2,count:2},'metrics.p95LatencyMs':{average:20,deviation:3,count:2}}};
 }
 
 function entries(bytes) {
@@ -36,29 +45,134 @@ function fixture(api, results=[{id:'one'}], options={}) {
   return {downloads,links,download:createDownloads({api,getResults:()=>results,document,url,pollInterval:0,...options})};
 }
 
-test('selected batches become per-Run CSV ZIPs in one ZIP with every chart and no PNG or JSON', async()=>{
+test('selected repetition batches reuse batch means alongside individual CSV ZIPs without per-member analysis', async()=>{
   const calls=[];
   const f=fixture(async(path,options)=>{
     calls.push({path,options});
     const id=decodeURIComponent(path.split('/')[4]);
+    if(path.includes('/batch-analysis-jobs/'))return path.includes('/result?') ? batchArtifact(id) : {batchId:id,id:'saved-'+id,state:'completed'};
     return path.includes('/result?') ? artifact(id) : {runId:id,id:'saved-'+id,state:'completed',stale:true};
-  },[{id:'one',batchId:'batch'},{id:'retry',batchId:'batch'},{id:'single'},{id:'unselected',batchId:'other'}]);
-  await f.download('results',['batch:batch','run:single']);
+  },[{id:'old-attempt',batchId:'batch',repetitions:3,state:'failed'},
+    {id:'one',batchId:'batch',repetitions:3},{id:'retry',batchId:'batch',repetitions:3},
+    {id:'second',batchId:'another',repetitions:2},{id:'single'},{id:'unselected',batchId:'other',repetitions:2}]);
+  await f.download('results',['batch:batch','batch:another','run:single']);
   assert.equal(f.downloads.length,1);
   assert.equal(f.links.length,1);
   assert.match(f.links[0].download,/^results-csv-\d{8}T\d{6}Z\.zip$/);
   const outer=entries(await f.downloads[0].arrayBuffer());
   assert.equal(outer.length,3);
-  for(const [index,id] of ['one','retry','single'].entries()) {
-    assert.equal(outer[index].name,`[한글 CSV _ 실험]-${id}-csv.zip`);
-    const csvs=entries(outer[index].data), charts=images.buildCharts(artifact(id)).map(research.formatChart);
-    assert.deepEqual(csvs.map(f=>f.name),charts.map(chart=>`${id}-${chart.id}.csv`));
+  for(const [index,id] of ['batch','another','single'].entries()) {
+    const isBatch=id!=='single', artifactID=isBatch?`${id}-batch-mean`:id;
+    assert.equal(outer[index].name,`[한글 CSV _ 실험]-${artifactID}-csv.zip`);
+    const csvs=entries(outer[index].data);
+    if(isBatch) {
+      const summary=csvs.shift();
+      assert.equal(summary.name,`${artifactID}-summary.csv`);
+      assert.equal(summary.data.toString('utf8'),batch.summaryCSV(batchArtifact(id).summary));
+      const snapshot=csvs.shift();
+      assert.equal(snapshot.name,`${artifactID}-snapshot.csv`);
+      const rows=files.csvRows(snapshot.data.toString('utf8'));
+      assert.deepEqual(rows[0],['scope','id','analysis_id','analysis_version','as_of','source_hash','source_revision','state']);
+      assert.deepEqual(rows[1],['batch',id,'saved-'+id,'9','2026-10-13T01:00:00Z','sha256:batch-source','','']);
+      assert.deepEqual(rows.slice(2).map(row=>[row[0],row[1],row[6],row[7]]),
+        [['included-run',id+'-one','captured-one','completed'],['included-run',id+'-two','captured-two','completed'],['excluded-run','old-attempt','','failed']]);
+    }
+    const charts=(isBatch?batch.build(batchArtifact(id),images.buildCharts):images.buildCharts(artifact(id))).map(research.formatChart);
+    assert.deepEqual(csvs.map(f=>f.name),charts.map(chart=>`${artifactID}-${chart.id}.csv`));
     for(const [chartIndex,file] of csvs.entries()) assert.equal(file.data.toString('utf8'),files.chartCSV(charts[chartIndex]));
     assert.ok(csvs.every(file=>file.name.endsWith('.csv')));
   }
   assert.ok(calls.every(call=>!call.options.method),'completed analyses must be reused without reanalysis');
   assert.ok(calls.filter(call=>call.path.includes('/result?')).every(call=>call.path.endsWith('&saved=1')));
   assert.ok(calls.every(call=>!call.path.includes('unselected')));
+  assert.deepEqual(calls.map(call=>call.path),[
+    '/api/v1/batch-analysis-jobs/batch','/api/v1/batch-analysis-jobs/batch/result?jobId=saved-batch&saved=1',
+    '/api/v1/batch-analysis-jobs/another','/api/v1/batch-analysis-jobs/another/result?jobId=saved-another&saved=1',
+    '/api/v1/analysis-jobs/single','/api/v1/analysis-jobs/single/result?jobId=saved-single&saved=1']);
+});
+
+test('single submissions and legacy result groups retain per-Run CSVs including previous attempts',async()=>{
+  const calls=[],f=fixture(async(path,options)=>{
+    calls.push(path);
+    const id=path.split('/')[4];
+    return path.includes('/result?')?artifact(id):{runId:id,id:'saved-'+id,state:'completed'};
+  },[{id:'one',batchId:'single',repetitions:1},{id:'retry',batchId:'single',repetitions:1},
+    {id:'legacy',batchId:'legacy'},{id:'standalone'}]);
+  await f.download('results',['batch:single','batch:legacy','run:standalone']);
+  assert.ok(calls.every(path=>!path.includes('/batch-analysis-jobs/')));
+  assert.deepEqual(entries(await f.downloads[0].arrayBuffer()).map(file=>file.name),
+    ['one','retry','legacy','standalone'].map(id=>`[한글 CSV _ 실험]-${id}-csv.zip`));
+});
+
+test('batch CSV reuses saved snapshots through replacement states and missing member results',async()=>{
+  for(const job of [{state:'queued',id:'replacement',savedAnalysisId:'old'},
+    {state:'running',id:'replacement',savedAnalysisId:'old'},
+    {state:'failed',id:'replacement',savedAnalysisId:'old'},
+    {state:'idle',stale:true,id:'old'}]) {
+    const calls=[],f=fixture(async(path,options)=>{
+      calls.push([path,options.method]);
+      return path.includes('/result?')?batchArtifact('batch','old'):{...job,batchId:'batch'};
+    },[{id:'missing',batchId:'batch',repetitions:3,state:'missing',missing:true}]);
+    await f.download('results',['batch:batch']);
+    assert.deepEqual(calls,[['/api/v1/batch-analysis-jobs/batch',undefined],
+      ['/api/v1/batch-analysis-jobs/batch/result?jobId=old&saved=1',undefined]]);
+    assert.equal(entries(await f.downloads[0].arrayBuffer()).length,1);
+  }
+});
+
+test('missing batch CSV analysis queues one batch job instead of separate member analyses',async()=>{
+  const calls=[],progress=[];let reads=0;
+  const f=fixture(async(path,options)=>{
+    calls.push([path,options]);
+    assert.match(path,/^\/api\/v1\/batch-analysis-jobs\/batch/);
+    if(path.includes('/result?'))return batchArtifact('batch','new-batch');
+    if(options.method==='POST') {
+      assert.deepEqual(JSON.parse(options.body),{expectedAnalysis:{id:'',state:'idle'}});
+      return {batchId:'batch',id:'new-batch',state:'queued'};
+    }
+    return reads++===0?{batchId:'batch',state:'idle'}:{batchId:'batch',id:'new-batch',state:'completed'};
+  },[{id:'one',batchId:'batch',repetitions:3},{id:'two',batchId:'batch',repetitions:3}]);
+  await f.download('results',['batch:batch'],{onProgress:message=>progress.push(message)});
+  assert.equal(calls.filter(([,options])=>options.method==='POST').length,1);
+  assert.equal(calls.length,4);
+  assert.ok(progress.some(message=>message.includes('Analysis queued')));
+  assert.equal(entries(await f.downloads[0].arrayBuffer()).length,1);
+});
+
+test('unavailable or mismatched batch CSV analysis fails without per-Run fallback or partial export',async()=>{
+  for(const failure of ['unavailable','wrong-batch','missing-snapshot']) {
+    const calls=[],f=fixture(async(path,options)=>{
+      calls.push([path,options.method]);
+      assert.match(path,/^\/api\/v1\/batch-analysis-jobs\/batch/);
+      if(failure==='missing-snapshot')return {batchId:'batch',state:'idle'};
+      if(path.includes('/result?')) {
+        if(failure==='unavailable')throw new Error('source unavailable');
+        return batchArtifact('other');
+      }
+      return {batchId:'batch',id:'saved-batch',state:'completed'};
+    },[{id:'missing',batchId:'batch',repetitions:3,state:'missing',missing:true}]);
+    await assert.rejects(f.download('results',['batch:batch']),/Batch batch:.*(unavailable|Invalid batch|no completed analysis snapshot)/);
+    assert.ok(calls.every(([,method])=>!method));
+    assert.equal(f.downloads.length,0);
+  }
+});
+
+test('batch CSV cancellation and changed snapshots never start a download',async()=>{
+  for(const stage of ['queued','csv','replaced']) {
+    const controller=new AbortController(),calls=[];
+    const f=fixture(async(path,options)=>{
+      calls.push([path,options.method]);
+      if(stage==='queued')return {batchId:'batch',id:'pending',state:'queued'};
+      return path.includes('/result?')?batchArtifact('batch',stage==='replaced'?'replacement':'old'):
+        {batchId:'batch',id:'old',state:'completed'};
+    },[{id:'new-member',batchId:'batch',repetitions:3}]);
+    await assert.rejects(f.download('results',['batch:batch'],{signal:controller.signal,onProgress(message){
+      if(stage==='queued'&&message.includes('Analysis queued')||stage==='csv'&&message.includes('Preparing CSV'))controller.abort();
+    }}),stage==='replaced'?/saved analysis changed/:{name:'AbortError'});
+    assert.equal(calls.length,stage==='queued'?1:2);
+    assert.ok(calls.every(([,method])=>!method));
+    assert.equal(f.downloads.length,0);
+  }
 });
 
 test('verification or failed replacement exports its saved completed analysis immediately', async()=>{

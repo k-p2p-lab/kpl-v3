@@ -39,7 +39,7 @@ type analysisProcessProgress struct {
 type analysisOutputChunk struct {
 	Name   string `json:"name"`
 	Offset int64  `json:"offset"`
-	Data   []byte `json:"data"`
+	Data   []byte `json:"data,omitempty"`
 }
 
 type analysisOutputInfo struct {
@@ -78,8 +78,12 @@ func (w *analysisProcessWriter) Write(data []byte) (int, error) {
 	for len(data) > 0 {
 		length := min(len(data), workerSourceChunk/2)
 		chunk := data[:length]
-		if err := w.peer.Call(w.ctx, "analysis.write", analysisOutputChunk{Name: w.name, Offset: w.offset, Data: chunk}, nil); err != nil {
+		response, err := w.peer.CallBinary(w.ctx, "analysis.write", analysisOutputChunk{Name: w.name, Offset: w.offset}, chunk, nil)
+		if err != nil {
 			return total, err
+		}
+		if len(response) != 0 {
+			return total, errors.New("unexpected analysis output response payload")
 		}
 		_, _ = w.hash.Write(chunk)
 		w.offset += int64(length)

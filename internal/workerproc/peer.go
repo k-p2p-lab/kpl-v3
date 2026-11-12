@@ -28,6 +28,7 @@ var activeHandlers = func() [maxCallDepth + 1]chan struct{} {
 type depthKey struct{}
 type result struct {
 	body json.RawMessage
+	data []byte
 	err  error
 }
 type packet struct {
@@ -170,45 +171,59 @@ func (p *Peer) shutdown(err error) {
 }
 
 func (p *Peer) Call(ctx context.Context, method string, in, out any) error {
+	_, err := p.call(ctx, method, in, nil, out, false)
+	return err
+}
+
+// CallBinary sends and receives a bounded raw payload alongside JSON metadata.
+// Payloads are copied into an immutable outbound packet before admission.
+func (p *Peer) CallBinary(ctx context.Context, method string, in any, data []byte, out any) ([]byte, error) {
+	return p.call(ctx, method, in, data, out, true)
+}
+
+func (p *Peer) call(ctx context.Context, method string, in any, data []byte, out any, binary bool) ([]byte, error) {
 	if ctx == nil {
-		return errors.New("private worker Call requires a context")
+		return nil, errors.New("private worker Call requires a context")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	if len(data) > MaxBinaryBytes {
+		return nil, ErrTooLarge
 	}
 	p.mu.Lock()
 	if p.err != nil {
 		err := p.err
 		p.mu.Unlock()
-		return err
+		return nil, err
 	}
 	p.calls.Add(1)
 	p.mu.Unlock()
 	defer p.calls.Done()
 	if method == "" || len(method) > 128 {
-		return fmt.Errorf("%w: invalid method", ErrProtocol)
+		return nil, fmt.Errorf("%w: invalid method", ErrProtocol)
 	}
 	depth := 0
 	if parentDepth, ok := ctx.Value(depthKey{}).(int); ok {
 		depth = parentDepth + 1
 	}
 	if depth > maxCallDepth {
-		return ErrDepth
+		return nil, ErrDepth
 	}
 	select {
 	case p.credits[depth] <- struct{}{}:
 		defer func() { <-p.credits[depth] }()
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-p.done:
-		return p.connectionError()
+		return nil, p.connectionError()
 	}
 	body, err := marshalBody(in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	id := p.sequence.Add(1)
 	answer := make(chan result, 1)
@@ -216,7 +231,7 @@ func (p *Peer) Call(ctx context.Context, method string, in, out any) error {
 	if p.err != nil {
 		err = p.err
 		p.mu.Unlock()
-		return err
+		return nil, err
 	}
 	p.pending[id] = answer
 	p.mu.Unlock()
@@ -225,30 +240,35 @@ func (p *Peer) Call(ctx context.Context, method string, in, out any) error {
 		delete(p.pending, id)
 		p.mu.Unlock()
 	}()
-	f := frame{identity: p.id, Type: "request", ID: id, Method: method, Body: body, Depth: depth}
+	f := frame{identity: p.id, Type: "request", ID: id, Method: method, Body: body, Depth: depth, data: data}
 	if deadline, ok := ctx.Deadline(); ok {
 		f.Deadline = deadline.UnixNano()
 	}
 	if err := p.send(ctx, f, false); err != nil {
 		if ctx.Err() == nil && p.ctx.Err() != nil {
-			return p.connectionError()
+			return nil, p.connectionError()
 		}
-		return err
+		return nil, err
 	}
 	select {
 	case r := <-answer:
 		if r.err != nil {
-			return r.err
+			return nil, r.err
+		}
+		if !binary && len(r.data) != 0 {
+			return nil, fmt.Errorf("%w: binary response requires CallBinary", ErrProtocol)
 		}
 		if out != nil {
-			return json.Unmarshal(r.body, out)
+			if err := json.Unmarshal(r.body, out); err != nil {
+				return nil, err
+			}
 		}
-		return nil
+		return r.data, nil
 	case <-ctx.Done():
 		p.sendControl(frame{identity: p.id, Type: "cancel", ID: id})
-		return ctx.Err()
+		return nil, ctx.Err()
 	case <-p.done:
-		return p.connectionError()
+		return nil, p.connectionError()
 	}
 }
 
@@ -257,6 +277,10 @@ func (p *Peer) send(ctx context.Context, f frame, written bool) error {
 	if err != nil {
 		return err
 	}
+	return p.sendPrepared(ctx, data, written)
+}
+
+func (p *Peer) sendPrepared(ctx context.Context, data []byte, written bool) error {
 	ctx, cancel := context.WithCancel(ctx)
 	callbackDone := make(chan struct{})
 	stop := context.AfterFunc(p.ctx, func() { cancel(); close(callbackDone) })
@@ -370,7 +394,7 @@ func (p *Peer) readLoop() {
 			answer := p.pending[f.ID]
 			p.mu.Unlock()
 			if answer != nil {
-				r := result{body: f.Body}
+				r := result{body: f.Body, data: f.data}
 				if f.Error != nil {
 					r.err = &RemoteError{Code: f.Error.Code, Message: f.Error.Message}
 				}
@@ -404,6 +428,9 @@ func (p *Peer) readLoop() {
 			}
 			ctx := context.WithValue(p.ctx, identityKey{}, p.id)
 			ctx = context.WithValue(ctx, depthKey{}, f.Depth)
+			if len(f.data) != 0 {
+				ctx = context.WithValue(ctx, binaryKey{}, f.data)
+			}
 			var cancel context.CancelFunc
 			if f.Deadline != 0 {
 				ctx, cancel = context.WithDeadline(ctx, time.Unix(0, f.Deadline))
@@ -449,6 +476,7 @@ func (p *Peer) readLoop() {
 			return
 		}
 		f.Body = nil
+		f.data = nil
 	}
 }
 
@@ -488,16 +516,32 @@ func (p *Peer) handle(r request) {
 	case <-r.ctx.Done():
 		err = r.ctx.Err()
 	}
+	var payload []byte
+	if binary, ok := value.(Binary); ok {
+		value, payload = binary.Body, binary.Data
+	}
+	if err != nil {
+		value, payload = nil, nil
+	}
 	body, marshalErr := marshalBody(value)
 	if err == nil {
 		err = marshalErr
 	}
-	f := frame{identity: p.id, Type: "response", ID: r.frame.ID, Body: body, Error: remoteFailure(err)}
-	if _, err := encodeFrame(f); errors.Is(err, ErrTooLarge) {
-		f.Body, f.Error = nil, remoteFailure(err)
+	if err != nil {
+		payload = nil
+	}
+	f := frame{identity: p.id, Type: "response", ID: r.frame.ID, Body: body, Error: remoteFailure(err), data: payload}
+	encoded, encodeErr := encodeFrame(f)
+	if errors.Is(encodeErr, ErrTooLarge) {
+		f.Body, f.Error, f.data = nil, remoteFailure(encodeErr), nil
+		encoded, encodeErr = encodeFrame(f)
+	}
+	if encodeErr != nil {
+		p.shutdown(encodeErr)
+		return
 	}
 	// A canceled request still gets a cancellation response when the peer lives.
-	if sendErr := p.send(p.ctx, f, false); sendErr != nil && !errors.Is(sendErr, context.Canceled) {
+	if sendErr := p.sendPrepared(p.ctx, encoded, false); sendErr != nil && !errors.Is(sendErr, context.Canceled) {
 		p.shutdown(sendErr)
 	}
 }

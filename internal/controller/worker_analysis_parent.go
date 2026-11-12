@@ -139,17 +139,20 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 	defer source.close()
 	var progressMu sync.Mutex
 	broker := func(callCtx context.Context, method string, raw json.RawMessage) (any, error) {
+		if method != "analysis.write" && len(workerproc.RequestData(callCtx)) != 0 {
+			return nil, errors.New("unexpected binary analysis request")
+		}
 		switch method {
 		case "source.read":
 			var read workerSourceRead
 			if err := json.Unmarshal(raw, &read); err != nil {
 				return nil, err
 			}
-			return source.read(callCtx, read)
+			return workerBinarySourceResult(source.read(callCtx, read))
 		case "analysis.write":
 			source.close()
-			var chunk analysisOutputChunk
-			if err := json.Unmarshal(raw, &chunk); err != nil {
+			chunk, err := decodeAnalysisOutputChunk(callCtx, raw)
+			if err != nil {
 				return nil, err
 			}
 			return nil, outputs.write(callCtx, chunk)

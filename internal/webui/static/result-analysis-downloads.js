@@ -1,7 +1,6 @@
 (function (root) {
   "use strict";
   const node = typeof module !== "undefined" && module.exports;
-  const selection = node ? require("./library-downloads.js") : root.KPLLibraryDownloads;
   const images = node ? require("./result-images.js") : root.KPLResultImages;
   const batch = node ? require("./batch-analysis.js") : root.KPLBatchAnalysis;
   const research = node ? require("./research-charts.js") : root.KPLResearch;
@@ -9,6 +8,21 @@
   const maxArchiveBytes = 128 * 1024 * 1024;
   const archiveTooLarge = label => new Error(`${label} export exceeds 128 MiB. Select fewer results and download again.`);
   const checkAbort = signal => { if (signal?.aborted) throw new DOMException("Analysis export canceled.", "AbortError"); };
+
+  function batchSnapshotCSV(data) {
+    const row = (scope, result, analysis = {}) => [scope, result.id, analysis.analysisId, analysis.analysisVersion,
+      analysis.asOf, analysis.sourceHash || result.sourceHash, result.sourceRevision, result.state];
+    const rows = [["scope", "id", "analysis_id", "analysis_version", "as_of", "source_hash", "source_revision", "state"],
+      row("batch", {id:data.batchId}, data),
+      ...data.runs.map(run => row("included-run", run.result, run)),
+      ...(data.excluded || []).map(run => row("excluded-run", run))];
+    const quote = value => {
+      const text = String(value ?? "");
+      const safe = /^[\s]*[=+\-@]/.test(text) ? "'" + text : text;
+      return '"' + safe.replaceAll('"', '""') + '"';
+    };
+    return rows.map(row => row.map(quote).join(",")).join("\n") + "\n";
+  }
 
   function pause(signal, milliseconds) {
     checkAbort(signal);
@@ -43,10 +57,9 @@
       } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
     }
 
-    function selectedAnalyses(scope, keys, results) {
-      if (format !== "json") return selection.selectedIDs(scope, keys, [], results).map(id => ({id, isBatch:false}));
-      // JSON follows the selected result set: one integrated artifact for a
-      // repetition batch, rather than one analysis request per member/attempt.
+    function selectedAnalyses(keys, results) {
+      // Both formats follow the selected result set: one integrated artifact
+      // for a repetition batch, without analyzing each member/previous attempt.
       const selected = new Set(keys), known = new Set(), targets = new Map();
       // Single submissions also have a batchId. Only repetition series use a
       // batch mean; retain per-Run export for single runs and their retries.
@@ -132,28 +145,36 @@
         await pause(signal, 0);
         return {name, data:bytes};
       }
-      const charts = images.buildCharts(data).map(research.formatChart), bundle = [], encoder = new TextEncoder();
-      if (charts.length > 65535) throw new Error("This result has too many charts for one CSV ZIP.");
+      const charts = (isBatch ? batch.build(data, images.buildCharts) : images.buildCharts(data)).map(research.formatChart);
+      const bundle = [], encoder = new TextEncoder(), artifactID = isBatch ? `${id}-batch-mean` : id;
+      if (charts.length + (isBatch ? 2 : 0) > 65535) throw new Error("This result has too many charts for one CSV ZIP.");
       let size = 22;
-      for (const [index, chart] of charts.entries()) {
-        checkAbort(signal);
-        progress(`Preparing CSV ${index + 1}/${charts.length}`);
-        const name = `${id}-${chart.id}.csv`, bytes = encoder.encode(files.chartCSV(chart));
+      const addCSV = (name, source) => {
+        const bytes = encoder.encode(source);
         size += 76 + 2 * encoder.encode(name).length + bytes.length;
         if (size > availableBytes) throw tooLarge();
         bundle.push({name, data:bytes});
+      };
+      if (isBatch) {
+        addCSV(`${artifactID}-summary.csv`, batch.summaryCSV(data.summary));
+        addCSV(`${artifactID}-snapshot.csv`, batchSnapshotCSV(data));
+      }
+      for (const [index, chart] of charts.entries()) {
+        checkAbort(signal);
+        progress(`Preparing CSV ${index + 1}/${charts.length}`);
+        addCSV(`${artifactID}-${chart.id}.csv`, files.chartCSV(chart));
         // Yield between charts so cancel and progress remain responsive.
         await pause(signal, 0);
       }
       const archive = files.zip(bundle);
       checkAbort(signal);
-      const name = images.imageZIPFilename(data.result.name, id).replace(/-images\.zip$/, "-csv.zip");
+      const name = images.imageZIPFilename(isBatch ? data.name : data.result.name, artifactID).replace(/-images\.zip$/, "-csv.zip");
       return {name, data:new Uint8Array(await archive.arrayBuffer())};
     }
 
     return async (scope, keys, {signal, onProgress = () => {}} = {}) => {
       if (scope !== "results") throw new Error(`${label} ZIP export is available for saved results only.`);
-      const targets = selectedAnalyses(scope, keys, getResults());
+      const targets = selectedAnalyses(keys, getResults());
       // IDs are also filename components. The server accepts this same alphabet.
       if (targets.some(({id}) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) throw new Error("Invalid result identity. Refresh the list and select again.");
       const bundle = [], encoder = new TextEncoder();

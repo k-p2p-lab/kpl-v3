@@ -19,7 +19,7 @@ import (
 
 // The same captured in-memory input compares decode-only throughput with the
 // complete ordered metrics/research pipeline at larger execution budgets.
-func analysisPipelineBenchmarkFixture(b *testing.B) (resultFile, *resultSnapshot) {
+func analysisPipelineBenchmarkFixture(b testing.TB) (resultFile, *resultSnapshot) {
 	b.Helper()
 	var data bytes.Buffer
 	encoder := json.NewEncoder(&data)

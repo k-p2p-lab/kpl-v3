@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	MaxMessageBytes = 16 << 20
+	MaxBinaryBytes  = 1 << 20
 	privateMarker   = "KPL_PRIVATE_WORKER"
 	maxCallDepth    = 4
 	callsPerDepth   = 16
@@ -36,6 +37,26 @@ var (
 // Handler must honor ctx. It may call the remote peer using that same context;
 // nested calls have separate bounded dispatch pools and never block responses.
 type Handler func(context.Context, string, json.RawMessage) (any, error)
+
+// Binary keeps bulk bytes outside JSON while retaining the usual metadata and
+// RPC lifecycle. The transport copies Data before queueing a write, so callers
+// may reuse their input after CallBinary returns, including on cancellation.
+type Binary struct {
+	Body any
+	Data []byte
+}
+
+type binaryKey struct{}
+
+// RequestData is immutable and belongs to this handler invocation. A handler
+// must copy it if it needs to retain or modify it after returning.
+func RequestData(ctx context.Context) []byte {
+	if ctx == nil {
+		return nil
+	}
+	data, _ := ctx.Value(binaryKey{}).([]byte)
+	return data
+}
 
 type Factory func(context.Context, string, json.RawMessage, *Peer) (Handler, error)
 
@@ -95,16 +116,28 @@ type frame struct {
 	Error    *wireError      `json:"error,omitempty"`
 	Deadline int64           `json:"deadline,omitempty"`
 	Depth    int             `json:"depth,omitempty"`
+	Bytes    int             `json:"bytes,omitempty"`
+	data     []byte
 }
 
 func encodeFrame(f frame) ([]byte, error) {
-	data, err := json.Marshal(f)
+	if len(f.data) > MaxBinaryBytes {
+		return nil, ErrTooLarge
+	}
+	f.Bytes = len(f.data)
+	metadata, err := json.Marshal(f)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > MaxMessageBytes {
+	if len(metadata)+len(f.data)+4 > MaxMessageBytes {
 		return nil, ErrTooLarge
 	}
+	// The outer length covers this complete immutable packet; the inner
+	// length bounds JSON parsing to metadata, excluding the raw payload.
+	data := make([]byte, 4+len(metadata)+len(f.data))
+	binary.BigEndian.PutUint32(data[:4], uint32(len(metadata)))
+	copy(data[4:], metadata)
+	copy(data[4+len(metadata):], f.data)
 	return data, nil
 }
 
@@ -122,8 +155,25 @@ func readFrame(r io.Reader) (frame, error) {
 	if _, err := io.ReadFull(r, data); err != nil {
 		return f, err
 	}
-	if err := json.Unmarshal(data, &f); err != nil {
+	if len(data) < 4 {
+		return f, fmt.Errorf("%w: missing metadata length", ErrProtocol)
+	}
+	metadataBytes := binary.BigEndian.Uint32(data[:4])
+	if metadataBytes == 0 || uint64(metadataBytes)+4 > uint64(len(data)) {
+		return f, fmt.Errorf("%w: invalid metadata length", ErrProtocol)
+	}
+	end := 4 + int(metadataBytes)
+	if err := json.Unmarshal(data[4:end], &f); err != nil {
 		return f, fmt.Errorf("%w: malformed JSON", ErrProtocol)
+	}
+	if f.Bytes < 0 || f.Bytes > MaxBinaryBytes || len(data)-end != f.Bytes {
+		return f, fmt.Errorf("%w: invalid binary payload length", ErrProtocol)
+	}
+	if f.Bytes != 0 {
+		if (f.Type != "request" && f.Type != "response") || f.Error != nil {
+			return f, fmt.Errorf("%w: unexpected binary payload", ErrProtocol)
+		}
+		f.data = data[end:]
 	}
 	return f, nil
 }

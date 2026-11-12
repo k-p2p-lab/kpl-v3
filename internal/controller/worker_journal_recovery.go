@@ -200,7 +200,7 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	}()
 	broker := func(callCtx context.Context, method string, raw json.RawMessage) (any, error) {
 		if method == "source.read" {
-			return source(callCtx, method, raw)
+			return workerBinarySourceResult(source(callCtx, method, raw))
 		}
 		if method != "journal.keys" {
 			return nil, errors.New("unknown telemetry index broker operation")

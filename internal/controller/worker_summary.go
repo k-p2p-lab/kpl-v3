@@ -338,7 +338,7 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 	if snapshot.active {
 		return errResultBusy
 	}
-	process, err := workerproc.Start(ctx, "controller-summary", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot), EventRevision: eventRevisionOf(snapshot.files)}, s.workerSnapshotSource([]*resultSnapshot{snapshot}), workerproc.Options{RunID: id, Command: s.workerCommand})
+	process, err := workerproc.Start(ctx, "controller-summary", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot), EventRevision: eventRevisionOf(snapshot.files)}, workerBinarySourceHandler(s.workerSnapshotSource([]*resultSnapshot{snapshot})), workerproc.Options{RunID: id, Command: s.workerCommand})
 	if err != nil {
 		if process != nil {
 			s.rememberUnreapedWorker(id, process)

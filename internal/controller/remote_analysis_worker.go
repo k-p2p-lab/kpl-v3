@@ -172,6 +172,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 	if err != nil {
 		return nil, result, err
 	}
+	calculationCtx, cancelCalculation := context.WithCancel(jobCtx)
 	var mu sync.Mutex
 	var exchangeMu sync.Mutex
 	exchange := func(ctx context.Context, method string, value any, data []byte) (remoteAnalysisFrame, error) {
@@ -188,7 +189,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		reply, err := socket.receive(ctx)
 		if err != nil {
 			// No reply from an interrupted exchange belongs to a later call.
-			if jobCtx.Err() == nil {
+			if calculationCtx.Err() == nil {
 				socket.cancel(err)
 			}
 			return remoteAnalysisFrame{}, err
@@ -205,7 +206,7 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 	if prefetchMiB == 0 {
 		prefetchMiB = defaultAnalysisPrefetchMiB
 	}
-	prefetch := newAnalysisPrefetch(jobCtx, hello.Input, int64(prefetchMiB)<<20, func(ctx context.Context, read workerSourceRead) (workerSourceBytes, error) {
+	prefetch := newAnalysisPrefetch(calculationCtx, hello.Input, int64(prefetchMiB)<<20, func(ctx context.Context, read workerSourceRead) (workerSourceBytes, error) {
 		reply, err := exchange(ctx, "source.read", read, nil)
 		if err != nil {
 			return workerSourceBytes{}, err
@@ -216,17 +217,15 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		}
 		return workerSourceBytes{Data: reply.data, EOF: eof}, nil
 	})
-	defer prefetch.close()
-	var pendingProgress analysisProcessProgress
-	var lastProgress time.Time
-	flushProgress := func(ctx context.Context) error {
-		if _, err := exchange(ctx, "analysis.progress", pendingProgress, nil); err != nil {
-			return err
-		}
-		pendingProgress.Bytes = 0
-		lastProgress = time.Now()
-		return nil
-	}
+	progress := newRemoteAnalysisProgress(calculationCtx, func(ctx context.Context, update analysisProcessProgress) error {
+		_, err := exchange(ctx, "analysis.progress", update, nil)
+		return err
+	}, cancelCalculation)
+	defer func() {
+		cancelCalculation()
+		prefetch.close()
+		_ = progress.close()
+	}()
 	broker := func(ctx context.Context, method string, body json.RawMessage) (any, error) {
 		// Serialize child callbacks independently of the background producer.
 		// Cache hits can proceed while its next network exchange is in flight.
@@ -235,71 +234,61 @@ func (w *remoteAnalysisWorker) calculate(jobCtx context.Context, socket *remoteA
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if method != "analysis.write" && len(workerproc.RequestData(ctx)) != 0 {
+			return nil, errors.New("unexpected binary analysis control request")
+		}
 		switch method {
 		case "source.read":
 			var read workerSourceRead
 			if err := json.Unmarshal(body, &read); err != nil {
 				return nil, err
 			}
-			return prefetch.read(ctx, read)
+			return workerBinarySourceResult(prefetch.read(ctx, read))
 		case "analysis.progress":
 			var update analysisProcessProgress
-			if json.Unmarshal(body, &update) != nil || update.Bytes < 0 || update.Bytes > workerproc.MaxMessageBytes {
+			if json.Unmarshal(body, &update) != nil || update.Snapshot < 0 || update.Snapshot >= len(hello.Input.Snapshots) || len(update.Phase) > 256 || update.Bytes < 0 || update.Bytes > workerproc.MaxMessageBytes {
 				return nil, errors.New("invalid analysis progress update")
 			}
-			if lastProgress.IsZero() || update.Snapshot != pendingProgress.Snapshot || update.Phase != pendingProgress.Phase {
-				if pendingProgress.Bytes != 0 {
-					if err := flushProgress(ctx); err != nil {
-						return nil, err
-					}
-				}
-				pendingProgress = update
-				return nil, flushProgress(ctx)
-			}
-			pendingProgress.Bytes += update.Bytes
-			if pendingProgress.Bytes >= workerSourceChunk || time.Since(lastProgress) >= time.Second {
-				return nil, flushProgress(ctx)
-			}
-			return nil, nil
+			return nil, progress.enqueue(ctx, update)
 		case "analysis.batch-metadata":
 			// The Controller closes source admission at this exchange. Drain
 			// the final in-flight prefetch reply before crossing that boundary.
 			prefetch.close()
-			if pendingProgress.Bytes != 0 {
-				if err := flushProgress(ctx); err != nil {
-					return nil, err
-				}
+			if err := progress.close(); err != nil {
+				return nil, err
 			}
 			reply, err := exchange(ctx, method, body, nil)
 			return reply.Body, err
 		case "analysis.write":
 			prefetch.close()
-			if pendingProgress.Bytes != 0 {
-				if err := flushProgress(ctx); err != nil {
-					return nil, err
-				}
-			}
-			var chunk analysisOutputChunk
-			if err := json.Unmarshal(body, &chunk); err != nil {
+			if err := progress.close(); err != nil {
 				return nil, err
 			}
-			_, err := exchange(ctx, method, remoteAnalysisOutput{Name: chunk.Name, Offset: chunk.Offset}, chunk.Data)
+			chunk, err := decodeAnalysisOutputChunk(ctx, body)
+			if err != nil {
+				return nil, err
+			}
+			_, err = exchange(ctx, method, remoteAnalysisOutput{Name: chunk.Name, Offset: chunk.Offset}, chunk.Data)
 			return nil, err
 		default:
 			return nil, invalidAnalysisOperation(method)
 		}
 	}
-	process, err := workerproc.Start(jobCtx, "controller-analysis", hello.Input, broker, options)
+	process, err := workerproc.Start(calculationCtx, "controller-analysis", hello.Input, broker, options)
 	if err != nil {
 		return process, result, err
 	}
 	w.logger.Info("Agent analysis calculation started", "batchId", hello.Input.BatchID, "analysisId", hello.Input.AnalysisID, "workerPid", process.PID(), "cpus", options.MaxProcs, "memoryTargetBytes", options.MemoryLimitBytes)
-	computeErr := process.Call(jobCtx, "analyze", nil, &result)
+	computeErr := process.Call(calculationCtx, "analyze", nil, &result)
+	if computeErr != nil {
+		cancelCalculation()
+	}
 	if computeErr == nil {
 		w.logger.Info("Agent analysis calculation resources", "analysisId", hello.Input.AnalysisID, "cpus", result.CPUs, "memoryTargetBytes", result.MemoryLimitBytes)
 	}
 	prefetch.close()
+	progressErr := progress.close()
 	stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	return process, result, errors.Join(computeErr, process.CloseContext(stopCtx))
+	return process, result, errors.Join(computeErr, progressErr, process.CloseContext(stopCtx))
 }

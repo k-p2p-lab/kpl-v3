@@ -72,6 +72,10 @@ type receiverMessageGroup struct {
 }
 
 func (a *researchAccumulator) receiverGroups(ctx context.Context, metrics *runMetricAccumulator, messages []researchMessage, observations []analysisObservation, latencySamples []propagationSample, origin time.Time) ([]researchReceiverGroup, error) {
+	return a.receiverGroupsWithWorkers(ctx, metrics, messages, observations, latencySamples, origin, analysisParallelism())
+}
+
+func (a *researchAccumulator) receiverGroupsWithWorkers(ctx context.Context, metrics *runMetricAccumulator, messages []researchMessage, observations []analysisObservation, latencySamples []propagationSample, origin time.Time, workers int) ([]researchReceiverGroup, error) {
 	groups := map[string]*receiverGroupAccumulator{}
 	get := func(group string) *receiverGroupAccumulator {
 		if groups[group] == nil {
@@ -219,11 +223,14 @@ func (a *researchAccumulator) receiverGroups(ctx context.Context, metrics *runMe
 		names = append(names, group)
 	}
 	sort.Strings(names)
-	out := make([]researchReceiverGroup, 0, len(names))
-	for _, group := range names {
+	out := make([]researchReceiverGroup, len(names))
+	// Each group owns its accumulators and output slot. Finalization can run
+	// independently while message accounting above retains its original order.
+	err := parallelAnalysis(ctx, len(names), workers, func(ctx context.Context, index int) error {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
+		group := names[index]
 		g := groups[group]
 		r := &g.result
 		r.MessageCount = len(g.messages)
@@ -273,7 +280,11 @@ func (a *researchAccumulator) receiverGroups(ctx context.Context, metrics *runMe
 		if r.EligiblePopulation > 0 && g.duplicateCount == 0 {
 			r.DuplicateCDF = []analysisPoint{{X: 0, Y: 0}}
 		}
-		out = append(out, *r)
+		out[index] = *r
+		return ctx.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

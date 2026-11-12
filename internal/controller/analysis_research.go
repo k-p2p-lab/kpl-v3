@@ -227,6 +227,31 @@ func cumulativePoints(counts map[float64]float64, denominator float64) []analysi
 }
 
 func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccumulator, observations []analysisObservation) (researchAnalysis, error) {
+	return a.finishWithWorkers(ctx, metrics, observations, analysisParallelism())
+}
+
+func (a *researchAccumulator) finishWithWorkers(ctx context.Context, metrics *runMetricAccumulator, observations []analysisObservation, workers int) (researchAnalysis, error) {
+	// Derived counts belong to this artifact. Retrying a canceled calculation
+	// or rebuilding from the same immutable accumulator must not add them to
+	// the raw control evidence a second time.
+	controls := make(map[int64]map[string]float64, len(a.controls))
+	for at, values := range a.controls {
+		copy := make(map[string]float64, len(values))
+		for name, value := range values {
+			copy[name] = value
+		}
+		controls[at] = copy
+	}
+	addControl := func(at time.Time, key string, count float64) {
+		if at.IsZero() {
+			return
+		}
+		bin := analysisBucket(at.Unix(), 5)
+		if controls[bin] == nil {
+			controls[bin] = make(map[string]float64)
+		}
+		controls[bin][key] += count
+	}
 	out := researchAnalysis{OriginMethod: "message-id-preferred-graft-ihave-iwant-estimate-v2", OriginWindowSeconds: originEvidenceWindow.Seconds(), Definition: "v2-corrected-observations-v1", PopulationBasis: "union of subscribed non-publisher nodes at first receipts; dispatch targets only when membership history is absent", Summary: map[string]analysisStatistic{}, Messages: []researchMessage{}, Controls: []researchControlBin{}, ControlBinSeconds: 5, DegreeDistribution: []analysisPoint{}, PropagationCDF: []analysisPoint{}, DuplicateCDF: []analysisPoint{}, HopPDF: []analysisPoint{}, HopCDF: []analysisPoint{}, EagerCDF: []analysisPoint{}, LazyCDF: []analysisPoint{}}
 	sort.Slice(a.graphEvents, func(i, j int) bool {
 		if a.graphEvents[i].at.Equal(a.graphEvents[j].at) {
@@ -238,47 +263,69 @@ func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccu
 	// directions so an old pending GRAFT cannot create a phantom later edge.
 	pending := map[string]map[researchEdge]bool{}
 	confirmed := map[string]map[researchEdge]bool{}
-	type life struct {
-		node, topic string
-		start, end  time.Time
+	incident := map[string]map[originTopicEdge]struct{}{}
+	addPending := func(topic string, edge researchEdge) {
+		pending[topic][edge] = true
+		key := originTopicEdge{from: edge.from, to: edge.to, topic: topic}
+		for _, peer := range []string{edge.from, edge.to} {
+			if node := a.peers[peer]; node != "" {
+				if incident[node] == nil {
+					incident[node] = make(map[originTopicEdge]struct{})
+				}
+				incident[node][key] = struct{}{}
+			}
+		}
 	}
-	lives := []life{}
-	open := map[string]int{}
+	removePending := func(topic string, edge researchEdge) {
+		delete(pending[topic], edge)
+		delete(confirmed[topic], edge)
+		key := originTopicEdge{from: edge.from, to: edge.to, topic: topic}
+		for _, peer := range []string{edge.from, edge.to} {
+			if node := a.peers[peer]; node != "" {
+				delete(incident[node], key)
+				if len(incident[node]) == 0 {
+					delete(incident, node)
+				}
+			}
+		}
+	}
+	lives := []researchMembershipLife{}
+	open := map[string]map[string]int{}
 	for _, e := range a.graphEvents {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
 		if e.kind == "join" {
-			key := e.node + "\x00" + e.topic
-			if _, ok := open[key]; !ok {
-				open[key] = len(lives)
-				lives = append(lives, life{node: e.node, topic: e.topic, start: e.at})
+			if open[e.node] == nil {
+				open[e.node] = make(map[string]int)
+			}
+			if _, ok := open[e.node][e.topic]; !ok {
+				open[e.node][e.topic] = len(lives)
+				lives = append(lives, researchMembershipLife{node: e.node, topic: e.topic, start: e.at})
 			}
 		}
 		if e.kind == "leave" || e.kind == "measurement_stop" || e.kind == "measurement_terminated" {
-			for key, index := range open {
-				if lives[index].node == e.node && (e.kind != "leave" || lives[index].topic == e.topic) {
+			for topic, index := range open[e.node] {
+				if e.kind != "leave" || topic == e.topic {
 					lives[index].end = e.at
-					delete(open, key)
+					delete(open[e.node], topic)
 				}
 			}
-			for topic, edges := range pending {
-				if e.kind == "leave" && topic != e.topic {
+			if len(open[e.node]) == 0 {
+				delete(open, e.node)
+			}
+			for edge := range incident[e.node] {
+				if e.kind == "leave" && edge.topic != e.topic {
 					continue
 				}
-				for edge := range edges {
-					if a.peers[edge.from] == e.node || a.peers[edge.to] == e.node {
-						delete(edges, edge)
-						delete(confirmed[topic], edge)
-						delete(confirmed[topic], researchEdge{edge.to, edge.from})
-					}
-				}
+				removePending(edge.topic, researchEdge{edge.from, edge.to})
+				removePending(edge.topic, researchEdge{edge.to, edge.from})
 			}
 		}
 		if e.kind != "graft" && e.kind != "prune" {
 			continue
 		}
-		a.addControl(e.at, "send_"+e.kind, 1)
+		addControl(e.at, "send_"+e.kind, 1)
 		if pending[e.topic] == nil {
 			pending[e.topic] = map[researchEdge]bool{}
 			confirmed[e.topic] = map[researchEdge]bool{}
@@ -288,19 +335,17 @@ func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccu
 			continue
 		}
 		if e.kind == "graft" {
-			pending[e.topic][edge] = true
+			addPending(e.topic, edge)
 			if pending[e.topic][reverse] && !confirmed[e.topic][edge] {
 				confirmed[e.topic][edge], confirmed[e.topic][reverse] = true, true
-				a.addControl(e.at, "logical_send_graft", 1)
+				addControl(e.at, "logical_send_graft", 1)
 			}
 		} else {
 			if confirmed[e.topic][edge] {
-				a.addControl(e.at, "logical_send_prune", 1)
+				addControl(e.at, "logical_send_prune", 1)
 			}
-			delete(pending[e.topic], edge)
-			delete(pending[e.topic], reverse)
-			delete(confirmed[e.topic], edge)
-			delete(confirmed[e.topic], reverse)
+			removePending(e.topic, edge)
+			removePending(e.topic, reverse)
 		}
 	}
 	// Equally weighted saved snapshots are separate from receiver latency samples.
@@ -360,205 +405,80 @@ func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccu
 	samples := map[string][]float64{}
 	arrivalCounts, duplicateCounts, eagerCounts, lazyCounts, hopCounts := map[float64]float64{}, map[float64]float64{}, map[float64]float64{}, map[float64]float64{}, map[float64]float64{}
 	totalPopulation, hopTotal, eagerTotal, lazyTotal := 0., 0., 0., 0.
-	for ki, key := range keys {
-		if err := ctx.Err(); err != nil {
+	members := researchMembershipIndex(lives)
+	workers = max(1, workers)
+	// Keep temporary population/duplicate indexes bounded; completed output
+	// messages already belong to the final artifact. Only the caller reduces
+	// results and emits progress, in the original sorted-key order.
+	batchSize := min(len(keys), max(1, min(128, workers*2)))
+	projections := make([]researchMessageProjection, batchSize)
+	if len(keys) > 0 {
+		reportAnalysisProgress(ctx, fmt.Sprintf("propagation 1/%d", len(keys)), 0)
+	}
+	for start := 0; start < len(keys); start += batchSize {
+		count := min(batchSize, len(keys)-start)
+		if err := parallelAnalysis(ctx, count, workers, func(ctx context.Context, index int) error {
+			key := keys[start+index]
+			projection, err := a.projectMessage(ctx, key, metrics.messages[key], members, origins, out.Summary["node_count"].Average)
+			projections[index] = projection
+			return err
+		}); err != nil {
 			return out, err
 		}
-		if ki%100 == 0 {
-			reportAnalysisProgress(ctx, fmt.Sprintf("propagation %d/%d", ki+1, len(keys)), 0)
-		}
-		message := metrics.messages[key]
-		if !message.published {
-			out.OrphanReceipts += len(message.deliveries)
-			continue
-		}
-		item := researchMessage{ID: key.id, Topic: key.topic, Publisher: message.publisher, At: message.publishedAt, Metrics: map[string]analysisStatistic{}, Population: []string{}, Nodes: []researchNode{}, DuplicateTimeline: []analysisPoint{}}
-		nodeKeys := make([]string, 0, len(message.deliveries))
-		for id := range message.deliveries {
-			if id != message.publisher {
-				nodeKeys = append(nodeKeys, id)
+		for index := range count {
+			ki, key := start+index, keys[start+index]
+			if err := ctx.Err(); err != nil {
+				return out, err
 			}
-		}
-		sort.Strings(nodeKeys)
-		byID := map[string]int{}
-		latencies, earlyLatencies := []float64{}, []float64{}
-		receiptTimes := []time.Time{}
-		for _, id := range nodeKeys {
-			delivery := message.deliveries[id]
-			node := researchNode{ID: id, Source: "unknown", LinkEstimate: "unknown", Evidence: []string{}}
-			seconds := math.NaN()
-			if delivery.latencyAvailable && delivery.latencyMS >= 0 {
-				seconds = delivery.latencyMS / 1000
-			} else if detail := delivery.research; detail != nil {
-				pub := a.publications[key]
-				if !pub.at.IsZero() && !delivery.timestamp.IsZero() && (pub.synchronized && detail.synchronized || pub.agent != "" && pub.agent == delivery.agentID) {
-					seconds = delivery.timestamp.Sub(pub.at).Seconds()
-				}
+			if ki > 0 && ki%100 == 0 {
+				reportAnalysisProgress(ctx, fmt.Sprintf("propagation %d/%d", ki+1, len(keys)), 0)
 			}
-			if seconds >= 0 {
-				node.Seconds = numberPointer(seconds)
-				if node.Seconds != nil {
-					latencies = append(latencies, *node.Seconds)
-				}
-			}
-			if detail := delivery.research; detail != nil {
-				node.Parent = a.peers[detail.from]
-				node.LinkEstimate, node.Evidence = origins.estimate(detail.from, detail.peer, key.topic, detail.wireID, message.publishedAt, delivery.timestamp)
-
-			}
-			receiptTimes = append(receiptTimes, delivery.timestamp)
-			byID[id] = len(item.Nodes)
-			item.Nodes = append(item.Nodes, node)
-		}
-		visiting := map[string]bool{}
-		resolved := map[string]bool{}
-		var resolve func(string)
-		resolve = func(id string) {
-			if resolved[id] || visiting[id] {
-				return
-			}
-			visiting[id] = true
-			index, exists := byID[id]
-			if !exists {
-				return
-			}
-			node := &item.Nodes[index]
-			parentSource := "unknown"
-			var parentHop *int
-			if node.Parent == message.publisher {
-				zero := 0
-				parentHop = &zero
-				parentSource = "eager"
-			} else if parentIndex, ok := byID[node.Parent]; ok && !visiting[node.Parent] {
-				resolve(node.Parent)
-				parentHop = item.Nodes[parentIndex].Hop
-				parentSource = item.Nodes[parentIndex].Source
-			}
-			if parentHop != nil {
-				hop := *parentHop + 1
-				node.Hop = &hop
-			}
-			if parentHop != nil && (node.LinkEstimate == "lazy" || parentSource == "lazy") {
-				node.Source = "lazy"
-			} else if node.LinkEstimate == "eager" && parentSource == "eager" {
-				node.Source = "eager"
-			}
-			visiting[id] = false
-			resolved[id] = true
-		}
-		eager, lazy := 0, 0
-		for _, id := range nodeKeys {
-			resolve(id)
-		}
-		for _, node := range item.Nodes {
-			if node.Hop == nil {
-				out.UnresolvedParents++
-			} else {
-				hopCounts[float64(*node.Hop)]++
-				hopTotal++
-			}
-			switch node.Source {
-			case "eager":
-				eager++
-				a.addControl(message.deliveries[node.ID].timestamp, "eager_count", 1)
-				if node.Seconds != nil {
-					earlyLatencies = append(earlyLatencies, *node.Seconds)
-					eagerCounts[*node.Seconds]++
-					eagerTotal++
-				}
-			case "lazy":
-				lazy++
-				a.addControl(message.deliveries[node.ID].timestamp, "lazy_count", 1)
-				if node.Seconds != nil {
-					lazyCounts[*node.Seconds]++
-					lazyTotal++
-				}
-			default:
-				out.UnknownOrigins++
-			}
-		}
-		population := map[string]bool{}
-		membershipObserved := false
-		if len(receiptTimes) == 0 && !message.publishedAt.IsZero() {
-			receiptTimes = append(receiptTimes, message.publishedAt)
-		}
-		sort.Slice(receiptTimes, func(i, j int) bool { return receiptTimes[i].Before(receiptTimes[j]) })
-		for _, life := range lives {
-			if life.topic != key.topic {
+			projection := projections[index]
+			projections[index] = researchMessageProjection{}
+			if !projection.published {
+				out.OrphanReceipts += projection.orphanReceipts
 				continue
 			}
-			membershipObserved = true
-			if life.node == message.publisher {
-				continue
-			}
-			i := sort.Search(len(receiptTimes), func(i int) bool { return !receiptTimes[i].Before(life.start) })
-			if i < len(receiptTimes) && (life.end.IsZero() || receiptTimes[i].Before(life.end)) {
-				population[life.node] = true
-			}
-		}
-		item.PopulationBasis = "observed membership union"
-		if !membershipObserved {
-			item.PopulationBasis = "unavailable"
-			if message.targets != nil {
-				item.PopulationBasis = "dispatch targets"
-				for id := range message.targets {
-					if id != message.publisher {
-						population[id] = true
+			item := projection.item
+			message := metrics.messages[key]
+			for _, node := range item.Nodes {
+				if node.Hop == nil {
+					out.UnresolvedParents++
+				} else {
+					hopCounts[float64(*node.Hop)]++
+					hopTotal++
+				}
+				switch node.Source {
+				case "eager":
+					addControl(message.deliveries[node.ID].timestamp, "eager_count", 1)
+					if node.Seconds != nil {
+						eagerCounts[*node.Seconds]++
+						eagerTotal++
 					}
+				case "lazy":
+					addControl(message.deliveries[node.ID].timestamp, "lazy_count", 1)
+					if node.Seconds != nil {
+						lazyCounts[*node.Seconds]++
+						lazyTotal++
+					}
+				default:
+					out.UnknownOrigins++
 				}
-			}
-		}
-		for id := range population {
-			item.Population = append(item.Population, id)
-		}
-		sort.Strings(item.Population)
-
-		// Count only receivers belonging to the explicitly reconstructed denominator.
-		reached, eligibleEager := 0, 0
-		for _, node := range item.Nodes {
-			if population[node.ID] {
-				reached++
-				if node.Source == "eager" {
-					eligibleEager++
-				}
-				if node.Seconds != nil {
+				if projection.population[node.ID] && node.Seconds != nil {
 					arrivalCounts[*node.Seconds]++
 				}
 			}
-		}
-		denominator := float64(len(population))
-		totalPopulation += denominator
-		item.Metrics["frt"], item.Metrics["eager_frt"] = analysisStats(latencies), analysisStats(earlyLatencies)
-		item.Metrics["drc"] = scalarStat(numberPointer(float64(sumDuplicateCounts(message.duplicates))))
-		item.Metrics["eager_count"], item.Metrics["lazy_count"] = scalarStat(numberPointer(float64(eager))), scalarStat(numberPointer(float64(lazy)))
-		item.Metrics["unknown_count"] = scalarStat(numberPointer(float64(len(nodeKeys) - eager - lazy)))
-		if denominator > 0 {
-			item.Metrics["reachability"] = scalarStat(numberPointer(float64(reached) / denominator))
-			item.Metrics["drc_per_target"] = scalarStat(numberPointer(float64(sumDuplicateCounts(message.duplicates)) / denominator))
-			item.Metrics["eager_reachability"] = scalarStat(numberPointer(float64(eligibleEager) / denominator))
-		}
-		if nodes := out.Summary["node_count"].Average; nodes != nil && *nodes > 0 {
-			item.Metrics["drc_per_node_count"] = scalarStat(numberPointer(float64(sumDuplicateCounts(message.duplicates)) / *nodes))
-		}
-		duplicateTimes := map[float64]float64{}
-		if !message.publishedAt.IsZero() {
-			for at, count := range a.duplicateTimes[key] {
-				seconds := time.Unix(0, at.at).Sub(message.publishedAt).Seconds()
-				if seconds >= 0 {
-					duplicateTimes[seconds] += float64(count)
-					if population[at.node] {
-						duplicateCounts[seconds] += float64(count)
-					}
+			for _, duplicate := range projection.eligibleDuplicates {
+				duplicateCounts[duplicate.X] += duplicate.Y
+			}
+			totalPopulation += float64(len(projection.population))
+			for key, stat := range item.Metrics {
+				if stat.Average != nil {
+					samples[key] = append(samples[key], *stat.Average)
 				}
 			}
+			out.Messages = append(out.Messages, item)
 		}
-		item.DuplicateTimeline = cumulativePoints(duplicateTimes, 1)
-		for key, stat := range item.Metrics {
-			if stat.Average != nil {
-				samples[key] = append(samples[key], *stat.Average)
-			}
-		}
-		out.Messages = append(out.Messages, item)
 	}
 	for key, values := range samples {
 		out.Summary[key] = analysisStats(values)
@@ -575,10 +495,10 @@ func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccu
 		sort.Slice(out.HopPDF, func(i, j int) bool { return out.HopPDF[i].X < out.HopPDF[j].X })
 		out.HopCDF = cumulativePoints(hopCounts, hopTotal)
 	}
-	for len(a.controls) > 360 {
+	for len(controls) > 360 {
 		out.ControlBinSeconds *= 2
 		merged := map[int64]map[string]float64{}
-		for at, values := range a.controls {
+		for at, values := range controls {
 			key := analysisBucket(at, out.ControlBinSeconds)
 			if merged[key] == nil {
 				merged[key] = map[string]float64{}
@@ -587,10 +507,10 @@ func (a *researchAccumulator) finish(ctx context.Context, metrics *runMetricAccu
 				merged[key][name] += value
 			}
 		}
-		a.controls = merged
+		controls = merged
 	}
 	totals := map[string]float64{}
-	for at, values := range a.controls {
+	for at, values := range controls {
 		out.Controls = append(out.Controls, researchControlBin{time.Unix(at, 0).UTC(), values})
 		for name, value := range values {
 			totals[name] += value

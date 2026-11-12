@@ -110,7 +110,7 @@ func (s *Server) exportMetricsWithWorker(ctx context.Context, snapshot *resultSn
 		return model.Metrics{}, err
 	}
 	s.updateWorkStatus(slot.id, "Computing snapshot metrics", 0)
-	broker := s.workerSnapshotSource([]*resultSnapshot{snapshot})
+	broker := workerBinarySourceHandler(s.workerSnapshotSource([]*resultSnapshot{snapshot}))
 	process, err := workerproc.Start(ctx, "controller-export", workerSummaryStart{RunID: snapshot.result.ID, Snapshot: describeWorkerSnapshot(snapshot)}, broker, workerproc.Options{Command: s.workerCommand})
 	if err != nil {
 		if process != nil {

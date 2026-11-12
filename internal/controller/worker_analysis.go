@@ -68,7 +68,7 @@ type workerSourceRead struct {
 }
 
 type workerSourceBytes struct {
-	Data []byte `json:"data"`
+	Data []byte `json:"data,omitempty"`
 	EOF  bool   `json:"eof"`
 }
 
@@ -121,9 +121,14 @@ func (r workerSourceReader) ReadAt(p []byte, offset int64) (int, error) {
 	for total < len(p) {
 		var response workerSourceBytes
 		request := workerSourceRead{Snapshot: r.snapshot, File: r.file, Offset: offset + int64(total), Length: min(len(p)-total, workerSourceChunk)}
-		if err := r.peer.Call(r.ctx, "source.read", request, &response); err != nil {
+		data, err := r.peer.CallBinary(r.ctx, "source.read", request, nil, &response)
+		if err != nil {
 			return total, err
 		}
+		if len(response.Data) != 0 {
+			return total, errors.New("source bytes must use the binary payload")
+		}
+		response.Data = data
 		if len(response.Data) > request.Length {
 			return total, errors.New("source response exceeds requested boundary")
 		}

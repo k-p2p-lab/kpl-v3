@@ -47,6 +47,26 @@ func TestDedicatedAnalysisStackIsolation(t *testing.T) {
 		"KPL_ANALYSIS_SECRET=fixture-analysis", "KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND=11",
 		"KPL_ANALYSIS_CPUS=3", "KPL_ANALYSIS_MEMORY_MIB=2048",
 	}
+	automatic := exec.CommandContext(ctx, docker, append([]string{"stack", "config"}, base...)...)
+	automatic.Dir, automatic.Env = command.Dir, command.Env
+	automaticOutput, err := automatic.CombinedOutput()
+	if err != nil {
+		t.Fatalf("offline automatic analysis Compose validation failed: %v: %s", err, automaticOutput)
+	}
+	var automaticStack struct {
+		Services map[string]struct{ Environment map[string]string }
+	}
+	if err := yaml.Unmarshal(automaticOutput, &automaticStack); err != nil {
+		t.Fatal(err)
+	}
+	if automaticStack.Services["controller"].Environment["KPL_ANALYSIS_TRANSFER_MIB_PER_SECOND"] != "11" {
+		t.Fatal("automatic Agent analysis ignored the configured transfer limit")
+	}
+	for name := range automaticStack.Services {
+		if strings.HasPrefix(name, analysisWorkerPrefix) {
+			t.Fatal("automatic Agent analysis created a dedicated worker")
+		}
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("offline Compose validation failed: %v: %s", err, output)

@@ -132,13 +132,22 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 			outputs.discard()
 		}
 	}()
-	source := s.workerSnapshotSource(snapshots)
+	source, err := s.controllerAnalysisPrefetch(ctx, input, snapshots)
+	if err != nil {
+		return nil, analysisProcessResult{}, err
+	}
+	defer source.close()
 	var progressMu sync.Mutex
 	broker := func(callCtx context.Context, method string, raw json.RawMessage) (any, error) {
 		switch method {
 		case "source.read":
-			return source(callCtx, method, raw)
+			var read workerSourceRead
+			if err := json.Unmarshal(raw, &read); err != nil {
+				return nil, err
+			}
+			return source.read(callCtx, read)
 		case "analysis.write":
+			source.close()
 			var chunk analysisOutputChunk
 			if err := json.Unmarshal(raw, &chunk); err != nil {
 				return nil, err
@@ -162,6 +171,7 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 			}
 			return nil, nil
 		case "analysis.batch-metadata":
+			source.close()
 			if metadata != nil {
 				return metadata(callCtx, method, raw)
 			}
@@ -187,8 +197,10 @@ func (s *Server) computeAnalysisProcess(ctx context.Context, input analysisProce
 	}()
 	s.logger.Info("analysis worker started", "run", input.RunID, "analysis", input.AnalysisID, "workerPid", process.PID(), "workerEpoch", process.Epoch(), "cpus", options.MaxProcs, "memoryTargetBytes", options.MemoryLimitBytes)
 	var result analysisProcessResult
-	if err := process.Call(ctx, "analyze", nil, &result); err != nil {
-		return nil, result, err
+	computeErr := process.Call(ctx, "analyze", nil, &result)
+	source.close()
+	if computeErr != nil {
+		return nil, result, computeErr
 	}
 	s.logger.Info("analysis calculation resources", "analysis", input.AnalysisID, "cpus", result.CPUs, "memoryTargetBytes", result.MemoryLimitBytes)
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

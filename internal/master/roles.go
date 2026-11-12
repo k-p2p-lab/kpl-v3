@@ -187,7 +187,7 @@ func runController(ctx context.Context, logger *slog.Logger, args []string) erro
 			analysisPrefetchErr = errors.New("invalid KPL_ANALYSIS_PREFETCH_MIB")
 		}
 	}
-	analysisPrefetchMiB := flags.Uint64("analysis-prefetch-mib", analysisPrefetch, "remote result analysis read-ahead queue per worker in MiB (1-1024)")
+	analysisPrefetchMiB := flags.Uint64("analysis-prefetch-mib", analysisPrefetch, "result analysis read-ahead queue per calculation in MiB (1-1024)")
 	analysisCPUs, analysisCPUsErr := analysisResourceDefault("KPL_ANALYSIS_CPUS", 4)
 	analysisCPUCount := flags.Uint64("analysis-cpus", analysisCPUs, "maximum Go execution lanes per analysis process (1-4096, bounded by available CPUs)")
 	analysisMemory, analysisMemoryErr := analysisResourceDefault("KPL_ANALYSIS_MEMORY_MIB", 4096)

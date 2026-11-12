@@ -43,7 +43,7 @@ type ServerConfig struct {
 	AnalysisMemoryMiB            uint64
 	RetiredAnalysisEndpoints     []string // Verified retirement proof supplied by Swarm migration.
 	AnalysisTransferMiBPerSecond uint64   // Zero uses the default transfer budget.
-	AnalysisPrefetchMiB          uint64   // Zero uses the default remote read-ahead queue size.
+	AnalysisPrefetchMiB          uint64   // Zero uses the default analysis read-ahead queue size.
 	User                         string
 	Password                     string
 	Listen                       string

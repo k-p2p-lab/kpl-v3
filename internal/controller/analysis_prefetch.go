@@ -14,7 +14,7 @@ const (
 
 type analysisPrefetchFetch func(context.Context, workerSourceRead) (workerSourceBytes, error)
 
-// One remote calculation owns this queue. Foreground callbacks are serialized;
+// One calculation owns this queue. Foreground callbacks are serialized;
 // only the current sequential source is prefetched. Sampled hashes remain small
 // exact reads, and no source is fetched before the analysis asks for it.
 type analysisPrefetch struct {

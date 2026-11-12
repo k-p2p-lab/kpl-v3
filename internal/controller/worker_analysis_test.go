@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
-	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
@@ -342,7 +341,7 @@ func (r *heldWorkerSource) ReadAt(data []byte, offset int64) (int, error) {
 }
 
 func TestCanceledAnalysisKeepsCleanupBarrierUntilParentRPCIsQuiescent(t *testing.T) {
-	s, _ := isolatedAnalysisServer(t)
+	s, commands := isolatedAnalysisServer(t)
 	resultFixture(t, s, "blocked-analysis", "completed", time.Now().Add(-time.Minute).UTC())
 	if err := s.state.persistEvents("blocked-analysis", []model.TraceEvent{{RunID: "blocked-analysis", NodeID: "node", Type: "publish", MessageID: "message", Topic: "topic", Timestamp: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
@@ -351,10 +350,11 @@ func TestCanceledAnalysisKeepsCleanupBarrierUntilParentRPCIsQuiescent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer snapshot.close()
+	t.Cleanup(snapshot.close)
 	held := &heldWorkerSource{entered: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
-	defer releaseOnce.Do(func() { close(held.release) })
+	releaseSource := func() { releaseOnce.Do(func() { close(held.release) }) }
+	t.Cleanup(releaseSource)
 	for index := range snapshot.files {
 		if snapshot.files[index].name == "events.jsonl" {
 			held.reader = snapshot.files[index].reader()
@@ -365,12 +365,42 @@ func TestCanceledAnalysisKeepsCleanupBarrierUntilParentRPCIsQuiescent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	t.Cleanup(func() { _ = root.Close() })
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	nextCtx, stopNext := context.WithCancel(t.Context())
+	s.cancelMu.Lock()
+	owner := s.enqueueResultAnalysisLocked(ctx, model.WorkQueueItem{Kind: "analysis", RunID: "blocked-analysis", Name: "blocked analysis"}, cancel)
+	next := s.enqueueWorkLocked(nextCtx, model.WorkQueueItem{Kind: "experiment", Name: "following experiment"}, stopNext)
+	s.cancelMu.Unlock()
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	sourceClosed := false
+	t.Cleanup(func() {
+		cancel()
+		stopNext()
+		releaseSource()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("canceled analysis retained its active FIFO owner after source release")
+		}
+		s.finishWork(next)
+	})
 	go func() {
-		_, _, err := s.computeAnalysisProcess(ctx, analysisProcessInput{RunID: "blocked-analysis", AnalysisID: "attempt", Snapshots: []workerSnapshotDescriptor{describeWorkerSnapshot(snapshot)}}, []*resultSnapshot{snapshot}, root, nil, nil)
+		defer close(finished)
+		defer s.finishWork(owner)
+		defer func() {
+			snapshot.close()
+			sourceClosed = true
+		}()
+		if err := s.waitWork(ctx, owner); err != nil {
+			done <- err
+			return
+		}
+		artifacts, _, err := s.computeAnalysisProcess(ctx, analysisProcessInput{RunID: "blocked-analysis", AnalysisID: "attempt", Snapshots: []workerSnapshotDescriptor{describeWorkerSnapshot(snapshot)}}, []*resultSnapshot{snapshot}, root, nil, nil)
+		if artifacts != nil {
+			artifacts.discard()
+		}
 		done <- err
 	}()
 	select {
@@ -384,27 +414,36 @@ func TestCanceledAnalysisKeepsCleanupBarrierUntilParentRPCIsQuiescent(t *testing
 	}
 	select {
 	case err := <-done:
+		t.Fatalf("analysis returned before its entered source operation finished: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case <-next.ready:
+		t.Fatal("following experiment entered while canceled analysis source I/O was still alive")
+	default:
+	}
+	releaseSource()
+	select {
+	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("analysis cancellation: %v", err)
 		}
-	case <-time.After(8 * time.Second):
-		t.Fatal("analysis cancellation did not return its failure")
+	case <-time.After(5 * time.Second):
+		t.Fatal("analysis did not finish after its entered source I/O returned")
 	}
-	s.cancelMu.Lock()
-	blocked := len(s.queueCleanup) != 0
-	s.cancelMu.Unlock()
-	if !blocked {
-		t.Fatal("analysis released its FIFO obligation while a source operation remained alive")
+	queueTestAwait(t, finished, "analysis child and parent RPC cleanup")
+	queueTestAwait(t, next.ready, "following experiment after canceled analysis cleanup")
+	if !sourceClosed {
+		t.Fatal("following experiment entered before the analysis released its pinned source")
 	}
-	releaseOnce.Do(func() { close(held.release) })
-	cleanupCtx, stopCleanup := context.WithTimeout(t.Context(), 5*time.Second)
-	defer stopCleanup()
-	if err := s.waitQueueCleanup(cleanupCtx, "", scenario.Scenario{JobShutdownTimeout: "1s"}); err != nil {
-		t.Fatalf("analysis did not recover after source I/O returned: %v", err)
+	if err := s.waitWork(nextCtx, next); err != nil {
+		t.Fatalf("following experiment could not enter after analysis cleanup: %v", err)
 	}
+	s.finishWork(next)
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	if len(s.queueCleanup) != 0 {
-		t.Fatal("confirmed analysis cleanup did not restore the idle queue")
+	started := commands()
+	if len(s.queueCleanup) != 0 || len(s.experimentQueue) != 0 || len(s.archiveReadSlots) != 0 || len(started) != 1 || started[0].ProcessState == nil {
+		t.Fatalf("joined analysis cleanup did not restore idle admission: cleanup=%v queue=%d readSlots=%d children=%d", s.queueCleanup, len(s.experimentQueue), len(s.archiveReadSlots), len(started))
 	}
 }

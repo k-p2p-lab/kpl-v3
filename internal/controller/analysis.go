@@ -104,6 +104,19 @@ func (s *Server) handleResultAnalysis(w http.ResponseWriter, r *http.Request, id
 
 type analysisProgress func(phase string, bytes int64)
 type analysisProgressKey struct{}
+
+// Match the bounded source block size so sequential logs do not need a source
+// request and progress RPC for every 64 KiB. Record parsing/aggregation order
+// and the existing maximum JSON line length remain unchanged.
+const analysisScanBufferBytes = workerSourceChunk
+
+func analysisScanBuffer(size int64) []byte {
+	// Small Run files retain the previous allocation size; only larger
+	// captured inputs need the full source block for efficient IPC reads.
+	bytes := min(int64(analysisScanBufferBytes), max(int64(64<<10), size))
+	return make([]byte, int(bytes))
+}
+
 type analysisProgressReader struct {
 	io.Reader
 	report func(int64)
@@ -129,7 +142,7 @@ func scanAnalysisFile(ctx context.Context, file resultFile, consume func([]byte)
 	reportAnalysisProgress(ctx, file.name, 0)
 	reader := analysisProgressReader{Reader: file.reader(), report: func(n int64) { reportAnalysisProgress(ctx, file.name, n) }}
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	scanner.Buffer(analysisScanBuffer(file.size), analysisDecodeMaxLine)
 	line := 0
 	for scanner.Scan() {
 		line++

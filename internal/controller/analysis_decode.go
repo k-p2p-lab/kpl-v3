@@ -159,7 +159,7 @@ func scanDecodedAnalysisFileWithWorkers[T any](ctx context.Context, file resultF
 	reportAnalysisProgress(ctx, file.name, 0)
 	reader := analysisProgressReader{Reader: file.reader(), report: func(n int64) { reportAnalysisProgress(ctx, file.name, n) }}
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), analysisDecodeMaxLine)
+	scanner.Buffer(analysisScanBuffer(file.size), analysisDecodeMaxLine)
 	line := 0
 	var batch *analysisDecodeBatch[T]
 	for scanner.Scan() {

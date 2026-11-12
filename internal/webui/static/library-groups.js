@@ -30,7 +30,10 @@
       return [...unique.values()];
     }
 
-    function groupFor(key) { return snapshot.memberships[key] || ""; }
+    function groupFor(key) {
+      const legacy = typeof key === "string" && key.startsWith("batch:") ? "run:" + key.slice(6) : "";
+      return snapshot.memberships[key] || snapshot.memberships[legacy] || "";
+    }
     function getGroupName(id) { return snapshot.groups.find(group => group.id === id)?.name || ""; }
     function matches(key) { return filters.has("*") || filters.has(groupFor(key)); }
     function importGroup() { return loaded && filters.size === 1 && !filters.has("*") ? [...filters][0] : ""; }

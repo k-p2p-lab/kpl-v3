@@ -206,16 +206,23 @@ func (s *Server) retainBatchCurrentLocked(runs *os.Root, id string) error {
 	if err = json.Unmarshal(metadata, &original); err != nil {
 		return err
 	}
+	record, err := s.readBatchExtension(result.BatchID)
+	if err != nil {
+		return err
+	}
+	if original.BatchID == "" && record == nil {
+		// Reading an old standalone result projects its one-Run identity but
+		// does not create a retained group. Preserve direct DELETE semantics:
+		// an intentionally deleted legacy result must not reappear as missing.
+		// Append/retry commits a group record first and keeps recovery below.
+		return nil
+	}
+	original.BatchID, original.Iteration, original.Repetitions = normalizeLegacySingleRunBatch(original.ID, original.BatchID, original.Iteration, original.Repetitions)
 	if len(raw) > 0 {
 		if err = s.retainBatchReplayLocked(result.BatchID, raw, []model.Experiment{original}, result.Repetitions); err != nil {
 			return err
 		}
 	}
-	record, err := s.readBatchExtension(result.BatchID)
-	if err != nil {
-		return err
-	}
-
 	if record == nil {
 		record = &batchExtension{Version: 1, BatchID: result.BatchID, Repetitions: result.Repetitions}
 	}

@@ -69,6 +69,27 @@ test('group ordering sends a complete revision-aware permutation and updates bot
   h.groups.setFilter('g1');assert.equal(h.groups.matches('scenario:one'),true);assert.equal(h.groups.matches('run:single'),false);
 });
 
+test('a legacy single Run keeps its library group when shown as a one-Run batch',async()=>{
+  let response=initial();
+  const h=harness(async()=>response);await h.initialized;
+  h.items.splice(h.items.findIndex(item=>item.key==='run:single'),1,{key:'batch:single',name:'Single-run group'});
+  h.groups.setFilter('g2');
+  assert.equal(h.groups.matches('batch:single'),true);
+  assert.match(h.groups.badgeMarkup('batch:single'),/Experiment B/);
+  h.check('batch:single',true);
+  assert.deepEqual(h.groups.getSelection('results'),['batch:single']);
+  response={...initial(),revision:'2',memberships:{...initial().memberships,'batch:single':'g1'}};
+  await h.groups.refresh({fresh:true});
+  h.groups.setFilter('g1');
+  assert.equal(h.groups.matches('batch:single'),true);
+  assert.match(h.groups.badgeMarkup('batch:single'),/Experiment A/);
+  response={...initial(),revision:'3',memberships:{'scenario:one':'g1','batch:one':'g1'}};
+  await h.groups.refresh({fresh:true});
+  h.groups.setFilter('');
+  assert.equal(h.groups.matches('batch:single'),true);
+  assert.equal(h.groups.badgeMarkup('batch:single'),'');
+});
+
 test('incomplete, duplicate and virtual group orders never reach the server',async()=>{
   let writes=0;
   const h=harness(async(_path,options)=>{if(options.method)writes++;return initial();});await h.initialized;

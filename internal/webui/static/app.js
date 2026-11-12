@@ -1508,7 +1508,7 @@ function batchIterationOrder(a, b) {
   return first - second || String(a.id).localeCompare(String(b.id));
 }
 
-function savedResultBatches(results, includeSingles = false) {
+function savedResultBatches(results) {
   const groups = new Map();
   for (const run of results) {
     if (!run.batchId) continue;
@@ -1517,7 +1517,7 @@ function savedResultBatches(results, includeSingles = false) {
     batch.runs.push(run);
     batch.expected = Math.max(batch.expected, run.repetitions || 1);
   }
-  return [...groups.values()].filter(batch => includeSingles || batch.expected > 1 || batch.runs.some(run => run.previousRunIds?.length)).map(batch => {
+  return [...groups.values()].map(batch => {
     const runs = currentBatchRuns(batch.runs).sort(batchIterationOrder), current = new Set(runs.map(run => run.id));
     return { ...batch, runs, previousRuns: batch.runs.filter(run => !current.has(run.id)).sort(batchIterationOrder),
       completed: runs.filter(run => run.state === "completed").length,
@@ -1572,7 +1572,7 @@ function retryBatchButton(batch, locked = false) {
 
 async function resumeSavedBatch(id, retry = false) {
   if (state.pendingResumes.has(id)) return;
-  const batch = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === id);
+  const batch = savedResultBatches(state.savedResults || []).find(batch => batch.id === id);
   const remaining = batch ? (retry ? retryBatchRuns(batch) : remainingBatchRuns(batch)) : [];
   if (!remaining.length) return;
   if (retry && remaining.some(run => run.retryUnavailable)) { showToast(remaining.find(run => run.retryUnavailable).retryUnavailable); return; }
@@ -1841,7 +1841,7 @@ function resultIntegrityMarkup(run) {
 }
 
 function savedResultRow(run, inBatch = false) {
-  const singleBatch = run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === run.batchId) : null;
+  const singleBatch = !inBatch && run.batchId && run.repetitions === 1 ? savedResultBatches(state.savedResults || []).find(batch => batch.id === run.batchId) : null;
   const retry = singleBatch && !singleBatch.previousRuns.length ? appendBatchButton(singleBatch, resultLocked(run)) + retryBatchButton(singleBatch, resultLocked(run)) : "";
   if (run.missing || run.state === "missing") {
     const hint = run.retryUnavailable || "The saved result is unavailable. Retry uses the saved scenario and seed to create a new run; it does not restore the missing data.";
@@ -1850,7 +1850,7 @@ function savedResultRow(run, inBatch = false) {
   const stateHint = run.state === "interrupted" ? "Saved by a previous Controller; this run was not resumed."
     : run.state === "unreadable" ? "Saved metadata could not be read." : run.state;
   return `<tr>
-    <td class="result-name" data-label="Experiment"><span class="result-item-heading">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong></span>${inBatch ? "" : globalThis.KPLLibraryGroups?.badgeMarkup(resultLibraryKey(run)) || ""}<span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
+    <td class="result-name" data-label="Experiment"><span class="result-item-heading">${inBatch ? "" : globalThis.KPLLibraryGroups?.selectionMarkup(resultLibraryKey(run), run.name || run.id) || ""}<strong>${escapeHTML(run.name || run.id)}</strong></span>${inBatch ? "" : globalThis.KPLLibraryGroups?.badgeMarkup(resultLibraryKey(run)) || ""}<span class="result-id">${escapeHTML(run.id)}</span><span class="result-id result-meta">${run.repetitions > 1 || inBatch && run.iteration === 1 && run.repetitions === 1 ? `<span>Run ${formatNumber(run.iteration)} of ${formatNumber(run.repetitions)}</span>` : ""} · ${resultSourceSize(run)}${resultStorageMarkup(run)}</span>${resultNoteMarkup(run)}</td>
     <td data-label="State"><span class="status-pill ${escapeHTML(run.state)}" title="${escapeHTML(stateHint)}">${escapeHTML(run.state)}</span>${resultIntegrityMarkup(run)}</td>
     <td data-label="Started">${escapeHTML(formatResultTime(run.startedAt))}</td>
     <td data-label="Finished">${escapeHTML(formatResultTime(run.finishedAt))}</td>
@@ -1860,7 +1860,7 @@ function savedResultRow(run, inBatch = false) {
 
 function requestResultDeletion(id, isBatch = false) {
   if (state.deletingResultId) return;
-  const run = isBatch ? savedResultBatches(state.savedResults || [], true).find(batch => batch.id === id)
+  const run = isBatch ? savedResultBatches(state.savedResults || []).find(batch => batch.id === id)
     : (state.savedResults || []).find((result) => result.id === id);
   if (!run || (isBatch ? run.runs.some(resultLocked) : resultLocked(run))) return;
   state.pendingDelete = isBatch ? { ...run, isBatch: true } : run;
@@ -2998,7 +2998,7 @@ document.addEventListener("click", async (event) => {
   const appendButton = event.target.closest("[data-append-batch]");
   if (appendButton) {
     event.preventDefault();
-    const batch = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === appendButton.dataset.appendBatch);
+    const batch = savedResultBatches(state.savedResults || []).find(batch => batch.id === appendButton.dataset.appendBatch);
     if (!appendButton.disabled && batch && canAppendBatch(batch)) {
       rememberResultDialogFocus("#appendBatchDialog", appendButton);
       globalThis.KPLBatchAppend?.open(batch);
@@ -3071,7 +3071,7 @@ document.addEventListener("click", async (event) => {
   if (groupNoteButton) {
     event.preventDefault();
     if (!groupNoteButton.disabled) {
-      const group = savedResultBatches(state.savedResults || [], true).find(batch => batch.id === groupNoteButton.dataset.groupNote);
+      const group = savedResultBatches(state.savedResults || []).find(batch => batch.id === groupNoteButton.dataset.groupNote);
       if (group) {
         rememberResultDialogFocus("#resultNoteDialog", groupNoteButton);
         void globalThis.KPLResultNotes?.open({id: group.id, name: group.name, isBatch: true});

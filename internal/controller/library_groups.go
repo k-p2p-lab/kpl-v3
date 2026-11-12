@@ -400,6 +400,15 @@ func (s *Server) changeLibraryGroups(ctx context.Context, action, id string, req
 			}
 		}
 		for _, key := range request.Keys {
+			// A historical standalone Run is now addressed by its stable
+			// batch key. Retire its old alias even for an otherwise no-op
+			// ungroup, so browser compatibility fallback cannot revive it.
+			if id, batch := strings.CutPrefix(key, "batch:"); batch {
+				if _, exists := snapshot.Memberships["run:"+id]; exists {
+					delete(snapshot.Memberships, "run:"+id)
+					changed = true
+				}
+			}
 			if snapshot.Memberships[key] == group {
 				continue
 			}
@@ -540,6 +549,11 @@ func (s *Server) checkLibraryMembers(ctx context.Context, keys []string) error {
 				delete(wantedRuns, item.ID)
 			} else {
 				delete(wantedBatches, item.BatchID)
+				if item.BatchID == item.ID && item.Iteration == 1 && item.Repetitions == 1 {
+					// Older clients and persisted classifications used run:<id>
+					// before standalone results acquired their one-Run group.
+					delete(wantedRuns, item.ID)
+				}
 			}
 			if len(wantedRuns)+len(wantedBatches) == 0 {
 				return nil
@@ -571,16 +585,20 @@ func (s *Server) removeLibraryMembersAndEmptyBatch(batchID string, keys ...strin
 		s.logger.Warn("clean deleted library memberships", "error", err)
 		return
 	}
-	changed := false
-	if batchID != "" && snapshot.Memberships["batch:"+batchID] != "" {
+	changed, retainSingleAlias := false, false
+	if batchID != "" && (snapshot.Memberships["batch:"+batchID] != "" || snapshot.Memberships["run:"+batchID] != "") {
 		empty, checkErr := s.libraryBatchEmpty(batchID)
 		if checkErr != nil {
 			s.logger.Warn("check deleted library batch membership", "batch", batchID, "error", checkErr)
 		} else if empty {
-			keys = append(keys, "batch:"+batchID)
+			keys = append(keys, "batch:"+batchID, "run:"+batchID)
 		}
+		retainSingleAlias = checkErr != nil || !empty
 	}
 	for _, key := range keys {
+		if retainSingleAlias && key == "run:"+batchID {
+			continue
+		}
 		if _, ok := snapshot.Memberships[key]; ok {
 			delete(snapshot.Memberships, key)
 			changed = true

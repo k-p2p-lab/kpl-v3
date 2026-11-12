@@ -117,7 +117,7 @@ test('Saved results groups only one repetition batch and preserves individual ac
 });
 
 
-test('repeated series keep archive group order and show individual results in execution order', () => {
+test('all saved groups keep archive order and show individual results in execution order', () => {
   const runs = [
     { id: 'first', name: 'Independent', state: 'completed' },
     { id: 'a3', name: 'Same name', batchId: 'alpha', repetitions: 3, iteration: 3, state: 'completed' },
@@ -130,19 +130,42 @@ test('repeated series keep archive group order and show individual results in ex
   ];
   const { element } = fixture(runs);
   const html = element('#savedResultsRows').innerHTML;
-  assert.deepEqual([...html.matchAll(/<details[^>]+data-result-batch="([^"]+)"/g)].map(match => match[1]), ['alpha', 'beta']);
+  assert.deepEqual([...html.matchAll(/<details[^>]+data-result-batch="([^"]+)"/g)].map(match => match[1]), ['alpha', 'beta', 'one-run']);
   assert.doesNotMatch(html, /<details[^>]*\bopen(?:[\s=>])/);
   const groups = [...html.matchAll(/<details[^>]+data-result-batch="([^"]+)"[\s\S]*?<\/details>/g)];
   assert.match(groups[0][0], /Run 1 of 3[\s\S]*Run 2 of 3[\s\S]*Run 3 of 3/);
   assert.match(groups[1][0], /Run 1 of 2[\s\S]*Run 2 of 2/);
+  assert.match(groups[2][0], /Run 1 of 1/);
   for (const run of runs) {
     for (const action of ['images', 'download']) assert.equal(html.split(`data-result-${action}="${run.id}"`).length - 1, 1);
     assert.equal(html.split(`data-delete-result="${run.id}"`).length - 1, 1);
   }
   const singleRows = html.replace(/<details[\s\S]*?<\/details>/g, '');
-  assert.match(singleRows, /data-result-images="first"[\s\S]*data-result-images="middle"[\s\S]*data-result-images="single"/);
+  assert.match(singleRows, /data-result-images="first"[\s\S]*data-result-images="middle"/);
+  assert.doesNotMatch(singleRows, /data-result-images="single"/);
   assert.doesNotMatch(singleRows, /data-result-images="[ab][123]"/);
   assert.ok(html.indexOf('data-result-images="first"') < html.indexOf('data-result-batch="alpha"'));
+});
+
+test('one completed Run uses a selectable group with Add runs and preserves its individual analysis and note', () => {
+  const run = {id:'run-one',batchId:'run-one',iteration:1,repetitions:1,name:'Single <trial>',state:'completed',
+    storage:{state:'archived'},sourceBytes:1024,note:{preview:'Run note'},groupNote:{preview:'Group note'}};
+  const {api,state,element}=fixture([run]);
+  const selections=[];
+  api.KPLLibraryGroups={matches:()=>true,isFiltered:()=>false,refreshUI(){},selectionMarkup:(key,label)=>{selections.push({key,label});return `<input data-result-selection="${key}">`;},badgeMarkup:()=>''};
+  api.renderSavedResults();
+  const html=element('#savedResultsRows').innerHTML;
+  assert.equal(api.savedResultBatches(state.savedResults).length,1);
+  assert.equal(api.canAppendBatch(api.savedResultBatches(state.savedResults)[0]),true);
+  assert.match(html,/data-result-batch="run-one"/);
+  assert.match(html,/1 run · 1 \/ 1 completed/);
+  assert.match(html,/Run 1 of 1/);
+  assert.deepEqual(selections,[{key:'batch:run-one',label:'Single <trial>'}]);
+  assert.equal((html.match(/data-append-batch="run-one"/g)||[]).length,1);
+  assert.doesNotMatch(html,/data-append-batch="run-one"[^>]*disabled/);
+  assert.match(html,/data-batch-images="run-one"[^>]*disabled/);
+  for(const action of ['images','download']) assert.equal((html.match(new RegExp(`data-result-${action}="run-one"`,'g'))||[]).length,1);
+  assert.match(html,/Run note/);assert.match(html,/Group note/);
 });
 
 test('series retain incomplete metadata members and remain grouped until their last saved run is deleted', () => {

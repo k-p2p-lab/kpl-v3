@@ -325,6 +325,7 @@ func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, 
 			if err := json.Unmarshal(metadata, &original); err != nil {
 				return model.Experiment{}, err
 			}
+			original.BatchID, original.Iteration, original.Repetitions = normalizeLegacySingleRunBatch(original.ID, original.BatchID, original.Iteration, original.Repetitions)
 			logical := savedResult{ID: original.ID, BatchID: original.BatchID, Repetitions: original.Repetitions}
 			if err := s.applyBatchExtension(&logical); err != nil {
 				return model.Experiment{}, err

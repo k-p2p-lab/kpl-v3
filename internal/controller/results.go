@@ -190,6 +190,16 @@ func openResultFile(root *os.Root, name string) (resultFile, error) {
 	return result, nil
 }
 
+// Historical single-Run manifests did not carry group metadata. Project their
+// stable Run ID as a one-member group without changing source files or hashes.
+// Inconsistent multi-Run metadata is left intact for existing validation.
+func normalizeLegacySingleRunBatch(id, batchID string, iteration, repetitions int) (string, int, int) {
+	if id != "" && batchID == "" && iteration >= 0 && iteration <= 1 && repetitions >= 0 && repetitions <= 1 {
+		return id, 1, 1
+	}
+	return batchID, iteration, repetitions
+}
+
 func readResultMetadata(file resultFile, id string, active bool) (savedResult, error) {
 	var result savedResult
 	if file.size > resultMetadataLimit {
@@ -206,6 +216,7 @@ func readResultMetadata(file resultFile, id string, active bool) (savedResult, e
 	if result.ID != id || result.State == "" {
 		return result, errors.New("experiment.json has an invalid ID or state")
 	}
+	result.BatchID, result.Iteration, result.Repetitions = normalizeLegacySingleRunBatch(result.ID, result.BatchID, result.Iteration, result.Repetitions)
 	// Persisted data cannot claim ownership by the current Controller process.
 	result.storedState = result.State
 	result.Active = active && result.State == "running"

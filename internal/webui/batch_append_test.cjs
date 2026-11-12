@@ -32,6 +32,20 @@ test('append previews 10 + 10 = 20 and submits the observed total to prevent dup
  assert.equal(f.added[0][1],10);assert.equal(f.el('#appendBatchDialog').open,false);
 });
 
+test('a one-Run group appends without replacing its completed first Run',async()=>{
+ const calls=[];
+ const f=fixture(async(path,options)=>{calls.push({path,options});return {id:'new-second',batchId:'single-group',iteration:2,repetitions:3};});
+ f.ui.open({id:'single-group',name:'Single completed trial',expected:1});
+ assert.equal(f.el('#appendBatchCount').value,'1');
+ f.count(2);
+ assert.match(f.el('#appendBatchSummary').textContent,/1 completed \+ 2 additional = 3 total.*Run 2 of 3/);
+ await f.ui.save();
+ assert.equal(calls[0].path,'/api/v1/result-batches/single-group/append');
+ assert.deepEqual(JSON.parse(calls[0].options.body),{additionalRuns:2,expectedRepetitions:1});
+ assert.equal(f.added[0][0].id,'new-second');assert.equal(f.added[0][1],2);
+ assert.equal(f.el('#appendBatchDialog').open,false);
+});
+
 test('only positive whole additions within the group limit can start',()=>{
  const f=fixture(async()=>{throw Error('must not submit');});f.ui.open({...group,expected:98});
  assert.equal(f.el('#appendBatchCount').value,'2');assert.equal(f.el('#appendBatchCount').max,'2');

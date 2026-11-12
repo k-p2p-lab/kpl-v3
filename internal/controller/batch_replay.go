@@ -155,6 +155,7 @@ func (s *Server) batchReplayInputs(ctx context.Context, id string, members []sav
 		if err := json.Unmarshal(metadata, &original); err != nil {
 			return nil, err
 		}
+		original.BatchID, original.Iteration, original.Repetitions = normalizeLegacySingleRunBatch(original.ID, original.BatchID, original.Iteration, original.Repetitions)
 		if original.ID != member.ID || original.BatchID != id || original.Iteration != member.Iteration {
 			return nil, errors.New("invalid saved replay identity")
 		}

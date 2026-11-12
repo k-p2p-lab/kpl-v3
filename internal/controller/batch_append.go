@@ -351,6 +351,7 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 	plan := newTimingPlan(spec)
 	s.state.mu.Lock()
 	for runID, run := range s.state.experiments {
+		run.BatchID, run.Iteration, run.Repetitions = normalizeLegacySingleRunBatch(run.ID, run.BatchID, run.Iteration, run.Repetitions)
 		if run.BatchID == id {
 			run.Repetitions = expected + additional
 			s.state.experiments[runID] = run

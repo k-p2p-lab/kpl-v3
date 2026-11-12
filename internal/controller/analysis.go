@@ -3,7 +3,6 @@ package controller
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,6 +147,10 @@ func scanAnalysisFile(ctx context.Context, file resultFile, consume func([]byte)
 }
 
 func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysis, error) {
+	return analyzeResultWithWorkers(ctx, snapshot, 0)
+}
+
+func analyzeResultWithWorkers(ctx context.Context, snapshot *resultSnapshot, workers int) (resultAnalysis, error) {
 	result := resultAnalysis{Version: 1, Result: snapshot.result, AsOf: snapshot.exportedAt,
 		LatencyCDF: []analysisPoint{}, LatencyHistogram: []analysisPoint{}, Timeline: []analysisBin{}, Observations: []analysisObservation{}}
 	accumulator := newRunMetricAccumulator()
@@ -163,11 +166,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 		switch file.name {
 		case "events.jsonl":
 			result.EventBytes = file.size
-			err := scanAnalysisFile(ctx, file, func(data []byte) error {
-				var event model.TraceEvent
-				if err := json.Unmarshal(data, &event); err != nil {
-					return err
-				}
+			err := scanDecodedAnalysisFileWithWorkers(ctx, file, workers, func(event model.TraceEvent) error {
 				if event.RunID != snapshot.result.ID || !accumulator.observe(event) {
 					return nil
 				}
@@ -228,11 +227,7 @@ func analyzeResult(ctx context.Context, snapshot *resultSnapshot) (resultAnalysi
 				return result, err
 			}
 		case "observations.jsonl":
-			err := scanAnalysisFile(ctx, file, func(data []byte) error {
-				var observation analysisObservation
-				if err := json.Unmarshal(data, &observation); err != nil {
-					return err
-				}
+			err := scanDecodedAnalysisFileWithWorkers(ctx, file, workers, func(observation analysisObservation) error {
 				if observation.RunID != result.Result.ID {
 					return nil
 				}

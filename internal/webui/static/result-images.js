@@ -776,21 +776,30 @@
   }
 
   const pendingJob = (job) => job && ["queued", "running"].includes(job.state);
+  function runReuseDescription(job) {
+    if (job.state !== "completed" || !job.batchId || !["reusedRuns", "analyzedRuns"].some(key => Object.hasOwn(job, key))) return "";
+    const reused = job.reusedRuns ?? 0, analyzed = job.analyzedRuns ?? 0;
+    if (![reused, analyzed].every(value => Number.isSafeInteger(value) && value >= 0)) return "";
+    return `${number(reused)} Run ${reused === 1 ? "analysis" : "analyses"} reused; ${number(analyzed)} calculated.`;
+  }
   function jobDescription(job) {
     if (job.state === "queued")
       return "Queued — waiting for earlier experiments or analysis. Retained Peers are cleaned up before analysis starts.";
-    if (job.state === "completed")
-      return job.reused ? "Source unchanged. Reusing saved analysis…" : "Analysis complete. Preparing PNG downloads…";
+    if (job.state === "completed") {
+      const detail = runReuseDescription(job);
+      return (job.reused ? "Source unchanged. Reusing saved analysis…" : "Analysis complete. Preparing PNG downloads…") + (detail ? " " + detail : "");
+    }
     const phase =
       {
         starting: "Opening saved logs",
         "checking-sources": "Comparing source content hashes",
+        "reusing-analysis": "Reusing saved Run analysis",
         "events.jsonl": "Reading event log",
         "observations.jsonl": "Reading topology and score history",
         aggregating: "Calculating metrics and chart data",
         saving: "Saving analysis result",
       }[job.phase] ||
-      job.phase?.replace("checking-sources", "Comparing source content hashes") ||
+      job.phase?.replace("checking-sources", "Comparing source content hashes").replace("reusing-analysis", "Reusing saved Run analysis") ||
       "Analyzing";
     const mb = (bytes) => number(bytes / 1048576);
     return `${phase} · ${mb(job.processedBytes)} / ${mb(job.totalBytes)} MiB read`;
@@ -1242,7 +1251,8 @@
         await showAnalysis(job, job.id);
         if (revision !== requestRevision) return;
         if (!isBatch) researchTools?.setData(currentData);
-        status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.${job.reused ? " Source unchanged; saved analysis reused." : ""}`);
+        const reuseDetail = runReuseDescription(job);
+        status(`${imageGroups.length} images ready. Expand a title to preview and download PNG / CSV. N/A indicates missing evidence or undefined statistics.${job.reused ? " Source unchanged; saved analysis reused." : ""}${reuseDetail ? " " + reuseDetail : ""}`);
       } catch (error) {
         if (revision === requestRevision) {
           const queueFull = error.status === 503 && /^(?:batch )?analysis queue is full(?:;|$)/i.test(error.message || "");

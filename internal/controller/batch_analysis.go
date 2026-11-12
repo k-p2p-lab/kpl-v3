@@ -30,12 +30,15 @@ type batchAnalysisStatus struct {
 	CompletedRuns int      `json:"completedRuns"`
 	TotalRuns     int      `json:"totalRuns"`
 	ExpectedRuns  int      `json:"expectedRuns"`
+	ReusedRuns    int      `json:"reusedRuns,omitempty"`
+	AnalyzedRuns  int      `json:"analyzedRuns,omitempty"`
 }
 type batchAnalysisJob struct {
 	status   batchAnalysisStatus
 	cancel   context.CancelFunc
 	previous *batchAnalysisStatus
 	slot     *workSlot
+	force    bool
 }
 type batchAnalysisResult struct {
 	SourceHash      string                       `json:"sourceHash,omitempty"`
@@ -320,7 +323,7 @@ func (s *Server) startBatchAnalysisExpected(ctx context.Context, id string, refr
 		return batchAnalysisStatus{}, err
 	}
 	work, cancel := context.WithCancel(ctx)
-	job := &batchAnalysisJob{status: status, cancel: cancel}
+	job := &batchAnalysisJob{status: status, cancel: cancel, force: refresh}
 	job.slot = s.enqueueResultAnalysisLocked(work, model.WorkQueueItem{Kind: "batch-analysis", Name: members[0].Name, BatchID: id}, cancel)
 	if !refresh && existing.status.State == "completed" && existing.status.AnalysisVersion == currentAnalysisVersion && reusableSourceHash(existing.status.SourceHash) {
 		previous := existing.status
@@ -382,6 +385,14 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 		if err != nil {
 			return err
 		}
+		if !job.force {
+			if err := s.seedBatchRunAnalysisCache(ctx, job.status.BatchID); err != nil {
+				s.logger.Warn("seed Run analysis cache", "batch", job.status.BatchID, "error", err)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		if s.config.RunWorkers || job.slot.analysisWorkerURL != "" {
 			return s.analyzeBatchWithWorker(ctx, job, selected, excluded, missing)
 		}
@@ -409,13 +420,27 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				snapshot, err := s.captureResultFilesContext(ctx, member.ID, false)
+				snapshot, err := s.captureBatchAnalysisSource(ctx, job, member)
 				if err != nil {
 					return fmt.Errorf("run %s: %w", member.ID, err)
 				}
 				defer snapshot.close()
 				if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != result.BatchID || snapshot.result.SourceRevision != member.SourceRevision {
 					return errors.New("batch membership changed; retry after all runs stop")
+				}
+				if snapshot.analysisCacheKind == "batch" {
+					analysis, err := decodeCachedBatchRunAnalysis(ctx, snapshot)
+					if err != nil {
+						return fmt.Errorf("read cached run %s: %w", member.ID, err)
+					}
+					hashes[member.ID] = snapshot.result.SourceHash
+					result.Runs = append(result.Runs, analysis)
+					s.analysisJobMu.Lock()
+					job.status.ReusedRuns++
+					job.status.Phase = fmt.Sprintf("Run %d/%d · reusing-analysis", i+1, len(selected))
+					s.updateWorkStatus(job.slot.id, job.status.Phase, 100*float64(i+1)/float64(len(selected)))
+					s.analysisJobMu.Unlock()
+					return nil
 				}
 				total := int64(0)
 				for _, file := range snapshot.files {
@@ -478,6 +503,9 @@ func (s *Server) runBatchAnalysis(ctx context.Context, job *batchAnalysisJob) {
 				}
 				compactBatchAnalysis(&analysis)
 				result.Runs = append(result.Runs, analysis)
+				s.analysisJobMu.Lock()
+				job.status.AnalyzedRuns++
+				s.analysisJobMu.Unlock()
 				return nil
 			}()
 			if err != nil {
@@ -557,6 +585,17 @@ func (s *Server) saveBatchAnalysis(ctx context.Context, job *batchAnalysisJob, r
 		}
 	}
 	defer artifact.discard()
+	cacheFile, cacheErr := openResultFile(artifact.root, artifact.temp)
+	if cacheErr == nil {
+		cacheErr = s.seedBatchRunAnalysisCacheFile(ctx, job.status.BatchID, job.status.ID, cacheFile, job.force)
+		cacheFile.close()
+	}
+	if cacheErr != nil {
+		s.logger.Warn("save Run analysis cache", "batch", job.status.BatchID, "error", cacheErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()

@@ -106,6 +106,40 @@ func compactSingleAnalysis(analysis resultAnalysis) resultAnalysis {
 	return compact
 }
 
+// A compact batch contribution is a complete derived artifact, not raw input.
+// Preserve its scientific projection and observation time while refreshing only
+// display/group metadata from the Controller's current captured Run identity.
+func decodeCachedBatchRunAnalysis(ctx context.Context, snapshot *resultSnapshot) (resultAnalysis, error) {
+	var analysis resultAnalysis
+	if err := ctx.Err(); err != nil {
+		return analysis, err
+	}
+	if snapshot == nil || snapshot.analysisCacheKind != "batch" || snapshot.active || snapshot.result.State != "completed" ||
+		len(snapshot.files) != 1 || snapshot.files[0].name != batchRunCacheSourceName || snapshot.files[0].size < 0 || snapshot.files[0].size > batchRunCacheMaxBytes ||
+		snapshot.result.SourceRevision == "" || !currentSourceHash(snapshot.result.SourceHash) {
+		return analysis, errors.New("invalid cached batch Run source")
+	}
+	file := snapshot.files[0]
+	decoder := json.NewDecoder(io.NewSectionReader(file.reader(), 0, file.size))
+	if err := decoder.Decode(&analysis); err != nil {
+		return analysis, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return analysis, errors.New("cached batch Run contains trailing data")
+	}
+	if err := ctx.Err(); err != nil {
+		return analysis, err
+	}
+	if analysis.Version != 1 || analysis.AnalysisVersion != currentAnalysisVersion || analysis.Result.ID != snapshot.result.ID ||
+		analysis.Result.State != "completed" || analysis.Result.SourceHash != snapshot.result.SourceHash || analysis.Result.SourceRevision != snapshot.result.SourceRevision ||
+		analysis.Metrics.PendingPublications != 0 || analysis.Metrics.RunID != "" && analysis.Metrics.RunID != snapshot.result.ID {
+		return analysis, errors.New("cached batch Run analysis identity or definition changed")
+	}
+	analysis.Result = snapshot.result
+	analysis.Result.Analysis, analysis.Result.BatchAnalysis = nil, nil
+	return analysis, nil
+}
+
 func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *workerproc.Peer) (workerproc.Handler, error) {
 	var input analysisProcessInput
 	if err := json.Unmarshal(data, &input); err != nil {
@@ -123,9 +157,16 @@ func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *wo
 			return nil, errors.New("analysis snapshot is active or invalid")
 		}
 		seen[snapshot.Result.ID] = true
+		if snapshot.AnalysisCacheKind != "" && (input.BatchID == "" || snapshot.AnalysisCacheKind != "batch" ||
+			len(snapshot.Files) != 1 || snapshot.Files[0].Name != batchRunCacheSourceName || snapshot.Files[0].Size > batchRunCacheMaxBytes || !currentSourceHash(snapshot.Result.SourceHash)) {
+			return nil, errors.New("invalid cached analysis snapshot")
+		}
 		for _, file := range snapshot.Files {
 			if file.Size < 0 {
 				return nil, errors.New("negative analysis source size")
+			}
+			if file.Name == batchRunCacheSourceName && snapshot.AnalysisCacheKind != "batch" {
+				return nil, errors.New("cached analysis file is not a declared batch cache")
 			}
 		}
 	}
@@ -170,6 +211,16 @@ func newAnalysisProcessHandler(_ context.Context, data json.RawMessage, peer *wo
 		for index, descriptor := range input.Snapshots {
 			snapshot := workerSnapshotFromDescriptor(ctx, peer, index, descriptor)
 			progress := report(index)
+			if descriptor.AnalysisCacheKind == "batch" {
+				progress("reusing-analysis", 0)
+				analysis, err := decodeCachedBatchRunAnalysis(ctx, snapshot)
+				if err != nil || progressErr != nil {
+					return nil, errors.Join(err, progressErr)
+				}
+				hashes[snapshot.result.ID] = snapshot.result.SourceHash
+				result.Runs = append(result.Runs, analysis)
+				continue
+			}
 			progress("checking-sources", 0)
 			sourceHash := snapshot.result.SourceHash
 			var err error

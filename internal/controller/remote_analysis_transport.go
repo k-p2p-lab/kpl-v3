@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	remoteAnalysisProtocol     = 1
+	remoteAnalysisProtocol     = 2
 	remoteAnalysisPath         = "/internal/result-analysis"
 	remoteAnalysisIdlePath     = "/internal/analysis-idle"
 	remoteAnalysisWriteTimeout = 15 * time.Second
@@ -275,8 +275,16 @@ func remoteAnalysisReadBoundary(input analysisProcessInput, read workerSourceRea
 		read.Offset < 0 || read.Length < 1 || read.Length > workerSourceChunk {
 		return 0, false, errors.New("invalid remote analysis source request")
 	}
-	files := input.Snapshots[read.Snapshot].Files
-	if read.File < 0 || read.File >= len(files) || files[read.File].Size < 0 || !slices.Contains(analysisSourceNames, files[read.File].Name) {
+	snapshot := input.Snapshots[read.Snapshot]
+	files := snapshot.Files
+	if read.File < 0 || read.File >= len(files) || files[read.File].Size < 0 {
+		return 0, false, errors.New("invalid remote analysis source file")
+	}
+	if snapshot.AnalysisCacheKind != "" {
+		if input.BatchID == "" || snapshot.AnalysisCacheKind != "batch" || len(files) != 1 || files[read.File].Name != batchRunCacheSourceName || files[read.File].Size > batchRunCacheMaxBytes {
+			return 0, false, errors.New("invalid remote cached analysis source file")
+		}
+	} else if !slices.Contains(analysisSourceNames, files[read.File].Name) {
 		return 0, false, errors.New("invalid remote analysis source file")
 	}
 	remaining := files[read.File].Size - read.Offset

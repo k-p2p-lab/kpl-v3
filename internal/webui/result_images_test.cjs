@@ -319,6 +319,26 @@ const job = (id = "run", state = "completed", extra = {}) => ({
   totalBytes: 2097152,
   ...extra,
 });
+
+test('analysis descriptions distinguish cached Run reuse from raw calculation without changing legacy statuses',()=>{
+  assert.match(images.jobDescription(job('run','running',{phase:'Run 2/3 · reusing-analysis'})),/Run 2\/3 · Reusing saved Run analysis/);
+  const batch=job('run','completed',{batchId:'batch',reusedRuns:20,analyzedRuns:1});
+  assert.match(images.jobDescription(batch),/20 Run analyses reused; 1 calculated\./);
+  assert.match(images.jobDescription({...batch,reusedRuns:undefined}),/0 Run analyses reused; 1 calculated\./);
+  assert.doesNotMatch(images.jobDescription(job()),/Run analyses reused/);
+  assert.doesNotMatch(images.jobDescription({...batch,reusedRuns:-1}),/Run analyses reused/);
+  assert.doesNotMatch(images.jobDescription({...batch,reusedRuns:'20'}),/Run analyses reused/);
+});
+
+test('completed batch preview retains reuse counts after images become ready',async()=>{
+  const completed={batchId:'batch',id:'batch-job',analysisVersion:9,state:'completed',reusedRuns:2,analyzedRuns:1};
+  const data={version:1,analysisVersion:9,analysisId:'batch-job',batchId:'batch',name:'Extended mean',aggregation:'equal-run-mean-v1',expectedRuns:3,missingRuns:0,excluded:[],summary:{},
+    runs:['a','b','c'].map(id=>({...sample(id),result:{...sample(id).result,batchId:'batch'}}))};
+  const {ui,element}=fixture(async path=>path.includes('/result?')?data:completed);
+  await ui.open('batch',{isBatch:true});
+  assert.match(element('resultImagesStatus').textContent,/images ready.*2 Run analyses reused; 1 calculated\./);
+  element('resultImagesDialog').close();
+});
 const artifact = (id) => ({ ...sample(id), analysisId: id + "-job" });
 const completedAPI = async (url) => {
   const id = url.split("/")[4].split("?")[0];

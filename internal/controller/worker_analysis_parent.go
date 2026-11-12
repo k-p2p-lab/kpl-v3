@@ -281,7 +281,7 @@ func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJ
 	}()
 	input := analysisProcessInput{RunID: job.status.BatchID, AnalysisID: job.status.ID, BatchID: job.status.BatchID, Name: selected[0].Name, ExpectedRuns: job.status.ExpectedRuns, MissingRuns: missing, Excluded: excluded}
 	for _, member := range selected {
-		snapshot, err := s.captureAnalysisSource(ctx, job.slot, member.ID)
+		snapshot, err := s.captureBatchAnalysisSource(ctx, job, member)
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,9 @@ func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJ
 		if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != input.BatchID || snapshot.result.SourceRevision != member.SourceRevision {
 			return errors.New("batch membership changed; retry after all runs stop")
 		}
-		snapshot.result.SourceHash = verifiedHashes[member.ID]
+		if snapshot.analysisCacheKind != "batch" {
+			snapshot.result.SourceHash = verifiedHashes[member.ID]
+		}
 		input.Snapshots = append(input.Snapshots, describeWorkerSnapshot(snapshot))
 	}
 	s.analysisJobMu.Lock()
@@ -406,6 +408,13 @@ func (s *Server) analyzeBatchWithWorker(ctx context.Context, job *batchAnalysisJ
 	}
 	s.analysisJobMu.Lock()
 	job.status.SourceHash = result.SourceHash
+	job.status.ReusedRuns = 0
+	for _, snapshot := range snapshots {
+		if snapshot.analysisCacheKind == "batch" {
+			job.status.ReusedRuns++
+		}
+	}
+	job.status.AnalyzedRuns = len(snapshots) - job.status.ReusedRuns
 	job.status.Phase, job.status.CompletedRuns, job.status.UpdatedAt = "saving", len(snapshots), time.Now().UTC()
 	s.analysisJobMu.Unlock()
 	return s.saveBatchAnalysis(ctx, job, artifacts)

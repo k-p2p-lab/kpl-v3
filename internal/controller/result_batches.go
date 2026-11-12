@@ -71,8 +71,32 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []str
 	// Check every member before removing anything, including the mean artifact.
 	// This also freezes download leases until deletion has finished.
 	memberIDs := make(map[string]bool, len(members))
+	cacheIDs := make(map[string]bool, len(members))
+	rememberCache := func(runID string) {
+		if validResultID(runID) {
+			cacheIDs[runID] = true
+		}
+	}
 	for _, member := range members {
 		memberIDs[member.ID] = true
+		rememberCache(member.ID)
+		for _, previous := range member.PreviousRunIDs {
+			rememberCache(previous)
+		}
+	}
+	// Source directories can disappear independently of the durable group
+	// history. Retain those identities for cache cleanup and reader preflight,
+	// without treating missing sources as deletable result directories.
+	if record != nil {
+		for _, runID := range record.Current {
+			rememberCache(runID)
+		}
+		for runID := range record.Deleted {
+			rememberCache(runID)
+		}
+		for runID := range record.Retired {
+			rememberCache(runID)
+		}
 	}
 	// An interrupted deletion can leave a fenced directory without readable
 	// experiment.json. It is intentionally absent from allBatchMembers/listing,
@@ -107,6 +131,9 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []str
 				members = append(members, savedResult{ID: runID, BatchID: id})
 			}
 		}
+	}
+	for runID := range cacheIDs {
+		memberIDs[runID] = true
 	}
 	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
 	s.state.mu.RLock()
@@ -171,6 +198,14 @@ func (s *Server) deleteSavedBatch(ctx context.Context, id string) (deleted []str
 			return deleted, err
 		}
 		deleted = append(deleted, member.ID)
+	}
+	// The group record remains available if physical cleanup fails, so a retry
+	// can recover missing and retired Run cache identities. persistMu prevents
+	// cache publication from racing this cleanup.
+	for runID := range cacheIDs {
+		if err := s.removeBatchRunAnalysisCacheLocked(runID); err != nil {
+			return deleted, err
+		}
 	}
 	// Keep the group note if any member deletion fails, allowing a safe retry.
 	if hasGroup || len(members) > 0 {

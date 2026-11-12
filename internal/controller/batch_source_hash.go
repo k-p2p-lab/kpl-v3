@@ -26,13 +26,17 @@ func (s *Server) hashBatchAnalysisSources(ctx context.Context, job *batchAnalysi
 					return ctx.Err()
 				}
 			}
-			snapshot, err := s.captureAnalysisSource(ctx, job.slot, member.ID)
+			snapshot, err := s.captureBatchAnalysisSource(ctx, job, member)
 			if err != nil {
 				return err
 			}
 			defer snapshot.close()
 			if snapshot.active || snapshot.result.State != "completed" || snapshot.result.BatchID != job.status.BatchID || snapshot.result.SourceRevision != member.SourceRevision {
 				return errors.New("batch sources changed; retry after all runs stop")
+			}
+			if snapshot.analysisCacheKind == "batch" {
+				hashes[member.ID] = snapshot.result.SourceHash
+				return nil
 			}
 			total := analysisSourceSampleBytes(snapshot.files)
 			s.analysisJobMu.Lock()
@@ -122,6 +126,7 @@ func (s *Server) reuseBatchAnalysis(ctx context.Context, job *batchAnalysisJob) 
 	}
 	status := *job.previous
 	status.Membership, status.Stale, status.Reused = job.status.Membership, false, true
+	status.ReusedRuns, status.AnalyzedRuns = status.CompletedRuns, 0
 	status.UpdatedAt = time.Now().UTC()
 	root, err := s.batchAnalysisDirectory(status.BatchID, false)
 	if err != nil {

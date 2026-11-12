@@ -44,15 +44,16 @@ type workerSourceDescriptor struct {
 }
 
 type workerSnapshotDescriptor struct {
-	Result      savedResult              `json:"result"`
-	Files       []workerSourceDescriptor `json:"files"`
-	ExportedAt  time.Time                `json:"exportedAt"`
-	Active      bool                     `json:"active"`
-	StoredState string                   `json:"storedState"`
+	Result            savedResult              `json:"result"`
+	Files             []workerSourceDescriptor `json:"files"`
+	ExportedAt        time.Time                `json:"exportedAt"`
+	Active            bool                     `json:"active"`
+	StoredState       string                   `json:"storedState"`
+	AnalysisCacheKind string                   `json:"analysisCacheKind,omitempty"`
 }
 
 func describeWorkerSnapshot(snapshot *resultSnapshot) workerSnapshotDescriptor {
-	d := workerSnapshotDescriptor{Result: snapshot.result, ExportedAt: snapshot.exportedAt, Active: snapshot.active, StoredState: snapshot.storedState}
+	d := workerSnapshotDescriptor{Result: snapshot.result, ExportedAt: snapshot.exportedAt, Active: snapshot.active, StoredState: snapshot.storedState, AnalysisCacheKind: snapshot.analysisCacheKind}
 	for _, f := range snapshot.files {
 		d.Files = append(d.Files, workerSourceDescriptor{Name: f.name, Size: f.size})
 	}
@@ -141,7 +142,7 @@ func (r workerSourceReader) ReadAt(p []byte, offset int64) (int, error) {
 }
 
 func workerSnapshotFromDescriptor(ctx context.Context, peer *workerproc.Peer, index int, d workerSnapshotDescriptor) *resultSnapshot {
-	snapshot := &resultSnapshot{result: d.Result, exportedAt: d.ExportedAt, active: d.Active, storedState: d.StoredState}
+	snapshot := &resultSnapshot{result: d.Result, exportedAt: d.ExportedAt, active: d.Active, storedState: d.StoredState, analysisCacheKind: d.AnalysisCacheKind}
 	for i, f := range d.Files {
 		snapshot.files = append(snapshot.files, resultFile{name: f.Name, size: f.Size, readAt: workerSourceReader{ctx: ctx, peer: peer, snapshot: index, file: i}})
 	}

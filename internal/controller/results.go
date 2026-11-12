@@ -111,6 +111,7 @@ type resultArchiveFlight struct {
 }
 
 type resultSnapshot struct {
+	analysisCacheKind  string
 	releaseArchiveRead func()
 	acquireArchiveRead func(context.Context) (func(), error)
 	metricsCache       *snapshotMetricsCache
@@ -533,6 +534,9 @@ func (s *Server) deleteSavedResultLocked(id string) error {
 	}
 	if err := s.markResultDeletedLocked(id); err != nil {
 		return fmt.Errorf("persist deletion marker: %w", err)
+	}
+	if err := s.removeBatchRunAnalysisCacheLocked(id); err != nil {
+		return fmt.Errorf("remove Run analysis cache: %w", err)
 	}
 	if job := s.analysisJobs[id]; job != nil && job.cancel != nil {
 		job.cancel()

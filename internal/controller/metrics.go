@@ -67,8 +67,8 @@ func newControllerMetrics(s *state) *controllerMetrics {
 			Name: "kpl_telemetry_dropped_events_total", Help: "Peer telemetry queue drops reported to the Controller.",
 		}, []string{"run_id", "agent_id"}),
 	}
-	m.registry.MustRegister(newControllerEventCollector(m), newRunMetricsCollector(s),
-		newControllerStateCollector(s), newAgentResourceCollector(s), newNetworkCollector(s), newBandwidthCollector(s), collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	m.registry.MustRegister(newControllerProjectionCollector(m),
+		newAgentResourceCollector(s), newNetworkCollector(s), newBandwidthCollector(s), collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return m
 }
 
@@ -272,6 +272,22 @@ type nodeMetricLabels struct {
 }
 
 func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
+	snapshot, err := c.collectStateSnapshot(ch)
+	if err != nil {
+		ch <- prometheus.NewInvalidMetric(c.nodes, err)
+		return
+	}
+	c.collectNodeCounts(ch, snapshot.counts)
+}
+
+type controllerNodeMetricSnapshot struct {
+	counts          map[nodeMetricLabels]int
+	hotRuns         map[string]bool
+	historyRuns     map[string]bool
+	historyRevision terminalHistoryMetricRevision
+}
+
+func (c *controllerStateCollector) collectStateSnapshot(ch chan<- prometheus.Metric) (*controllerNodeMetricSnapshot, error) {
 	// Copy only required state under the lock. In particular, do not call
 	// snapshot(), which sorts events and derives UI reachability and latency.
 	c.state.mu.RLock()
@@ -281,8 +297,10 @@ func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	nodes := make([]nodeMetricLabels, 0, len(c.state.nodes))
 	hotIDs := make(map[string]bool, len(c.state.nodes))
+	hotRuns := make(map[string]bool)
 	for _, node := range c.state.nodes {
 		hotIDs[node.ID] = true
+		hotRuns[node.RunID] = true
 		nodes = append(nodes, nodeMetricLabels{node.RunID, node.AgentID, node.Group, node.Role, node.Type, node.State})
 	}
 	experiments := make([]model.Experiment, 0, len(c.state.experiments))
@@ -309,12 +327,14 @@ func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, node := range nodes {
 		counts[node]++
 	}
-	if err := c.state.historicalMetricCounts(hotIDs, func(labels nodeMetricLabels, count int) error { counts[labels] += count; return nil }); err != nil {
-		ch <- prometheus.NewInvalidMetric(c.nodes, err)
-		return
-	}
-	for labels, count := range counts {
-		ch <- prometheus.MustNewConstMetric(c.nodes, prometheus.GaugeValue, float64(count), labels.runID, labels.agentID, labels.group, labels.role, labels.nodeType, labels.state)
+	historyRuns := make(map[string]bool)
+	revision, err := c.state.historicalMetricCountsSnapshot(hotIDs, func(labels nodeMetricLabels, count int) error {
+		counts[labels] += count
+		historyRuns[labels.runID] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	for _, experiment := range experiments {
 		ch <- prometheus.MustNewConstMetric(c.experimentInfo, prometheus.GaugeValue, 1, experiment.ID, experiment.Name, experiment.State)
@@ -322,5 +342,12 @@ func (c *controllerStateCollector) Collect(ch chan<- prometheus.Metric) {
 		for state, count := range map[string]int{"active": experiment.ActiveJobs, "completed": experiment.CompletedJobs, "failed": experiment.FailedJobs, "canceled": experiment.CanceledJobs} {
 			ch <- prometheus.MustNewConstMetric(c.experimentJobs, prometheus.GaugeValue, float64(count), experiment.ID, state)
 		}
+	}
+	return &controllerNodeMetricSnapshot{counts: counts, hotRuns: hotRuns, historyRuns: historyRuns, historyRevision: revision}, nil
+}
+
+func (c *controllerStateCollector) collectNodeCounts(ch chan<- prometheus.Metric, counts map[nodeMetricLabels]int) {
+	for labels, count := range counts {
+		ch <- prometheus.MustNewConstMetric(c.nodes, prometheus.GaugeValue, float64(count), labels.runID, labels.agentID, labels.group, labels.role, labels.nodeType, labels.state)
 	}
 }

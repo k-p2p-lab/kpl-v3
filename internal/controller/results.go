@@ -1114,7 +1114,7 @@ func sameResultArchiveVersion(left, right resultArchiveVersion) bool {
 			}
 			continue
 		}
-		if !os.SameFile(leftFile.info, rightFile.info) || !leftFile.info.ModTime().Equal(rightFile.info.ModTime()) {
+		if !os.SameFile(leftFile.info, rightFile.info) || !leftFile.info.ModTime().Equal(rightFile.info.ModTime()) || sourceFileIdentity(leftFile.info.Sys()) != sourceFileIdentity(rightFile.info.Sys()) {
 			return false
 		}
 	}

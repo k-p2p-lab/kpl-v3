@@ -43,52 +43,70 @@ func newTerminalNodeHistory(dataDir string) *terminalNodeHistory {
 }
 
 func (h *terminalNodeHistory) open(readOnly bool) (*os.Root, *bolt.DB, error) {
+	root, db, _, err := h.openWithIdentity(readOnly)
+	return root, db, err
+}
+
+func (h *terminalNodeHistory) openWithIdentity(readOnly bool) (*os.Root, *bolt.DB, os.FileInfo, error) {
 	if h.directory == "" {
 		if readOnly {
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		return nil, nil, errors.New("terminal history data directory is unavailable")
+		return nil, nil, nil, errors.New("terminal history data directory is unavailable")
 	}
 	if !readOnly {
 		if err := os.MkdirAll(h.directory, 0755); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	root, err := os.OpenRoot(h.directory)
 	if readOnly && errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	info, err := root.Lstat(terminalHistoryFile)
 	if readOnly && errors.Is(err, os.ErrNotExist) {
 		root.Close()
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		root.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err == nil && !info.Mode().IsRegular() {
 		root.Close()
-		return nil, nil, errors.New("terminal node history is not a regular file")
+		return nil, nil, nil, errors.New("terminal node history is not a regular file")
 	}
+	var opened *os.File
 	db, err := bolt.Open(filepath.Join(h.directory, terminalHistoryFile), 0600, &bolt.Options{Timeout: time.Second, ReadOnly: readOnly, OpenFile: func(_ string, flag int, mode os.FileMode) (*os.File, error) {
-		return root.OpenFile(terminalHistoryFile, flag, mode)
+		file, err := root.OpenFile(terminalHistoryFile, flag, mode)
+		if err == nil {
+			opened = file
+		}
+		return file, err
 	}})
 	if err != nil {
 		root.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	// Bind identity to the actual bbolt descriptor after its shared/exclusive
+	// open has completed, not to a pathname that can be replaced meanwhile.
+	info, err = opened.Stat()
+	if err != nil {
+		db.Close()
+		root.Close()
+		return nil, nil, nil, err
 	}
 	if !readOnly {
 		if err := syncRunDirectory(root); err != nil {
 			db.Close()
 			root.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return root, db, nil
+	return root, db, info, nil
 }
 
 func terminalHistoryBuckets(tx *bolt.Tx, create bool) (*bolt.Bucket, *bolt.Bucket, *bolt.Bucket, error) {
@@ -418,11 +436,17 @@ func (h *terminalNodeHistory) page(ctx context.Context, after string, asOf time.
 // Aggregate keys avoid decoding the node history on every scrape. Only the
 // explicitly excluded hot IDs need point lookups; callbacks hold no DB handle.
 func (h *terminalNodeHistory) counts(excludeIDs map[string]bool, visit func(nodeMetricLabels, int) error) error {
+	_, err := h.countsSnapshot(excludeIDs, visit)
+	return err
+}
+
+func (h *terminalNodeHistory) countsSnapshot(excludeIDs map[string]bool, visit func(nodeMetricLabels, int) error) (terminalHistoryMetricRevision, error) {
 	counts := map[nodeMetricLabels]int{}
+	var revision terminalHistoryMetricRevision
 	err := func() error {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		root, db, err := h.open(true)
+		root, db, info, err := h.openWithIdentity(true)
 		if err != nil {
 			return err
 		}
@@ -430,6 +454,7 @@ func (h *terminalNodeHistory) counts(excludeIDs map[string]bool, visit func(node
 			return nil
 		}
 		err = db.View(func(tx *bolt.Tx) error {
+			revision = terminalHistoryMetricRevision{transaction: tx.ID(), info: info}
 			nodes, stored, _, err := terminalHistoryBuckets(tx, false)
 			if err != nil || stored == nil {
 				return err
@@ -476,16 +501,16 @@ func (h *terminalNodeHistory) counts(excludeIDs map[string]bool, visit func(node
 		return errors.Join(err, db.Close(), root.Close())
 	}()
 	if err != nil {
-		return err
+		return revision, err
 	}
 	for labels, count := range counts {
 		if count > 0 {
 			if err := visit(labels, count); err != nil {
-				return err
+				return revision, err
 			}
 		}
 	}
-	return nil
+	return revision, nil
 }
 
 func (h *terminalNodeHistory) propagation(visit func(runID, agentID, topic string) error) error {

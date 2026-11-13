@@ -317,8 +317,8 @@ func (s *Server) listSavedScenarios() ([]savedScenarioSummary, error) {
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("inspect scenario %s: record is not a regular file", id)
 		}
-		// Each list still checks the file's identity, length, and modification
-		// time. Only unchanged, previously parsed records use the summary cache;
+		// Each list still checks file identity, length, modification and change
+		// times. Only unchanged, previously parsed records use the summary cache;
 		// atomic replacements by this or another Controller invalidate it. Cold
 		// readers of that same identity share one validation flight.
 		summary, err := s.loadScenarioSummary(root, id, info)
@@ -430,6 +430,10 @@ func scenarioSummary(item savedScenario) savedScenarioSummary {
 }
 
 func sameScenarioRecord(left, right os.FileInfo) bool {
+	return sameScenarioFile(left, right) && sourceFileIdentity(left.Sys()) == sourceFileIdentity(right.Sys())
+}
+
+func sameScenarioFile(left, right os.FileInfo) bool {
 	return left != nil && right != nil && left.Mode().IsRegular() && right.Mode().IsRegular() &&
 		left.Size() == right.Size() && left.ModTime().Equal(right.ModTime()) && os.SameFile(left, right)
 }
@@ -750,6 +754,11 @@ func writeScenarioRecord(root *os.Root, item savedScenario, create bool) (os.Fil
 		if err := root.Link(tempName, target); err != nil {
 			return nil, err
 		}
+		// Remove the staging link before capturing the cache identity: both
+		// link operations legitimately change the published inode's ctime.
+		if err := root.Remove(tempName); err != nil {
+			return nil, err
+		}
 	} else if err := root.Rename(tempName, target); err != nil {
 		return nil, err
 	}
@@ -757,7 +766,9 @@ func writeScenarioRecord(root *os.Root, item savedScenario, create bool) (os.Fil
 	if err != nil {
 		return nil, err
 	}
-	if !sameScenarioRecord(written, committed) {
+	// Publication itself may change ctime. Subsequent cache/read comparisons
+	// use the complete committed identity, including that change time.
+	if !sameScenarioFile(written, committed) {
 		return nil, errScenarioRecordChanged
 	}
 	return committed, nil

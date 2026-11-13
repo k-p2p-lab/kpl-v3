@@ -241,6 +241,12 @@ func (c *runMetricsCollector) collectWindow(ch chan<- prometheus.Metric, result 
 // Historical projections are emitted one Run at a time. Keeping all decoded
 // histograms until the end of a scrape would recreate a history-sized heap.
 func (c *runMetricsCollector) collectWorkerSummaries(ch chan<- prometheus.Metric) {
+	if err := c.collectWorkerSummariesWith(ch, nil); err != nil {
+		ch <- prometheus.NewInvalidMetric(c.expected, err)
+	}
+}
+
+func (c *runMetricsCollector) collectWorkerSummariesWith(ch chan<- prometheus.Metric, visit func(runWorkerSummary) error) error {
 	c.state.mu.RLock()
 	zeros := make(map[string]map[propagationSeriesKey]bool)
 	for _, node := range c.state.nodes {
@@ -266,10 +272,14 @@ func (c *runMetricsCollector) collectWorkerSummaries(ch chan<- prometheus.Metric
 		zeros[runID][propagationSeriesKey{agentID, topic}] = true
 		return nil
 	}); err != nil {
-		ch <- prometheus.NewInvalidMetric(c.expected, err)
-		return
+		return err
 	}
 	err := c.state.visitWorkerSummaries(func(summary runWorkerSummary) error {
+		if visit != nil {
+			if err := visit(summary); err != nil {
+				return err
+			}
+		}
 		result := summary.Metrics
 		if result.Definition == sessionWindowDefinition {
 			c.collectWindow(ch, result)
@@ -309,14 +319,12 @@ func (c *runMetricsCollector) collectWorkerSummaries(ch chan<- prometheus.Metric
 		}
 		return nil
 	})
-	if err != nil {
-		ch <- prometheus.NewInvalidMetric(c.expected, err)
-	}
 	for id, rows := range zeros {
 		for key := range rows {
 			ch <- prometheus.MustNewConstHistogram(c.propagation, 0, 0, zeroPropagationHistogram().buckets, id, key.agentID, key.topic)
 		}
 	}
+	return err
 }
 
 func zeroPropagationHistogram() *propagationHistogram {

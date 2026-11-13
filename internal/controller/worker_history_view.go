@@ -31,11 +31,16 @@ func (s *state) historyVisibility() func(string) (bool, error) {
 }
 
 func (s *state) historicalMetricCounts(hotIDs map[string]bool, visit func(nodeMetricLabels, int) error) error {
+	_, err := s.historicalMetricCountsSnapshot(hotIDs, visit)
+	return err
+}
+
+func (s *state) historicalMetricCountsSnapshot(hotIDs map[string]bool, visit func(nodeMetricLabels, int) error) (terminalHistoryMetricRevision, error) {
 	if s.terminalHistory == nil {
-		return nil
+		return terminalHistoryMetricRevision{}, nil
 	}
 	visible := s.historyVisibility()
-	return s.terminalHistory.counts(hotIDs, func(labels nodeMetricLabels, count int) error {
+	return s.terminalHistory.countsSnapshot(hotIDs, func(labels nodeMetricLabels, count int) error {
 		ok, err := visible(labels.runID)
 		if err != nil || !ok {
 			return err

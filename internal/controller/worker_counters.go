@@ -54,6 +54,21 @@ func (c *controllerEventCollector) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 func (c *controllerEventCollector) Collect(ch chan<- prometheus.Metric) {
+	skip, err := c.collectCurrent(ch)
+	if err == nil && c.metrics.state.journalOnly {
+		err = c.metrics.state.walkWorkerSummaries(skip, func(summary runWorkerSummary) error {
+			if summary.Retired {
+				return c.emitCounters(ch, summary.Counters)
+			}
+			return nil
+		})
+	}
+	if err != nil {
+		ch <- prometheus.NewInvalidMetric(c.metrics.counterDescriptions["events"], err)
+	}
+}
+
+func (c *controllerEventCollector) collectCurrent(ch chan<- prometheus.Metric) (map[string]bool, error) {
 	m := c.metrics
 	// Snapshot the active/cached label owners while serializing with sealing.
 	// No filesystem access or historical decode holds the ingestion lock.
@@ -71,37 +86,27 @@ func (c *controllerEventCollector) Collect(ch chan<- prometheus.Metric) {
 		cached = append(cached, cloneWorkerCounters(rows))
 	}
 	m.lifecycleMu.Unlock()
-	emit := func(rows []workerCounterSeries) error {
-		for _, row := range rows {
-			desc := m.counterDescriptions[row.Family]
-			if desc == nil || math.IsNaN(row.Value) || math.IsInf(row.Value, 0) || row.Value < 0 {
-				return fmt.Errorf("invalid persisted event counter")
-			}
-			metric, err := prometheus.NewConstMetric(desc, prometheus.CounterValue, row.Value, row.Labels...)
-			if err != nil {
-				return err
-			}
-			ch <- metric
-		}
-		return nil
-	}
 	for _, rows := range cached {
-		if err := emit(rows); err != nil {
-			ch <- prometheus.NewInvalidMetric(m.counterDescriptions["events"], err)
-			return
+		if err := c.emitCounters(ch, rows); err != nil {
+			return skip, err
 		}
 	}
-	if m.state.journalOnly {
-		err := m.state.walkWorkerSummaries(skip, func(summary runWorkerSummary) error {
-			if summary.Retired {
-				return emit(summary.Counters)
-			}
-			return nil
-		})
+	return skip, nil
+}
+
+func (c *controllerEventCollector) emitCounters(ch chan<- prometheus.Metric, rows []workerCounterSeries) error {
+	for _, row := range rows {
+		desc := c.metrics.counterDescriptions[row.Family]
+		if desc == nil || math.IsNaN(row.Value) || math.IsInf(row.Value, 0) || row.Value < 0 {
+			return fmt.Errorf("invalid persisted event counter")
+		}
+		metric, err := prometheus.NewConstMetric(desc, prometheus.CounterValue, row.Value, row.Labels...)
 		if err != nil {
-			ch <- prometheus.NewInvalidMetric(m.counterDescriptions["events"], err)
+			return err
 		}
+		ch <- metric
 	}
+	return nil
 }
 
 // Caller holds lifecycleMu. Closed Runs update compact scalar records rather

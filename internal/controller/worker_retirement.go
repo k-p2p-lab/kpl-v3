@@ -95,9 +95,18 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 		return err
 	}
 	if hasSummary {
+		// A restarted Controller has no hot counter or Node projection. Keep
+		// already retired evidence, and prefer complete replay totals over a
+		// possibly empty or partial parent counter cache.
+		if !summary.Retired {
+			if summary.CountersComplete {
+				summary.Counters = mergeWorkerCounterProjection(counters, summary.Counters)
+			} else if len(summary.Counters) == 0 {
+				summary.Counters = counters
+			}
+			summary.Nodes = countRetiredNodes(terminal)
+		}
 		summary.Retired = true
-		summary.Counters = counters
-		summary.Nodes = countRetiredNodes(terminal)
 		root, err := os.OpenRoot(filepath.Join(s.config.DataDir, currentRunsDirectory, id))
 		if err != nil {
 			s.state.persistMu.Unlock()
@@ -152,12 +161,9 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	}
 	s.state.cacheRetiredRunLocked(id)
 	s.state.retirementRevision++
-	if deleted {
-		delete(s.state.workerSummaries, id)
-	}
-	if hasSummary {
-		s.state.workerSummaries[id] = summary
-	}
+	// The durable summary is already committed. Retirement drops its RAM
+	// memo directly; a cold restart may never have allocated this map.
+	delete(s.state.workerSummaries, id)
 	for nodeID, node := range s.state.nodes {
 		if node.RunID == id {
 			s.state.deleteNodeLocked(nodeID)

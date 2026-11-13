@@ -34,7 +34,7 @@ func summaryFreshnessFixture(t *testing.T, deadline time.Time) (*Server, string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary := runWorkerSummary{RunID: id, Metrics: model.Metrics{RunID: id, Published: 7}, At: time.Now().UTC(), SourceRevision: current, EventRevision: events, Cursor: cursor, Retired: true, NextRefreshAt: deadline, CountersComplete: true, EventsComplete: true}
+	summary := runWorkerSummary{RunID: id, Metrics: model.Metrics{RunID: id, Published: 7}, At: time.Now().UTC(), SourceRevision: current, EventRevision: events, Cursor: cursor, Retired: true, NextRefreshAt: deadline, Counters: []workerCounterSeries{{Family: "events", Labels: []string{id, "agent", "publish", "topic"}, Value: 7}}, CountersComplete: true, EventsComplete: true}
 	if err := writeAnalysisJSON(root, workerSummaryFile, summary); err != nil {
 		t.Fatal(err)
 	}

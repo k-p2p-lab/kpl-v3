@@ -72,6 +72,12 @@ func (s *state) rebaseRetiredWorkerSummaryLocked(id string, now time.Time) (bool
 	if !summary.Retired || summary.EventRevision == "" || !summary.EventsComplete || !summary.NextRefreshAt.IsZero() && !now.Before(summary.NextRefreshAt) {
 		return false, nil
 	}
+	// Publications imply event counters. A previous cold retirement could
+	// erase those counters without changing the source binding; replay that
+	// Run through the normal isolated correction instead of accepting it.
+	if summary.Metrics.Published > 0 && len(summary.Counters) == 0 {
+		return false, nil
+	}
 	events, size, err := eventInputAt(root, id)
 	if err != nil || summary.Cursor != size {
 		return false, err

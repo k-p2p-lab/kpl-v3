@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -115,10 +116,15 @@ func RunGateway(ctx context.Context, config GatewayConfig) error {
 	if err != nil {
 		return err
 	}
-	return serve(ctx, ":18081", handler)
+	return serve(ctx, ":18081", handler, slog.Default().With("role", "network-gateway"))
 }
 
-func serve(ctx context.Context, listen string, handler http.Handler) error {
+func serve(ctx context.Context, listen string, handler http.Handler, logger *slog.Logger) error {
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
 	server := &http.Server{Addr: listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 4 * time.Minute}
 	done := make(chan struct{})
 	defer close(done)
@@ -129,7 +135,8 @@ func serve(ctx context.Context, listen string, handler http.Handler) error {
 		case <-done:
 		}
 	}()
-	err := server.ListenAndServe()
+	logger.Info("network service listening", "listen", listener.Addr().String())
+	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

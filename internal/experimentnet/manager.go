@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -33,6 +34,7 @@ type Manager struct {
 	mu      sync.Mutex
 	command func(context.Context, io.Reader, ...string) ([]byte, error)
 	client  *http.Client
+	logger  *slog.Logger
 }
 
 type networkInfo struct {
@@ -61,7 +63,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	if _, err := controlURL(config.ControllerURL); err != nil {
 		return nil, err
 	}
-	return &Manager{config: config, command: dockerCommand, client: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &Manager{config: config, command: dockerCommand, logger: slog.Default().With("role", "network-manager"), client: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Limit daemon output, including failure messages, without buffering inventories.
@@ -205,11 +207,10 @@ func RunManager(ctx context.Context, config ManagerConfig) error {
 		return err
 	}
 	defer m.client.CloseIdleConnections()
-	return serve(ctx, ":18082", m.Handler())
+	return serve(ctx, ":18082", m.Handler(), m.logger)
 }
 
-func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRequest) (model.ExperimentNetwork, error) {
-	var result model.ExperimentNetwork
+func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRequest) (result model.ExperimentNetwork, prepareErr error) {
 	if !identifier.MatchString(request.RunID) || !identifier.MatchString(request.Epoch) || request.RequestedAt.IsZero() || len(request.Agents) == 0 || len(request.Agents) > 1024 {
 		return result, errors.New("invalid experiment network identity or Agent set")
 	}
@@ -222,6 +223,9 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 		return result, errors.New("network preparation is already in progress")
 	}
 	defer m.mu.Unlock()
+	progress := newPreparationProgress(m.logger, "experiment network preparation", request.RunID, request.Epoch)
+	defer func() { progress.finish(prepareErr) }()
+	progress.step("record preparation identity")
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -243,14 +247,17 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 	if err := m.persist("request.json", request); err != nil {
 		return result, err
 	}
+	progress.step("verify Swarm nodes")
 	if err := m.clusterReady(ctx); err != nil {
 		return result, err
 	}
+	progress.step("inspect Peer overlay")
 	network, err := m.inspect(ctx)
 	if err != nil {
 		return result, err
 	}
 	if network != nil && network.Labels["io.kpl.execution"] == request.Epoch {
+		progress.step("verify acknowledged gateway")
 		data, err := os.ReadFile(filepath.Join(m.config.DataDir, "active.json"))
 		if err == nil && json.Unmarshal(data, &result) == nil && result.NetworkID == network.ID && result.Epoch == request.Epoch && result.RunID == request.RunID {
 			if err := m.gatewayReady(ctx, result.GatewayURL); err != nil {
@@ -262,6 +269,7 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 	}
 	var allocation networkAllocation
 	if network != nil {
+		progress.step("verify Peer overlay is unused")
 		if err := m.unusedNetwork(ctx, network); err != nil {
 			return result, err
 		}
@@ -270,6 +278,7 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 			return result, err
 		}
 	} else {
+		progress.step("recover saved Peer allocation")
 		data, err := os.ReadFile(filepath.Join(m.config.DataDir, "allocation.json"))
 		if err != nil {
 			return result, fmt.Errorf("Peer network missing and original allocation unavailable: %w", err)
@@ -283,10 +292,12 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 	}
 	// All Agents have fenced admission and confirmed Peer removal. Docker still
 	// rejects deletion if a service or remote attachment remains; never force it.
+	progress.step("remove previous gateway")
 	if err := m.removeGateway(ctx); err != nil {
 		return result, err
 	}
 	if network != nil {
+		progress.step("remove previous Peer overlay")
 		if _, err := m.command(ctx, nil, "network", "rm", network.ID); err != nil {
 			return result, err
 		}
@@ -295,14 +306,17 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 	if network != nil {
 		oldID = network.ID
 	}
+	progress.step("create fresh Peer overlay")
 	id, err := m.createFreshNetwork(ctx, request, allocation, oldID)
 	if err != nil {
 		return result, err
 	}
+	progress.step("prepare gateway")
 	result, err = m.createGateway(ctx, request, id, allocation.Subnet)
 	if err != nil {
 		return model.ExperimentNetwork{}, err
 	}
+	progress.step("record active network")
 	if err := m.persist("active.json", result); err != nil {
 		return model.ExperimentNetwork{}, err
 	}
@@ -447,8 +461,10 @@ func (m *Manager) removeGateway(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNetworkRequest, networkID, subnet string) (model.ExperimentNetwork, error) {
-	var result model.ExperimentNetwork
+func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNetworkRequest, networkID, subnet string) (result model.ExperimentNetwork, gatewayErr error) {
+	progress := newPreparationProgress(m.logger, "experiment gateway preparation", request.RunID, request.Epoch)
+	defer func() { progress.finish(gatewayErr) }()
+	progress.step("resolve gateway image")
 	image, err := m.command(ctx, nil, "inspect", "--format", "{{.Image}}", m.config.SelfContainer)
 	if err != nil {
 		return result, err
@@ -473,6 +489,7 @@ func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNet
 	if err := tw.Close(); err != nil {
 		return result, err
 	}
+	progress.step("create gateway container")
 	output, err := m.command(ctx, nil, "create", "--name", m.config.Stack+"-network-gateway", "--network", m.config.ControlNetwork,
 		"--label", "io.kpl.network-gateway="+m.config.Stack, "--label", "io.kpl.execution="+request.Epoch,
 		"--label", "com.docker.stack.namespace="+m.config.Stack, "--label", "io.kpl.resource-monitor=true",
@@ -486,15 +503,19 @@ func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNet
 	if !identifier.MatchString(id) {
 		return result, errors.New("invalid gateway container ID")
 	}
+	progress.step("copy gateway configuration")
 	if _, err := m.command(ctx, &archive, "cp", "-", id+":/"); err != nil {
 		return result, err
 	}
+	progress.step("attach gateway to Peer overlay")
 	if _, err := m.command(ctx, nil, "network", "connect", networkID, id); err != nil {
 		return result, err
 	}
+	progress.step("start gateway container")
 	if _, err := m.command(ctx, nil, "start", id); err != nil {
 		return result, err
 	}
+	progress.step("verify gateway attachments")
 	output, err = m.command(ctx, nil, "inspect", "--format", "{{json .NetworkSettings.Networks}}", id)
 	if err != nil {
 		return result, err
@@ -512,6 +533,7 @@ func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNet
 	}
 	result = model.ExperimentNetwork{RunID: request.RunID, Epoch: request.Epoch, NetworkID: networkID, NetworkName: m.config.PeerNetwork,
 		GatewayURL: "http://" + net.JoinHostPort(control.String(), "18081"), PeerGatewayURL: "http://" + net.JoinHostPort(peer.String(), "18081")}
+	progress.step("wait for gateway listener")
 	if err := m.gatewayReady(ctx, result.GatewayURL); err != nil {
 		return model.ExperimentNetwork{}, err
 	}

@@ -463,7 +463,23 @@ func readResumeFile(root *os.Root, name string, limit int) ([]byte, error) {
 	return io.ReadAll(io.NewSectionReader(file.file, 0, file.size))
 }
 
-func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec scenario.Scenario) error {
+func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec scenario.Scenario) (cleanupErr error) {
+	started := time.Now()
+	stage, stageRun := "Controller worker exit", ""
+	defer func() {
+		elapsed := time.Since(started)
+		if elapsed < time.Second {
+			return
+		}
+		outcome := "ready"
+		if cleanupErr != nil {
+			outcome = "failed"
+			if errors.Is(cleanupErr, context.Canceled) || errors.Is(cleanupErr, context.DeadlineExceeded) {
+				outcome = "canceled"
+			}
+		}
+		s.logger.Info("previous Run cleanup finished", "run", stageRun, "runs", len(runIDs), "stage", stage, "elapsed", elapsed, "outcome", outcome, "error", cleanupErr)
+	}()
 	if err := s.waitControllerWorkers(ctx, runIDs); err != nil {
 		return err
 	}
@@ -499,14 +515,17 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		}
 		// Attempted run IDs will never run again. Fence every possible generation,
 		// including generations whose state was lost in a Controller restart.
+		stage, stageRun = "Agent generation fence", runID
 		err := s.stopRunGeneration(cleanupCtx, runID, ^uint64(0))
 		cancel()
 		if err == nil {
 			drainCtx, drainCancel := context.WithTimeout(ctx, timeout)
 			if s.config.RunWorkers {
+				stage = "telemetry identity index recovery"
 				err = s.rebuildJournalIndex(drainCtx, runID)
 			}
 			if err == nil {
+				stage = "final Agent telemetry and worker drain"
 				err = s.drainRunTelemetry(drainCtx, runID)
 			}
 			drainCancel()
@@ -517,6 +536,7 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		// A successful strict drain ACK resolves delivery debt. Preserve the
 		// earlier scientific failure; terminal Peer evidence is checked below.
 		if s.config.RunWorkers {
+			stage = "cleanup delivery ACK persistence"
 			s.state.persistMu.Lock()
 			deleted, fenceErr := s.state.resultWriteFencedLocked(runID)
 			s.state.persistMu.Unlock()
@@ -537,11 +557,17 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := s.refreshAgentState(cleanupCtx, runIDs...); err != nil {
-		return err
+	// Worker cleanup refreshes each owner's terminal inventory immediately
+	// below. Fetching it here as well duplicates every retained Peer payload.
+	if !s.config.RunWorkers || len(runIDs) == 0 {
+		stage = "Agent terminal inventory"
+		if err := s.refreshAgentState(cleanupCtx, runIDs...); err != nil {
+			return err
+		}
 	}
 	if s.config.RunWorkers {
 		for _, id := range runIDs {
+			stage, stageRun = "Agent terminal inventory", id
 			if err := s.waitRunTerminalEvidence(cleanupCtx, id); err != nil {
 				return err
 			}
@@ -552,10 +578,12 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 				return err
 			}
 			if _, ok := s.state.workerMetricSummary(id); !deleted && !ok {
+				stage = "scientific metric summary"
 				if err := s.computeWorkerSummary(cleanupCtx, id); err != nil {
 					return err
 				}
 			}
+			stage = "runtime retirement"
 			if err := s.retireRunRuntime(cleanupCtx, id); err != nil {
 				return err
 			}

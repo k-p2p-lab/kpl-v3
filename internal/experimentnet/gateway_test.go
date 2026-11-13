@@ -66,3 +66,42 @@ func TestManagerAuthenticationPrecedesAnyDockerAccess(t *testing.T) {
 		t.Fatalf("status=%d calls=%v", w.Code, fake.calls)
 	}
 }
+
+func TestGatewayAttackRegistryIsAuthenticatedAndReadOnly(t *testing.T) {
+	const token = "test-gateway-registry-key"
+	forwarded := 0
+	handler, err := GatewayHandler(GatewayConfig{Token: token, ControllerURL: "http://controller:8080", Subnet: "10.11.0.0/16"}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		forwarded++
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/attack-targets" || r.Header.Get("Authorization") != "Bearer "+token || r.URL.Query().Get("generation") != "7" {
+			t.Errorf("unexpected upstream registry request: %s %s", r.Method, r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`[]`))}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		method, path, token string
+		status              int
+	}{
+		{http.MethodGet, "/controller/api/v1/attack-targets?runId=run&requesterNodeId=attacker&generation=7", token, http.StatusOK},
+		{http.MethodGet, "/controller/api/v1/attack-targets", "", http.StatusUnauthorized},
+		{http.MethodGet, "/controller/api/v1/attack-targets", "wrong", http.StatusUnauthorized},
+		{http.MethodPost, "/controller/api/v1/attack-targets", token, http.StatusNotFound},
+		{http.MethodGet, "/controller/api/v1/attack-targets/other", token, http.StatusNotFound},
+		{http.MethodGet, "/controller/api/v1/experiments", token, http.StatusNotFound},
+	} {
+		r := httptest.NewRequest(test.method, test.path, nil)
+		if test.token != "" {
+			r.Header.Set("Authorization", "Bearer "+test.token)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != test.status {
+			t.Errorf("%s %s: status=%d want %d", test.method, test.path, w.Code, test.status)
+		}
+	}
+	if forwarded != 1 {
+		t.Fatalf("gateway forwarded %d requests; only the authenticated registry GET may pass", forwarded)
+	}
+}

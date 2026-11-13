@@ -355,7 +355,10 @@ func resultStorageStatus(root *os.Root, id string) runArchiveStatus {
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		if isRunLog(name) || logSegment(name, "events.jsonl") || logSegment(name, "observations.jsonl") {
+		// Payload files are removed only after their current captured identity
+		// is verified. A retained local payload still needs that cleanup, even
+		// when a newer rewrite has the archived version's size and mtime.
+		if !retainedRunFile(name) {
 			pending = true
 			continue
 		}

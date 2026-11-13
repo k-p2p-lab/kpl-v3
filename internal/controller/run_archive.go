@@ -725,6 +725,7 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 	if err := syncRunDirectory(local); err != nil {
 		return err
 	}
+	localChanged := false
 	for _, file := range cleanup {
 		info, err := local.Lstat(file.name)
 		if errors.Is(err, os.ErrNotExist) {
@@ -733,10 +734,12 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 		if err != nil {
 			return err
 		}
-		if os.SameFile(info, file.info) && info.Size() == file.size && info.ModTime().Equal(file.info.ModTime()) {
+		if os.SameFile(info, file.info) && info.Size() == file.size && info.ModTime().Equal(file.info.ModTime()) && sourceFileIdentity(info.Sys()) == sourceFileIdentity(file.info.Sys()) {
 			if err := local.Remove(file.name); err != nil {
 				return err
 			}
+		} else {
+			localChanged = true
 		}
 	}
 	// All copied bytes were checksum-verified before unlinking. Preserve the
@@ -759,7 +762,15 @@ func (s *Server) archiveRun(ctx context.Context, id string, quiet time.Duration)
 			return err
 		}
 	}
-	return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: "archived", UpdatedAt: time.Now().UTC()})
+	status := "archived"
+	if localChanged {
+		// A copied inode may have been rewritten without changing its size or
+		// mtime. Keep those newer bytes and retry instead of retiring the queue
+		// version that captured the older content.
+		s.state.markRunArchiveDirty(id)
+		status = "pending"
+	}
+	return s.writeRunArchiveStatus(local, id, runArchiveStatus{State: status, UpdatedAt: time.Now().UTC()})
 }
 func syncRunDirectory(root *os.Root) error {
 	dir, err := root.Open(".")

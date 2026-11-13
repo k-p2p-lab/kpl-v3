@@ -42,6 +42,22 @@ const batch = () => [
   {id:'three',batchId:'series',name:'Test series',state:'queued',iteration:3,repetitions:3},
 ];
 
+test('queued experiment details expose preparation barriers without replacing an active phase', () => {
+  const run = {id:'waiting',batchId:'batch',name:'Waiting batch',state:'queued',iteration:1,repetitions:1};
+  const f = fixture([run]);
+  const item = {id:'work-waiting',kind:'experiment',runId:run.id,state:'running',position:0};
+  for (const phase of ['Waiting for analysis worker cleanup','Recovering previous Run cleanup','Finishing previous Run metrics']) {
+    const details = f.api.queueExperimentDetails({...item,phase},false);
+    assert.ok(details.bodyHTML.includes(phase), phase);
+    assert.doesNotMatch(details.bodyHTML,/Waiting to start/);
+  }
+  const known = f.api.queueExperimentDetails({...item,phase:'Recovering previous Run cleanup'},false,[{...run,phaseName:'Waiting for local result storage'}]);
+  assert.match(known.bodyHTML,/Waiting for local result storage/);
+  const active = f.api.queueExperimentDetails({...item,phase:'Recovering previous Run cleanup'},false,[{...run,state:'running',phaseName:'Publishing messages'}]);
+  assert.match(active.bodyHTML,/Publishing messages/);
+  assert.doesNotMatch(active.bodyHTML,/Recovering previous Run cleanup/);
+});
+
 test('one batch stop sends one request and stays disabled after acceptance until all members finish',async()=>{
   const runs=batch();
   const f=fixture(runs);

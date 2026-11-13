@@ -75,7 +75,7 @@ func GatewayHandler(config GatewayConfig, transport http.RoundTripper) (http.Han
 		switch {
 		case len(parts) >= 2 && parts[0] == "controller":
 			target, path = controller, strings.TrimPrefix(r.URL.Path, "/controller")
-			if path != "/api/v1/health" && path != "/api/v1/bootstrap" && path != "/api/v1/discovery" {
+			if path != "/api/v1/health" && path != "/api/v1/bootstrap" && path != "/api/v1/discovery" && !(r.Method == http.MethodGet && path == "/api/v1/attack-targets") {
 				target = nil
 			}
 		case len(parts) == 3 && parts[0] == "agents":

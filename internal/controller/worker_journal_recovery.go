@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -102,13 +103,29 @@ func (s *Server) requestJournalIndexRecovery(id string) {
 // Called by the shared queue head, including its prior-Run cleanup subtask.
 // No application/persistence lock is held during source/NAS reads or child Wait.
 func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.journalBuildMu.Lock()
 	defer s.journalBuildMu.Unlock()
 	path := filepath.Join(s.config.DataDir, currentRunsDirectory, id)
 	s.state.persistMu.Lock()
+	if err := ctx.Err(); err != nil {
+		s.state.persistMu.Unlock()
+		return err
+	}
 	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		s.state.persistMu.Unlock()
 		return err
+	}
+	// Most cleanup attempts revisit a committed index. A writable open loads
+	// its freelist (or scans an old unsynced database) and syncs the directory
+	// even when no recovery work exists. Keep that path read-only, checking
+	// both intent formats under the same persistence lock as ingress.
+	ready, err := journalIndexCleanAndReady(path)
+	if err != nil || ready {
+		s.state.persistMu.Unlock()
+		return errors.Join(err, ctx.Err())
 	}
 	root, db, err := openJournalIndex(path)
 	if err == nil {
@@ -295,4 +312,29 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	})
 	committed = err == nil
 	return err
+}
+
+func journalIndexCleanAndReady(path string) (bool, error) {
+	root, db, err := openJournalIndexMode(path, true)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	ready := false
+	err = db.View(func(tx *bolt.Tx) error {
+		if meta := tx.Bucket([]byte("meta")); meta != nil {
+			ready = journalActiveBucket(tx) != nil && len(meta.Get([]byte("pending"))) == 0
+		}
+		return nil
+	})
+	if err == nil && ready {
+		if _, pendingErr := root.Lstat(journalPendingFile); pendingErr == nil {
+			ready = false
+		} else if !errors.Is(pendingErr, os.ErrNotExist) {
+			err = pendingErr
+		}
+	}
+	return ready, errors.Join(err, db.Close(), root.Close())
 }

@@ -274,7 +274,7 @@ func (s *Server) drainAgentTelemetry(ctx context.Context, id string, agent model
 // omitted capability fields intentionally preserve the registered values.
 func (s *Server) confirmRunWorkerDrain(ctx context.Context, agent model.Agent) error {
 	var heartbeat model.AgentHeartbeat
-	if err := s.callAgent(ctx, agent.URL, http.MethodGet, "/api/v1/status", nil, &heartbeat); err != nil {
+	if err := s.callAgent(ctx, agent.URL, http.MethodGet, "/api/v1/status?view=agent", nil, &heartbeat); err != nil {
 		pending := &agentRunWorkerPendingError{message: fmt.Sprintf("Agent %s Run worker cleanup cannot be confirmed: %v", agent.ID, err)}
 		return errors.Join(pending, err)
 	}

@@ -240,7 +240,7 @@ func (s *Server) finishWork(slot *workSlot) {
 	s.finishWorkLocked(slot)
 }
 
-func (s *Server) waitWork(ctx context.Context, slot *workSlot) error {
+func (s *Server) waitWork(ctx context.Context, slot *workSlot) (waitErr error) {
 	select {
 	case <-slot.ready:
 	case <-ctx.Done():
@@ -259,17 +259,40 @@ func (s *Server) waitWork(ctx context.Context, slot *workSlot) error {
 	if slot.resultAnalysis && !slot.analysisLeader {
 		return nil
 	}
+	started := time.Now()
+	stage := "analysis worker cleanup"
+	logPreparation := func(message string, fields ...any) {
+		identity := []any{"work", slot.id, "kind", slot.item.Kind, "batch", slot.item.BatchID, "run", slot.item.RunID}
+		s.logger.Info(message, append(identity, fields...)...)
+	}
+	logPreparation("work preparation started", "stage", stage)
+	defer func() {
+		outcome := "ready"
+		if waitErr != nil {
+			outcome = "failed"
+			if errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded) {
+				outcome = "canceled"
+			}
+		}
+		logPreparation("work preparation finished", "stage", stage, "elapsed", time.Since(started), "outcome", outcome, "error", waitErr)
+	}()
+	s.updateWorkStatus(slot.id, "Checking analysis worker cleanup", 0)
 	if err := s.waitAnalysisWorkerCleanup(ctx, slot); err != nil {
 		return err
 	}
+	stage = "previous Run cleanup recovery"
+	logPreparation("work preparation advanced", "stage", stage, "elapsed", time.Since(started))
+	s.updateWorkStatus(slot.id, "Recovering previous Run cleanup", 0)
 	if err := s.recoverWorkCleanup(ctx); err != nil {
 		return err
 	}
 	if slot.item.Kind == "experiment" {
-		return nil
+		s.updateWorkStatus(slot.id, "", 0)
+		return ctx.Err()
 	}
 	// Retained Peers and failed removal barriers must be resolved before CPU,
 	// disk or network intensive analysis starts. No synthetic Run is created.
+	stage = "previous Run Peer cleanup"
 	for {
 		if err := s.waitQueueCleanup(ctx, "", scenario.Scenario{}, func(phase string) {
 			s.updateWorkStatus(slot.id, phase, 0)
@@ -308,6 +331,15 @@ func (s *Server) updateWorkStatus(id, phase string, progress float64) {
 			item.Phase = phase
 			if phase != "Stopping" {
 				item.Progress = min(100, max(0, progress))
+			}
+			// Preparation owns the queue slot before the first Run starts.
+			// Keep its live experiment view informative without storage I/O
+			// or overwriting the active scenario's own phase and clock.
+			if item.Kind == "experiment" {
+				if run, exists := s.state.experiments[item.RunID]; exists && run.State == "queued" {
+					run.PhaseName = phase
+					s.state.experiments[item.RunID] = run
+				}
 			}
 			changed = true
 			break

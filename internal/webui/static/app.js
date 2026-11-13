@@ -673,7 +673,7 @@ function queueExperimentDetails(item, canceling = false, runs = state.snapshot?.
   const run = members.find(member => member.state === "running") || members.find(isPendingRun) || started.at(-1) || members.at(-1) || anchor;
   const stopping = Boolean(canceling || run.stopRequested || state.pendingStops.has(runStopKey(run)));
   const progress = Math.max(0, Math.min(100, run.totalPhases ? Math.round((run.phase || 0) / run.totalPhases * 100) : 0));
-  const phase = run.phaseName || (run.state === "queued" ? "Waiting to start" : run.seed != null ? `seed ${run.seed}` : "");
+  const phase = run.phaseName || (run.state === "queued" ? item.phase || "Waiting to start" : run.seed != null ? `seed ${run.seed}` : "");
   const batchMembers = currentBatchRuns([...known.values()].filter(member => anchor.batchId && member.batchId === anchor.batchId));
   const completed = batchMembers.filter(member => member.state === "completed").length;
   const timing = run.timing?.batchEstimatedFinishAt ? run.timing : batchMembers.find(member => isPendingRun(member) && member.timing?.batchEstimatedFinishAt)?.timing;

@@ -184,6 +184,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	if r.URL.Query().Get("view") == "agent" {
+		// Drain confirmation needs the current Agent instance and capabilities,
+		// without copying Peer evidence or waiting for a Run worker snapshot.
+		writeHeartbeatView(w, model.AgentHeartbeat{Agent: s.snapshotAgent(), Partial: true})
+		return
+	}
 	finishView := s.acquireRunView()
 	defer finishView()
 	snapshot, err := s.snapshotWithHistoryContext(r.Context(), true)

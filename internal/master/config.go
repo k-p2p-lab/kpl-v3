@@ -204,18 +204,23 @@ func ConfigDefaults(c Config) Config {
 }
 
 func ValidatePortConflicts(c Config) error {
-	for _, key := range []string{"KPL_HTTP_PORT", "KPL_AGENT_METRICS_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT"} {
+	ports := []string{"KPL_HTTP_PORT", "KPL_AGENT_METRICS_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT"}
+	for _, key := range ports {
 		if err := ValidateSetting(key, c[key]); err != nil {
 			return err
 		}
 	}
-	for _, key := range []string{"KPL_HTTP_PORT", "PROMETHEUS_PORT", "GRAFANA_PORT"} {
-		if c["KPL_AGENT_METRICS_PORT"] == c[key] {
-			return fmt.Errorf("KPL_AGENT_METRICS_PORT conflicts with %s", key)
+	// Controller, Prometheus and Grafana share the pinned control host. An
+	// Agent may also run there, so every published TCP port must be distinct.
+	for i, key := range ports {
+		for _, other := range ports[i+1:] {
+			if c[key] == c[other] {
+				return fmt.Errorf("%s conflicts with %s", key, other)
+			}
 		}
-	}
-	if c["KPL_AGENT_METRICS_PORT"] == "2377" || c["KPL_AGENT_METRICS_PORT"] == "7946" {
-		return errors.New("KPL_AGENT_METRICS_PORT conflicts with a Docker Swarm TCP port (2377 or 7946)")
+		if c[key] == "2377" || c[key] == "7946" {
+			return fmt.Errorf("%s conflicts with a Docker Swarm TCP port (2377 or 7946)", key)
+		}
 	}
 	return nil
 }

@@ -14,6 +14,8 @@ import (
 
 var errRunResetPending = errors.New("previous Run reset is not complete")
 
+const runResetRetryInterval = 100 * time.Millisecond
+
 type runResetProof struct {
 	RunID               string `json:"runId"`
 	ActivePeers         int    `json:"activePeers"`
@@ -193,8 +195,16 @@ func (s *Server) prepareRunReset(ctx context.Context, id string) error {
 		if records <= peerHistoryRecent && configs == 0 && fences <= runFenceCacheLimit {
 			break
 		}
-		// Every current process is terminal at this boundary. A crossed heartbeat
-		// can invalidate acknowledgements, so renew them instead of discarding rows.
+		// A crossed heartbeat can invalidate acknowledgements, and a different
+		// recovered Run may still own a Peer config. Retry without flooding the
+		// Controller while that other Run is waiting to be fenced and drained.
+		timer := time.NewTimer(runResetRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return &runWorkerPendingError{ctx.Err()}
+		case <-timer.C:
+		}
 		if err := s.heartbeat(ctx); err != nil {
 			return &runWorkerPendingError{err}
 		}

@@ -487,7 +487,8 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 	if timeout <= 0 {
 		timeout = 3 * time.Minute
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]bool, len(runIDs))
+	uniqueRuns := make([]string, 0, len(runIDs))
 	for _, runID := range runIDs {
 		if !validResultID(runID) {
 			return fmt.Errorf("invalid cleanup run ID %q", runID)
@@ -496,10 +497,18 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			continue
 		}
 		seen[runID] = true
+		uniqueRuns = append(uniqueRuns, runID)
+	}
+	runIDs = uniqueRuns
+	var cleanupErrors []error
+	fenced := make(map[string]bool, len(runIDs))
+	// An Agent reset proves its whole process is ready for the next Run. After
+	// recovery, another old Run can still own a Peer or network on that Agent.
+	// Fence every recovered Run before asking any one of them to reset.
+	for _, runID := range runIDs {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(append(cleanupErrors, err)...)
 		}
-		cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 		participants, participantErr := s.cleanupParticipants(runID)
 		if participantErr == nil && len(participants) == 0 {
 			for _, phase := range spec.Phases {
@@ -510,28 +519,45 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			}
 		}
 		if participantErr != nil {
-			cancel()
-			return fmt.Errorf("cleanup previous run %s: %w", runID, participantErr)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, participantErr))
+			continue
 		}
 		// Attempted run IDs will never run again. Fence every possible generation,
 		// including generations whose state was lost in a Controller restart.
 		stage, stageRun = "Agent generation fence", runID
+		cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := s.stopRunGeneration(cleanupCtx, runID, ^uint64(0))
 		cancel()
-		if err == nil {
-			drainCtx, drainCancel := context.WithTimeout(ctx, timeout)
-			if s.config.RunWorkers {
-				stage = "telemetry identity index recovery"
-				err = s.rebuildJournalIndex(drainCtx, runID)
-			}
-			if err == nil {
-				stage = "final Agent telemetry and worker drain"
-				err = s.drainRunTelemetry(drainCtx, runID)
-			}
-			drainCancel()
-		}
 		if err != nil {
-			return fmt.Errorf("cleanup previous run %s: %w", runID, err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, err))
+			continue
+		}
+		fenced[runID] = true
+	}
+	for _, runID := range runIDs {
+		if !fenced[runID] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(cleanupErrors, err)...)
+		}
+		drainCtx, drainCancel := context.WithTimeout(ctx, timeout)
+		var err error
+		stageRun = runID
+		if s.config.RunWorkers {
+			stage = "telemetry identity index recovery"
+			err = s.rebuildJournalIndex(drainCtx, runID)
+		}
+		if err == nil {
+			stage = "final Agent telemetry and worker drain"
+			err = s.drainRunTelemetry(drainCtx, runID)
+		}
+		drainCancel()
+		if err != nil {
+			// A later Run can own the Agent's remaining network binding. Its
+			// drain must run even when this earlier reset is still pending.
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, err))
+			continue
 		}
 		// A successful strict drain ACK resolves delivery debt. Preserve the
 		// earlier scientific failure; terminal Peer evidence is checked below.
@@ -541,7 +567,8 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			deleted, fenceErr := s.state.resultWriteFencedLocked(runID)
 			s.state.persistMu.Unlock()
 			if fenceErr != nil {
-				return fenceErr
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, fenceErr))
+				continue
 			}
 			if deleted {
 				s.state.mu.Lock()
@@ -554,6 +581,9 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 				s.updateExperiment(runID, func(run *model.Experiment) { run.TelemetryPending = false })
 			}
 		}
+	}
+	if err := errors.Join(cleanupErrors...); err != nil {
+		return err
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

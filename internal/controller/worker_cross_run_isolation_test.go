@@ -436,6 +436,7 @@ func (f *crossRunCluster) awaitRun(id string) model.Experiment {
 	run := f.server.state.experiments[id]
 	f.server.state.mu.RUnlock()
 	if run.CleanupState != "complete" || run.TelemetryPending {
+		f.logCleanupObligations(id)
 		f.t.Fatalf("Run did not confirm cleanup/drain: %+v", run)
 	}
 	if err := f.server.verifyRetiredRuntime(id); err != nil {
@@ -454,6 +455,80 @@ func (f *crossRunCluster) awaitRun(id string) model.Experiment {
 		}
 	}
 	return run
+}
+
+func (f *crossRunCluster) logCleanupObligations(id string) {
+	type pending struct {
+		ID, Agent, State, Cleanup, Reservation     string
+		Generation                                 uint64
+		Uncertain                                  bool
+		UncertainRun, UncertainAgent               string
+		UncertainGeneration                        uint64
+		UncertainURL, UncertainHost, UncertainNode string
+		UncertainStartedAt                         time.Time
+		MockLive, MockHistory, Created, Receipt    bool
+		MockHistoryState, MockHistoryCleanup       string
+	}
+	byID := make(map[string]*pending)
+	ensure := func(nodeID string) *pending {
+		if byID[nodeID] == nil {
+			byID[nodeID] = &pending{ID: nodeID}
+		}
+		return byID[nodeID]
+	}
+	f.server.state.mu.RLock()
+	for nodeID, node := range f.server.state.nodes {
+		if node.RunID == id && (nodeHasLiveState(node) || node.Metadata["cleanupComplete"] != "true") {
+			p := ensure(nodeID)
+			p.Agent, p.State, p.Cleanup, p.Generation = node.AgentID, node.State, node.Metadata["cleanupComplete"], node.Generation
+		}
+	}
+	for nodeID, owner := range f.server.state.reservations {
+		if strings.HasPrefix(nodeID, id+"-") {
+			ensure(nodeID).Reservation = owner
+		}
+	}
+	for nodeID, unknown := range f.server.state.uncertainCreates {
+		if unknown.runID == id {
+			p := ensure(nodeID)
+			p.Uncertain, p.UncertainRun, p.UncertainAgent, p.UncertainGeneration = true, unknown.runID, unknown.agentID, unknown.generation
+			p.UncertainURL, p.UncertainHost, p.UncertainNode, p.UncertainStartedAt = unknown.owner.url, unknown.owner.hostname, unknown.owner.swarmNodeID, unknown.owner.startedAt
+		}
+	}
+	snapshots := make(map[string]time.Time)
+	for agent, at := range f.server.state.agentSnapshots {
+		snapshots[agent] = at
+	}
+	f.server.state.mu.RUnlock()
+	f.mu.Lock()
+	for nodeID, p := range byID {
+		_, p.Created = f.created[id][nodeID]
+		_, p.Receipt = f.receipts[nodeID]
+		for _, agent := range f.agents {
+			_, live := agent.nodes[nodeID]
+			history, known := agent.history[nodeID]
+			p.MockLive, p.MockHistory = p.MockLive || live, p.MockHistory || known
+			if known {
+				p.MockHistoryState, p.MockHistoryCleanup = history.State, history.Metadata["cleanupComplete"]
+			}
+		}
+	}
+	f.mu.Unlock()
+	var obligations []*pending
+	for _, p := range byID {
+		obligations = append(obligations, p)
+	}
+	sort.Slice(obligations, func(i, j int) bool { return obligations[i].ID < obligations[j].ID })
+	total := len(obligations)
+	if len(obligations) > 50 {
+		obligations = obligations[:50]
+	}
+	encoded, err := json.Marshal(struct {
+		Total        int
+		Obligations  []*pending
+		AgentReports map[string]time.Time
+	}{total, obligations, snapshots})
+	f.t.Logf("cleanup obligation diagnostic: %s (encode error=%v)", encoded, err)
 }
 
 func (f *crossRunCluster) awaitBaseline(label string) crossRunBaseline {

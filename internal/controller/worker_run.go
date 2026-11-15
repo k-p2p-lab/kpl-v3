@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -14,8 +15,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
@@ -118,7 +121,7 @@ type runWorkerClient struct {
 	server            *Server
 	runID             string
 	ctx               context.Context
-	syncMu            sync.Mutex
+	syncMu            contextlock.Mutex
 	inventoryRevision uint64
 	journalMu         sync.Mutex
 	journal           *os.File
@@ -130,6 +133,7 @@ type runWorkerClient struct {
 	placementRNG      map[string]*rand.Rand
 	observationOnce   sync.Once
 	observationSlot   chan struct{}
+	finalizationEnd   atomic.Pointer[time.Time]
 }
 
 // WorkerFactory is reached only through workerproc's inherited private pipes.
@@ -215,14 +219,16 @@ func WorkerFactory(ctx context.Context, kind string, bootstrap json.RawMessage, 
 			s.runScenario(runCtx, start.Experiment, spec)
 			loopCancel()
 			<-loopDone
-			if err := client.syncInventory(callCtx); err != nil {
-				return nil, err
+			finalCtx, finalCancel := client.finalizationContext(callCtx)
+			defer finalCancel()
+			if err := client.syncInventory(finalCtx); err != nil {
+				return nil, fmt.Errorf("finalize experiment inventory: %w", err)
 			}
-			if err := client.syncJournal(callCtx); err != nil {
-				return nil, err
+			if err := client.syncJournal(finalCtx); err != nil {
+				return nil, fmt.Errorf("finalize experiment journal: %w", err)
 			}
-			if err := client.publishSummary(callCtx); err != nil {
-				return nil, err
+			if err := client.publishSummary(finalCtx); err != nil {
+				return nil, fmt.Errorf("finalize experiment summary: %w", err)
 			}
 			if client.journal != nil {
 				_ = client.journal.Close()
@@ -302,6 +308,8 @@ func (c *runWorkerClient) call(ctx context.Context, method string, input, output
 	if ctx == context.Background() {
 		ctx = c.ctx
 	}
+	ctx, cancel := c.finalizationContext(ctx)
+	defer cancel()
 	var reply workerReply
 	if err := c.peer.Call(ctx, method, input, &reply); err != nil {
 		return &workerCallTransportError{err}
@@ -316,13 +324,45 @@ func (c *runWorkerClient) call(ctx context.Context, method string, input, output
 }
 
 func (c *runWorkerClient) command(ctx context.Context, method string, input any) error {
+	ctx, cancel := c.finalizationContext(ctx)
+	defer cancel()
 	err := c.call(ctx, method, input, nil)
-	_ = c.syncInventory(context.WithoutCancel(ctx))
+	if ctx.Err() != nil {
+		return errors.Join(err, ctx.Err())
+	}
+	if syncErr := c.syncInventory(ctx); syncErr != nil {
+		err = errors.Join(err, fmt.Errorf("synchronize Run inventory after %s: %w", method, syncErr))
+	}
 	return err
 }
 
+// Final delivery and the calculation that seals it share one absolute bound.
+// Keep it separate from the execution context: cancellation stops producers,
+// while this independent budget still permits their final evidence to arrive.
+func (c *runWorkerClient) beginFinalization(ctx context.Context) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("Run finalization requires a deadline")
+	}
+	c.finalizationEnd.CompareAndSwap(nil, &deadline)
+	return c.call(ctx, "begin-finalization", nil, nil)
+}
+
+func (c *runWorkerClient) finalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if end := c.finalizationEnd.Load(); end != nil {
+		if current, ok := ctx.Deadline(); !ok || end.Before(current) {
+			return context.WithDeadline(ctx, *end)
+		}
+	}
+	return ctx, func() {}
+}
+
 func (c *runWorkerClient) syncInventory(ctx context.Context) error {
-	c.syncMu.Lock()
+	ctx, cancel := c.finalizationContext(ctx)
+	defer cancel()
+	if err := c.lockInventory(ctx); err != nil {
+		return err
+	}
 	defer c.syncMu.Unlock()
 	snapshot, err := c.readInventory(ctx)
 	if err != nil {
@@ -348,6 +388,10 @@ func (c *runWorkerClient) syncInventory(ctx context.Context) error {
 	s.mu.Unlock()
 	c.inventoryRevision = snapshot.revision
 	return nil
+}
+
+func (c *runWorkerClient) lockInventory(ctx context.Context) error {
+	return c.syncMu.LockContext(ctx)
 }
 
 func (c *runWorkerClient) update(runID string, update func(*model.Experiment)) {
@@ -546,14 +590,22 @@ func (s *Server) runScenarioWorker(parent context.Context, experiment model.Expe
 		}
 		start.Scenario = data
 	}
-	broker := &runWorkerBroker{server: s, runID: experiment.ID, executionID: experiment.ExecutionID, generation: 1}
+	broker := &runWorkerBroker{server: s, runID: experiment.ID, executionID: experiment.ExecutionID, generation: 1, finalizing: make(chan struct{}, 1)}
 	options := workerproc.Options{RunID: experiment.ID, Command: s.workerCommand}
 	process, err := workerproc.Start(lifecycle, "controller-run", start, broker.handle, options)
 	if err != nil {
-		err = errors.Join(err, broker.close())
+		broker.revoke()
 		if process != nil {
-			s.rememberUnreapedWorker(experiment.ID, process)
+			closeCtx, closeCancel := broker.finalizationContext(context.Background(), 10*time.Second)
+			err = errors.Join(err, process.CloseContext(closeCtx))
+			closeCancel()
+			select {
+			case <-process.Done():
+			default:
+				s.rememberUnreapedWorker(experiment.ID, process)
+			}
 		}
+		err = errors.Join(err, broker.closeObservationStage())
 		s.failRunWorker(experiment.ID, err)
 		return
 	}
@@ -561,30 +613,9 @@ func (s *Server) runScenarioWorker(parent context.Context, experiment model.Expe
 	s.logger.Info("experiment worker started", "run", experiment.ID, "pid", process.PID(), "epoch", process.Epoch())
 	finished := make(chan error, 1)
 	go func() { finished <- process.Call(lifecycle, "execute", nil, nil) }()
-	select {
-	case err = <-finished:
-	case <-parent.Done():
-		requestCtx, stop := context.WithTimeout(lifecycle, 5*time.Second)
-		cancelErr := process.Call(requestCtx, "cancel", nil, nil)
-		stop()
-		if cancelErr != nil {
-			err = cancelErr
-		} else {
-			budget, _ := time.ParseDuration(spec.JobShutdownTimeout)
-			if budget <= 0 {
-				budget = 3 * time.Minute
-			}
-			timer := time.NewTimer(3*budget + 10*time.Second)
-			select {
-			case err = <-finished:
-			case <-timer.C:
-				err = errors.New("experiment worker cleanup deadline exceeded")
-			}
-			timer.Stop()
-		}
-	}
-	err = errors.Join(err, broker.close())
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = waitRunWorkerExecution(parent, lifecycle, process, finished, broker, spec)
+	broker.revoke()
+	closeCtx, closeCancel := broker.finalizationContext(context.Background(), 10*time.Second)
 	closeErr := process.CloseContext(closeCtx)
 	closeCancel()
 	select {
@@ -592,7 +623,10 @@ func (s *Server) runScenarioWorker(parent context.Context, experiment model.Expe
 	default:
 		s.rememberUnreapedWorker(experiment.ID, process)
 	}
-	if err = errors.Join(err, closeErr); err != nil {
+	// Start OS/private-RPC reclamation before waiting for an observation
+	// callback's staging lock. The callback can itself be waiting for disk
+	// ownership; its remaining FD cleanup still holds this execution slot.
+	if err = errors.Join(err, closeErr, broker.closeObservationStage()); err != nil {
 		s.failRunWorker(experiment.ID, err)
 	} else {
 		broker.mu.Lock()
@@ -602,7 +636,7 @@ func (s *Server) runScenarioWorker(parent context.Context, experiment model.Expe
 			err = errors.New("worker did not confirm Peer cleanup and final delivery")
 			s.failRunWorker(experiment.ID, err)
 		} else {
-			resetCtx, stop := context.WithTimeout(lifecycle, 30*time.Second)
+			resetCtx, stop := broker.finalizationContext(lifecycle, 30*time.Second)
 			broker.mu.Lock()
 			final := broker.final
 			broker.mu.Unlock()
@@ -626,12 +660,75 @@ func (s *Server) runScenarioWorker(parent context.Context, experiment model.Expe
 	s.logger.Info("experiment worker exited", "run", experiment.ID, "pid", process.PID(), "error", err)
 }
 
+func waitRunWorkerExecution(parent, lifecycle context.Context, process *workerproc.Process, finished <-chan error, broker *runWorkerBroker, spec scenario.Scenario) error {
+	parentDone := parent.Done()
+	var cleanupTimer, finalizationTimer *time.Timer
+	var cleanupDone, finalizationDone <-chan time.Time
+	defer func() {
+		if cleanupTimer != nil {
+			cleanupTimer.Stop()
+		}
+		if finalizationTimer != nil {
+			finalizationTimer.Stop()
+		}
+	}()
+	finishedOr := func(cause error) error {
+		// Completion can become ready at the same instant as a deadline. Do
+		// not turn an already completed worker into a synthetic timeout.
+		select {
+		case err := <-finished:
+			return err
+		default:
+			return cause
+		}
+	}
+	for {
+		select {
+		case err := <-finished:
+			return err
+		case <-broker.finalizing:
+			broker.mu.Lock()
+			end := broker.finalizationEnd
+			broker.mu.Unlock()
+			if finalizationTimer == nil {
+				finalizationTimer = time.NewTimer(time.Until(end))
+			} else {
+				finalizationTimer.Reset(time.Until(end))
+			}
+			finalizationDone = finalizationTimer.C
+		case <-finalizationDone:
+			return finishedOr(fmt.Errorf("experiment worker finalization: %w", context.DeadlineExceeded))
+		case <-cleanupDone:
+			return finishedOr(fmt.Errorf("experiment worker cleanup deadline exceeded: %w", context.DeadlineExceeded))
+		case <-parentDone:
+			parentDone = nil
+			requestCtx, stop := broker.finalizationContext(lifecycle, 5*time.Second)
+			cancelErr := process.Call(requestCtx, "cancel", nil, nil)
+			stop()
+			if cancelErr != nil {
+				return finishedOr(cancelErr)
+			}
+			budget, _ := time.ParseDuration(spec.JobShutdownTimeout)
+			if budget <= 0 {
+				budget = 3 * time.Minute
+			}
+			cleanupTimer = time.NewTimer(3*budget + 10*time.Second)
+			cleanupDone = cleanupTimer.C
+		}
+	}
+}
+
 func (s *Server) failRunWorker(id string, cause error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
 	stopErr := s.stopRunGeneration(ctx, id, ^uint64(0))
 	refreshErr := s.refreshAgentState(ctx, id)
-	drainErr := s.drainRunTelemetry(ctx, id)
+	cancel()
+	// Keep final delivery available even when Docker removal or its status
+	// refresh used the whole cleanup bound. Failure still preserves the
+	// original scientific error and the next-Run cleanup barrier.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	drainErr := s.drainRunTelemetry(drainCtx, id)
+	drainCancel()
 	cleanupErr := errors.Join(stopErr, refreshErr)
 	if hasPendingRunWorker(drainErr) {
 		cleanupErr = errors.Join(cleanupErr, drainErr)
@@ -669,15 +766,50 @@ type runWorkerBroker struct {
 	createFenced       bool
 	observationMu      sync.Mutex
 	observationStage   *workerObservationStage
+	finalizing         chan struct{}
+	finalizationEnd    time.Time
+}
+
+func (b *runWorkerBroker) finalizationContext(ctx context.Context, maximum time.Duration) (context.Context, context.CancelFunc) {
+	end := time.Now().Add(maximum)
+	b.mu.Lock()
+	if !b.finalizationEnd.IsZero() && b.finalizationEnd.Before(end) {
+		end = b.finalizationEnd
+	}
+	b.mu.Unlock()
+	return context.WithDeadline(ctx, end)
 }
 
 func (b *runWorkerBroker) close() error {
+	b.revoke()
+	return b.closeObservationStage()
+}
+
+// Revoke mutation authority using only borrowed in-memory leases. Observation
+// handles are closed separately after process reclamation has been started.
+func (b *runWorkerBroker) revoke() {
+	var changed bool
+	if b.server != nil {
+		b.server.state.mu.Lock()
+	}
 	b.mu.Lock()
 	b.closed = true
+	if b.server != nil {
+		changed = b.retireCreateReservationsLocked(^uint64(0))
+	}
 	b.createLeases = nil
-	b.clearInventoryLeaseLocked()
+	lease := b.inventoryLease
+	b.inventoryLease = nil
 	b.mu.Unlock()
-	return b.closeObservationStage()
+	if b.server != nil {
+		b.server.state.mu.Unlock()
+	}
+	if lease != nil {
+		lease.timer.Stop()
+	}
+	if changed {
+		b.server.state.notify()
+	}
 }
 func (b *runWorkerBroker) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	b.mu.Lock()
@@ -725,6 +857,23 @@ func (b *runWorkerBroker) inventorySince(since uint64) (workerInventoryUpdate, e
 func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	s := b.server
 	switch method {
+	case "begin-finalization":
+		end, ok := ctx.Deadline()
+		if !ok {
+			return nil, errors.New("Run finalization requires a deadline")
+		}
+		b.mu.Lock()
+		if b.finalizationEnd.IsZero() || end.Before(b.finalizationEnd) {
+			b.finalizationEnd = end
+			if b.finalizing != nil {
+				select {
+				case b.finalizing <- struct{}{}:
+				default:
+				}
+			}
+		}
+		b.mu.Unlock()
+		return nil, nil
 	case "inventory":
 		var request workerInventoryRequest
 		if len(raw) > 0 && string(raw) != "null" {
@@ -745,20 +894,40 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 			return nil, err
 		}
 		var rng *rand.Rand
-		source := &workerPlacementSource{ctx: ctx, process: b.process, nodeID: r.NodeID}
+		drawCtx, cancelDraw := context.WithCancel(ctx)
+		defer cancelDraw()
+		source := &workerPlacementSource{ctx: drawCtx, cancel: cancelDraw, process: b.process, nodeID: r.NodeID}
 		if r.Random {
 			rng = rand.New(source)
 		}
-		agent, err := s.acquireAgentWithPlacement(ctx, r.NodeID, r.AgentID, rng)
-		if source.err != nil {
-			s.releaseReservation(r.NodeID)
-			return nil, errors.Join(err, source.err)
-		}
-		if err == nil {
-			if err = b.bindCreateReservation(r.NodeID, agent); err != nil {
-				s.releaseReservation(r.NodeID)
-				return nil, err
+		var reservationErr error
+		guard := func() error {
+			// The caller holds state.mu, matching authorizeCreateAgent's
+			// state -> broker lock order. A concurrent same-Node request can
+			// cross HTTP admission while this request waits for its RNG.
+			reservationErr = b.checkCreateReservation(r.NodeID)
+			if reservationErr != nil {
+				cancelDraw()
 			}
+			return reservationErr
+		}
+		agent, err := s.acquireAgentWithPlacementBound(drawCtx, r.NodeID, r.AgentID, rng, func(agent model.Agent) error {
+			return b.bindCreateReservation(r.NodeID, agent)
+		}, guard)
+		if reservationErr != nil {
+			if ctx.Err() != nil {
+				return nil, errors.Join(reservationErr, ctx.Err())
+			}
+			return nil, reservationErr
+		}
+		if source.err != nil {
+			// A failed draw cancels this acquisition before it can commit.
+			// Another request may already own this Node's reservation, so an
+			// unconditional release here could free its uncertain admission.
+			if ctx.Err() != nil {
+				return nil, errors.Join(source.err, ctx.Err())
+			}
+			return nil, source.err
 		}
 		return agent, err
 	case "release":
@@ -780,7 +949,13 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if r.Request.RunID != b.runID {
 			return nil, errors.New("foreign uncertain creation")
 		}
-		s.retainUncertainCreate(r.Request, r.AgentID)
+		s.state.mu.Lock()
+		b.mu.Lock()
+		if lease := b.createLeases[r.Request.ID]; !b.closed && lease != nil && lease.generation == r.Request.Generation && lease.agentID == r.AgentID && (lease.attempted || lease.possibleAdmission || lease.inFlight > 0) {
+			b.retainCreateDebtLocked(r.Request.ID, lease)
+		}
+		b.mu.Unlock()
+		s.state.mu.Unlock()
 		return nil, nil
 	case "defer-admission":
 		var r workerAdmission
@@ -811,7 +986,7 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if !ok || current.URL != agent.URL || !current.StartedAt.Equal(agent.StartedAt) || !current.RunProcesses {
 			return nil, errors.New("Agent does not support the current Run worker lease")
 		}
-		return nil, s.rememberRunAgent(b.runID, current)
+		return nil, s.rememberRunAgentContext(ctx, b.runID, current)
 	case "created":
 		var r workerCreated
 		if err := json.Unmarshal(raw, &r); err != nil {
@@ -873,13 +1048,28 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if r.RunID != b.runID {
 			return nil, errors.New("foreign generation fence")
 		}
+		// Close old authorization and preserve possible-admission debt before
+		// the Agent fence. No later old request can cross this snapshot.
+		s.state.mu.Lock()
+		b.mu.Lock()
+		b.generation = max(b.generation, r.Generation+1)
+		b.fenced = false
+		b.createFenced = b.createFenced || r.Generation == ^uint64(0)
+		changed := b.retireCreateReservationsLocked(r.Generation)
+		b.mu.Unlock()
+		s.state.mu.Unlock()
+		if changed {
+			s.state.notify()
+		}
 		err := s.stopRunGeneration(ctx, b.runID, r.Generation)
 		if err == nil {
 			b.mu.Lock()
-			b.generation = max(b.generation, r.Generation+1)
 			b.fenced = true
-			b.createFenced = b.createFenced || r.Generation == ^uint64(0)
-			b.createLeases = nil
+			for _, lease := range b.createLeases {
+				if lease.generation > r.Generation {
+					b.fenced = false
+				}
+			}
 			b.mu.Unlock()
 		}
 		return nil, err
@@ -906,11 +1096,13 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 				return nil, errors.New("foreign worker event")
 			}
 		}
-		return nil, s.state.appendRunEvents(b.runID, events)
+		return nil, s.state.appendRunEventsContext(ctx, b.runID, events)
 	case "observation.begin", "observation.chunk", "observation.commit", "observation.abort":
 		return b.observationOperation(ctx, method, raw)
 	case "journal":
-		s.state.persistMu.Lock()
+		if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+			return nil, err
+		}
 		defer s.state.persistMu.Unlock()
 		if err := s.state.recoverPendingJournalLocked(b.runID); err != nil {
 			return nil, err
@@ -935,7 +1127,7 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		if summary.RunID != b.runID || summary.Metrics.RunID != b.runID {
 			return nil, errors.New("foreign worker summary")
 		}
-		return nil, s.publishWorkerSummary(summary)
+		return nil, s.publishWorkerSummaryContext(ctx, summary)
 	case "agent":
 		var call workerAgentCall
 		if err := json.Unmarshal(raw, &call); err != nil {
@@ -944,6 +1136,93 @@ func (b *runWorkerBroker) dispatch(ctx context.Context, method string, raw json.
 		return b.dispatchAgent(ctx, call)
 	default:
 		return nil, errors.New("unknown Run broker method")
+	}
+}
+
+// Callers own state.mu then b.mu and have already revoked this generation's
+// authorization. A lost reserve reply can leave a slot whose HTTP create was
+// never attempted. Retire that capability before releasing only its own slot;
+// possible admissions retain their independent state cleanup obligations.
+func (b *runWorkerBroker) retireCreateReservationsLocked(generation uint64) bool {
+	s := b.server.state
+	changed := false
+	for id, lease := range b.createLeases {
+		if lease.generation > generation {
+			continue
+		}
+		if lease.attempted || lease.possibleAdmission || lease.inFlight > 0 {
+			b.retainCreateDebtLocked(id, lease)
+			delete(b.createLeases, id)
+			continue
+		}
+		delete(b.createLeases, id)
+		if _, uncertain := s.uncertainCreates[id]; uncertain {
+			continue
+		}
+		if !strings.HasPrefix(id, b.runID+"-") || s.reservations[id] != lease.agentID {
+			continue
+		}
+		owner, exists := s.agents[lease.agentID]
+		if !exists || owner.URL != lease.baseURL || !owner.StartedAt.Equal(lease.startedAt) {
+			continue
+		}
+		if node, known := s.nodes[id]; known && (node.RunID != b.runID || node.AgentID != lease.agentID || !confirmedHistoricalNode(node)) {
+			continue
+		}
+		delete(s.reservations, id)
+		owner.ActiveNodes = max(0, owner.ActiveNodes-1)
+		s.agents[owner.ID] = owner
+		changed = true
+	}
+	return changed
+}
+
+// Callers own state.mu then b.mu. The bound capability is the original HTTP
+// target identity; a later registration must not rewrite that cleanup debt.
+func (b *runWorkerBroker) retainCreateDebtLocked(id string, lease *workerCreateLease) {
+	s := b.server.state
+	if !strings.HasPrefix(id, b.runID+"-") || s.reservations[id] != lease.agentID {
+		return
+	}
+	if _, exists := s.uncertainCreates[id]; exists {
+		return
+	}
+	if s.uncertainCreates == nil {
+		s.uncertainCreates = make(map[string]uncertainCreate)
+	}
+	s.uncertainCreates[id] = uncertainCreate{runID: b.runID, generation: lease.generation, agentID: lease.agentID, owner: lease.agentIdentity}
+}
+
+// A lease can change between reservation and binding. Roll back only when no
+// concurrent request can already own a possible admission for the same Node.
+func (b *runWorkerBroker) releaseUnattemptedReservation(id string) {
+	s := b.server.state
+	s.mu.Lock()
+	b.mu.Lock()
+	changed := false
+	defer func() {
+		b.mu.Unlock()
+		s.mu.Unlock()
+		if changed {
+			s.notify()
+		}
+	}()
+	if b.closed || b.drained || b.createFenced {
+		return
+	}
+	if lease := b.createLeases[id]; lease != nil && lease.attempted {
+		return
+	}
+	if _, uncertain := s.uncertainCreates[id]; uncertain {
+		return
+	}
+	if owner, exists := s.reservations[id]; exists {
+		delete(s.reservations, id)
+		if agent, exists := s.agents[owner]; exists {
+			agent.ActiveNodes = max(0, agent.ActiveNodes-1)
+			s.agents[owner] = agent
+		}
+		changed = true
 	}
 }
 
@@ -1020,6 +1299,7 @@ func mergeWorkerExperiment(current *model.Experiment, incoming model.Experiment)
 // draws and retries, while only the parent can reserve Agent capacity.
 type workerPlacementSource struct {
 	ctx     context.Context
+	cancel  context.CancelFunc
 	process *workerproc.Process
 	nodeID  string
 	err     error
@@ -1032,10 +1312,16 @@ func (s *workerPlacementSource) Int63() int64 {
 	}
 	if s.process == nil {
 		s.err = errors.New("placement worker is unavailable")
+		if s.cancel != nil {
+			s.cancel()
+		}
 		return 0
 	}
 	var value int64
 	s.err = s.process.Call(s.ctx, "placement-draw", s.nodeID, &value)
+	if s.err != nil && s.cancel != nil {
+		s.cancel()
+	}
 	return value
 }
 func nonemptyStrings(values ...string) []string {

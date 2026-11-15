@@ -1,10 +1,13 @@
 package controller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 )
 
 func sourceRevisionOf(files []resultFile) string {
@@ -79,7 +82,13 @@ func sourceFingerprintAt(root *os.Root, manifest runArchiveManifestData) (string
 	return sourceRevisionOf(files), nil
 }
 func (s *Server) runSourceRevision(id string) (string, error) {
-	s.state.persistMu.Lock()
+	return s.runSourceRevisionContext(context.Background(), id)
+}
+
+func (s *Server) runSourceRevisionContext(ctx context.Context, id string) (string, error) {
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return "", err
+	}
 	defer s.state.persistMu.Unlock()
 	root, err := s.analysisDirectory(id)
 	if err != nil {

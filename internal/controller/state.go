@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -45,7 +46,7 @@ type state struct {
 	archivePending          map[string]bool
 	archiveDirtyNotified    map[string]bool
 	mu                      sync.RWMutex
-	persistMu               sync.Mutex
+	persistMu               contextlock.Mutex
 	agentSettingsMu         sync.Mutex
 	agentCapacityOverrides  map[string]int
 	agentCapacityRevisions  map[string]string
@@ -487,6 +488,13 @@ func (s *state) markStaleAgents(maxAge time.Duration) {
 }
 
 func (s *state) appendEvents(batch model.EventBatch) error {
+	return s.appendEventsContext(context.Background(), batch)
+}
+
+func (s *state) appendEventsContext(ctx context.Context, batch model.EventBatch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(batch.Events) == 0 {
 		return nil
 	}
@@ -505,7 +513,7 @@ func (s *state) appendEvents(batch model.EventBatch) error {
 		byRun[event.RunID] = append(byRun[event.RunID], event)
 	}
 	for runID, events := range byRun {
-		if err := s.appendRunEvents(runID, events); err != nil {
+		if err := s.appendRunEventsContext(ctx, runID, events); err != nil {
 			return err
 		}
 	}
@@ -514,11 +522,18 @@ func (s *state) appendEvents(batch model.EventBatch) error {
 }
 
 func (s *state) appendRunEvents(runID string, events []model.TraceEvent) (resultErr error) {
+	return s.appendRunEventsContext(context.Background(), runID, events)
+}
+
+func (s *state) appendRunEventsContext(ctx context.Context, runID string, events []model.TraceEvent) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.worker != nil {
-		return s.worker.call(context.Background(), "append", events, nil)
+		return s.worker.call(ctx, "append", events, nil)
 	}
 	if s.journalOnly {
-		return s.appendJournalEvents(runID, events)
+		return s.appendJournalEventsContext(ctx, runID, events)
 	}
 	defer func() {
 		if resultErr != nil {

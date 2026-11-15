@@ -569,7 +569,7 @@ func (s *Server) handleEventBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	}
-	if err := s.state.appendEvents(batch); err != nil {
+	if err := s.state.appendEventsContext(r.Context(), batch); err != nil {
 		if errors.Is(err, errJournalIndexRequired) {
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, err.Error())

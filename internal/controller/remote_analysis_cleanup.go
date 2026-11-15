@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -117,7 +118,9 @@ func (s *Server) trackAnalysisWorker(ctx context.Context, endpoint string, agent
 	if !validIdentity || labelHost != "" && labelHost != record.HostID {
 		return errors.New("cannot record analysis ownership without a verified Agent and host identity")
 	}
-	s.analysisWorkerCleanupMu.Lock()
+	if err := contextlock.Lock(ctx, &s.analysisWorkerCleanupMu); err != nil {
+		return err
+	}
 	defer s.analysisWorkerCleanupMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
@@ -142,7 +145,13 @@ func (s *Server) trackAnalysisWorker(ctx context.Context, endpoint string, agent
 // Called after a terminal worker response, an idle proof or a failure before
 // start. The scheduler cannot reuse an endpoint while its cleanup is unverified.
 func (s *Server) clearAnalysisWorker(endpoint string) error {
-	s.analysisWorkerCleanupMu.Lock()
+	return s.clearAnalysisWorkerContext(context.Background(), endpoint)
+}
+
+func (s *Server) clearAnalysisWorkerContext(ctx context.Context, endpoint string) error {
+	if err := contextlock.Lock(ctx, &s.analysisWorkerCleanupMu); err != nil {
+		return err
+	}
 	defer s.analysisWorkerCleanupMu.Unlock()
 	root, err := os.OpenRoot(s.config.DataDir)
 	if err != nil {
@@ -153,12 +162,15 @@ func (s *Server) clearAnalysisWorker(endpoint string) error {
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	index := slices.IndexFunc(records, func(record analysisWorkerCleanupRecord) bool { return record.Endpoint == endpoint })
 	if index < 0 {
 		return nil
 	}
 	if len(records) > 1 {
-		return writeAnalysisWorkerCleanup(context.Background(), root, slices.Delete(records, index, index+1))
+		return writeAnalysisWorkerCleanup(ctx, root, slices.Delete(records, index, index+1))
 	}
 	if err := root.Remove(analysisWorkerCleanupFile); err != nil {
 		return err
@@ -167,7 +179,13 @@ func (s *Server) clearAnalysisWorker(endpoint string) error {
 }
 
 func (s *Server) pendingAnalysisWorkerCleanupRecords() ([]analysisWorkerCleanupRecord, error) {
-	s.analysisWorkerCleanupMu.Lock()
+	return s.pendingAnalysisWorkerCleanupRecordsContext(context.Background())
+}
+
+func (s *Server) pendingAnalysisWorkerCleanupRecordsContext(ctx context.Context) ([]analysisWorkerCleanupRecord, error) {
+	if err := contextlock.Lock(ctx, &s.analysisWorkerCleanupMu); err != nil {
+		return nil, err
+	}
 	defer s.analysisWorkerCleanupMu.Unlock()
 	root, err := os.OpenRoot(s.config.DataDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -220,7 +238,7 @@ func (s *Server) analysisWorkerCleanupTarget(record analysisWorkerCleanupRecord)
 // next experiment. At this boundary no tracked endpoint can receive a new job.
 // Old service ownership is cleared only with deployment retirement evidence.
 func (s *Server) waitAnalysisWorkerCleanup(ctx context.Context, slot *workSlot) error {
-	records, err := s.pendingAnalysisWorkerCleanupRecords()
+	records, err := s.pendingAnalysisWorkerCleanupRecordsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("read analysis worker cleanup: %w", err)
 	}
@@ -236,7 +254,7 @@ func (s *Server) waitAnalysisWorkerCleanup(ctx context.Context, slot *workSlot) 
 				_, _, err := s.analysisWorkerCleanupTarget(record)
 				return err
 			}
-			if err := s.clearAnalysisWorker(record.Endpoint); err != nil {
+			if err := s.clearAnalysisWorkerContext(ctx, record.Endpoint); err != nil {
 				return fmt.Errorf("clear retired analysis service cleanup: %w", err)
 			}
 			continue
@@ -264,7 +282,7 @@ func (s *Server) waitAnalysisWorkerCleanup(ctx context.Context, slot *workSlot) 
 				return err
 			}
 		}
-		if err := s.clearAnalysisWorker(record.Endpoint); err != nil {
+		if err := s.clearAnalysisWorkerContext(ctx, record.Endpoint); err != nil {
 			return fmt.Errorf("clear verified analysis worker cleanup: %w", err)
 		}
 	}

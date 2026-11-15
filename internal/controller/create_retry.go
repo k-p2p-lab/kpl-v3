@@ -91,6 +91,38 @@ type uncertainCreate struct {
 	runID      string
 	generation uint64
 	agentID    string
+	owner      createAgentIdentity
+}
+
+// Keep only the original target's cleanup identity, never its resource or
+// host-detail payload. An empty legacy identity retains its existing policy.
+type createAgentIdentity struct {
+	url, hostname, swarmNodeID string
+	startedAt                  time.Time
+	runProcesses, runDrain     bool
+}
+
+func createAgentIdentityOf(agent model.Agent) createAgentIdentity {
+	return createAgentIdentity{url: agent.URL, hostname: agent.Hostname, swarmNodeID: agent.Labels["swarmNodeId"], startedAt: agent.StartedAt, runProcesses: agent.RunProcesses, runDrain: agent.RunDrain}
+}
+
+func (owner createAgentIdentity) acceptsCleanup(proof, current model.Agent) bool {
+	if owner.startedAt.IsZero() {
+		return true
+	}
+	if current.ID != proof.ID || current.URL != proof.URL || !current.StartedAt.Equal(proof.StartedAt) ||
+		owner.runProcesses && (!proof.RunProcesses || !current.RunProcesses || !proof.RunDrain || !current.RunDrain) ||
+		owner.runDrain && (!proof.RunDrain || !current.RunDrain) {
+		return false
+	}
+	if proof.StartedAt.Equal(owner.startedAt) {
+		return true
+	}
+	recorded := model.Agent{ID: proof.ID, URL: owner.url, StartedAt: owner.startedAt, Hostname: owner.hostname}
+	if owner.swarmNodeID != "" {
+		recorded.Labels = map[string]string{"swarmNodeId": owner.swarmNodeID}
+	}
+	return proof.StartupReconciled && current.StartupReconciled && proof.StartedAt.After(owner.startedAt) && sameRunWorkerAgentHost(proof, recorded)
 }
 
 // An interrupted POST may still create a Peer. Keep its slot until the Agent
@@ -108,17 +140,20 @@ func (s *Server) retainUncertainCreate(request model.CreateNodeRequest, agentID 
 	if s.state.uncertainCreates == nil {
 		s.state.uncertainCreates = make(map[string]uncertainCreate)
 	}
-	s.state.uncertainCreates[request.ID] = uncertainCreate{request.RunID, request.Generation, agentID}
+	if _, recorded := s.state.uncertainCreates[request.ID]; !recorded {
+		s.state.uncertainCreates[request.ID] = uncertainCreate{runID: request.RunID, generation: request.Generation, agentID: agentID}
+	}
 }
 
-func (s *Server) releaseUncertainCreates(runID string, generation uint64, cleaned map[string]struct{}) {
+func (s *Server) releaseUncertainCreates(runID string, generation uint64, cleaned map[string]model.Agent) {
 	s.state.mu.Lock()
 	changed := false
 	for id, pending := range s.state.uncertainCreates {
 		if pending.runID != runID || pending.generation > generation {
 			continue
 		}
-		if _, ok := cleaned[pending.agentID]; !ok {
+		proof, ok := cleaned[pending.agentID]
+		if !ok || !pending.owner.acceptsCleanup(proof, s.state.agents[pending.agentID]) {
 			continue
 		}
 		if s.state.reservations[id] == pending.agentID {

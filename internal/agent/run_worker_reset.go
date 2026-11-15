@@ -85,12 +85,24 @@ func (s *Server) runWorkerAdmissionReady(id string) error {
 }
 
 func (s *Server) countPeerIntents(id string) (int, error) {
+	// An unlinked intent can still owe a directory sync. Capture those owned
+	// paths before disk I/O and deduplicate any file that reappeared. A crossed
+	// successful retry can produce one conservative pending answer, never a
+	// false zero while the captured durability obligation remains unresolved.
+	s.mu.RLock()
+	pendingSync := make(map[string]struct{})
+	for _, proc := range s.processes {
+		if proc.intentSyncPending && (id == "" || proc.node.RunID == id) {
+			pendingSync[proc.intentPath] = struct{}{}
+		}
+	}
+	s.mu.RUnlock()
 	dir, err := os.Open(filepath.Join(s.config.DataDir, "runtime-peer-intents"))
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return len(pendingSync), nil
 	}
 	if err != nil {
-		return 0, err
+		return len(pendingSync), err
 	}
 	defer dir.Close()
 	count := 0
@@ -100,19 +112,21 @@ func (s *Server) countPeerIntents(id string) (int, error) {
 			if filepath.Ext(entry.Name()) != ".json" {
 				continue
 			}
-			intent, err := s.readPeerIntent(filepath.Join(dir.Name(), entry.Name()))
+			path := filepath.Join(dir.Name(), entry.Name())
+			intent, err := s.readPeerIntent(path)
 			if err != nil {
-				return count, err
+				return count + len(pendingSync), err
 			}
 			if id == "" || intent.RunID == id {
 				count++
+				delete(pendingSync, path)
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			return count, nil
+			return count + len(pendingSync), nil
 		}
 		if readErr != nil {
-			return count, readErr
+			return count + len(pendingSync), readErr
 		}
 	}
 }
@@ -179,7 +193,7 @@ func (s *Server) prepareRunReset(ctx context.Context, id string) error {
 		if err := ctx.Err(); err != nil {
 			return &runWorkerPendingError{err}
 		}
-		if err := s.reclaimHistory(); err != nil {
+		if err := s.reclaimHistoryContext(ctx); err != nil {
 			return &runWorkerPendingError{err}
 		}
 		s.mu.RLock()

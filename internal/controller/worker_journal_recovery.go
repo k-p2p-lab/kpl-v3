@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
@@ -106,10 +107,14 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.journalBuildMu.Lock()
+	if err := contextlock.Lock(ctx, &s.journalBuildMu); err != nil {
+		return err
+	}
 	defer s.journalBuildMu.Unlock()
 	path := filepath.Join(s.config.DataDir, currentRunsDirectory, id)
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		s.state.persistMu.Unlock()
 		return err
@@ -153,12 +158,19 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	defer snapshot.close()
+	snapshotOwned := true
+	defer func() {
+		if snapshotOwned {
+			snapshot.close()
+		}
+	}()
 	source := s.workerSnapshotSource([]*resultSnapshot{snapshot})
 	stage := []byte("rebuild-" + rand.Text())
 	// A staging bucket is never used for admission until the captured source
 	// revision is revalidated and the worker has been completely reaped.
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		s.state.persistMu.Unlock()
 		return errors.Join(err, errResultNotFound)
@@ -200,10 +212,17 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	}
 	committed := false
 	defer func() {
-		if committed {
+		if committed || !snapshotOwned {
 			return
 		}
-		s.state.persistMu.Lock()
+		// A canceled attempt can leave its inactive bucket just as a lost
+		// Controller does. Do not wait behind unrelated storage to reclaim it:
+		// the next reconstruction removes abandoned, never-active buckets.
+		if !s.state.persistMu.TryLock() {
+			if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+				return
+			}
+		}
 		defer s.state.persistMu.Unlock()
 		if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 			return
@@ -231,7 +250,9 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 				return nil, errors.New("invalid telemetry identity key")
 			}
 		}
-		s.state.persistMu.Lock()
+		if err := contextlock.Lock(callCtx, &s.state.persistMu); err != nil {
+			return nil, err
+		}
 		defer s.state.persistMu.Unlock()
 		if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 			return nil, errors.Join(err, errResultNotFound)
@@ -261,7 +282,12 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	process, err := workerproc.Start(ctx, "controller-journal", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot)}, broker, workerproc.Options{Command: s.workerCommand})
 	if err != nil {
 		if process != nil {
-			s.rememberUnreapedWorker(id, process)
+			select {
+			case <-process.Done():
+			default:
+				s.rememberUnreapedWorkerSnapshot(id, process, snapshot)
+				snapshotOwned = false
+			}
 		}
 		return err
 	}
@@ -270,12 +296,23 @@ func (s *Server) rebuildJournalIndex(ctx context.Context, id string) error {
 	closeErr := process.CloseContext(stopCtx)
 	cancel()
 	if closeErr != nil {
-		s.rememberUnreapedWorker(id, process)
+		select {
+		case <-process.Done():
+		default:
+			// An entered callback can still own a source read or a journal
+			// transaction. Its existing cleanup owner retains the snapshot's
+			// descriptors and deletion lease until Process.Done proves both
+			// OS reaping and parent-RPC quiescence.
+			s.rememberUnreapedWorkerSnapshot(id, process, snapshot)
+			snapshotOwned = false
+		}
 	}
 	if err := errors.Join(executeErr, closeErr); err != nil {
 		return err
 	}
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		return err

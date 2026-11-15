@@ -31,6 +31,7 @@ func archiveTransferDelay(bytes int, miBPerSecond uint64, elapsed time.Duration)
 // There is exactly one background NAS worker. A blocked mount consumes this
 // worker, not a new goroutine per tick or any Controller control/persistence lock.
 func (s *Server) runArchiveLoop(ctx context.Context) {
+	defer s.logger.Debug("result archive worker stopped")
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {

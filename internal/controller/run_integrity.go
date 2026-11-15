@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
@@ -24,14 +26,26 @@ const ownershipDirectory = "run-ownership"
 // Persist ownership before sending a create, including requests whose response
 // is lost. Metadata survives Controller restart and deletion of an old attempt.
 func (s *Server) rememberRunAgent(id string, agent model.Agent) error {
+	return s.rememberRunAgentContext(context.Background(), id, agent)
+}
+
+func (s *Server) rememberRunAgentContext(ctx context.Context, id string, agent model.Agent) error {
 	if s.worker != nil {
-		return s.worker.call(context.Background(), "remember", agent, nil)
+		return s.worker.call(ctx, "remember", agent, nil)
 	}
-	return s.rememberRunAgentWithPersistence(id, agent, s.persistExperiment)
+	return s.rememberRunAgentWithPersistenceContext(ctx, id, agent, s.persistExperiment)
 }
 
 func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, persist func(model.Experiment) error) error {
-	s.state.persistMu.Lock()
+	return s.rememberRunAgentWithPersistenceContext(context.Background(), id, agent, persist)
+}
+
+func (s *Server) rememberRunAgentWithPersistenceContext(ctx context.Context, id string, agent model.Agent, persist func(model.Experiment) error) error {
+	// A canceled request has not acquired ownership or started a durable write.
+	// Once acquired, finish both ownership records even if the caller leaves.
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	s.state.mu.RLock()
 	run, ok := s.state.experiments[id]
@@ -45,6 +59,111 @@ func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, p
 		}
 	}
 	run.Agents = append(append([]model.Agent(nil), run.Agents...), agent)
+	owned, err := s.readRunCleanupOwnership(id)
+	if err != nil {
+		return err
+	}
+	owned = mergeRunCleanupOwnership(owned, run.Agents)
+	if err := s.writeRunCleanupOwnership(id, owned); err != nil {
+		return err
+	}
+	if err := persist(run); err != nil {
+		return err
+	}
+	s.state.mu.Lock()
+	// Stop requests and storage failures can update live state without
+	// persistMu during the writes above. Commit only the placement field;
+	// replacing the earlier Run copy would erase their cancellation/evidence.
+	current := s.state.experiments[id]
+	current.Agents = run.Agents
+	s.state.experiments[id] = current
+	s.state.mu.Unlock()
+	return nil
+}
+
+// Network preparation also acquires Run state on Agents that receive no Peers.
+// Record those cleanup owners without adding them to the placement environment
+// in Experiment.Agents. Both the owners and the recovery marker precede RPCs.
+func (s *Server) rememberRunNetworkAgents(ctx context.Context, id string, agents []model.Agent) error {
+	if !validResultID(id) {
+		return errors.New("invalid network cleanup identity")
+	}
+	if err := s.lockWorkPersistence(ctx); err != nil {
+		return err
+	}
+	defer s.cancelMu.Unlock()
+	defer s.state.persistMu.Unlock()
+	fenced, err := s.state.resultWriteFencedLocked(id)
+	if err != nil {
+		return err
+	}
+	if fenced {
+		return errors.New("network cleanup identity is no longer writable")
+	}
+	retired, err := s.isRuntimeRetired(id)
+	if err != nil {
+		return err
+	}
+	if retired {
+		return errors.New("network cleanup identity has already been retired")
+	}
+	owned, err := s.readRunCleanupOwnership(id)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.writeRunCleanupOwnership(id, mergeRunCleanupOwnership(owned, agents)); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.writePendingWorkCleanup(id)
+}
+
+func mergeRunCleanupOwnership(owned, agents []model.Agent) []model.Agent {
+	for _, agent := range agents {
+		found := false
+		for _, old := range owned {
+			if old.ID == agent.ID && old.URL == agent.URL && old.StartedAt.Equal(agent.StartedAt) &&
+				(!agent.RunDrain || old.RunDrain) && (!agent.RunProcesses || old.RunProcesses) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			owned = append(owned, agent)
+		}
+	}
+	return owned
+}
+
+func (s *Server) readRunCleanupOwnership(id string) ([]model.Agent, error) {
+	file, err := os.Open(filepath.Join(s.config.DataDir, ownershipDirectory, id+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, resultMetadataLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > resultMetadataLimit {
+		return nil, errors.New("run ownership too large")
+	}
+	var owned []model.Agent
+	if err := json.Unmarshal(data, &owned); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
+func (s *Server) writeRunCleanupOwnership(id string, agents []model.Agent) error {
 	if err := os.MkdirAll(filepath.Join(s.config.DataDir, ownershipDirectory), 0700); err != nil {
 		return err
 	}
@@ -53,7 +172,7 @@ func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, p
 		return err
 	}
 	defer root.Close()
-	if err = writeAnalysisJSON(root, id+".json", run.Agents); err != nil {
+	if err = writeAnalysisJSON(root, id+".json", agents); err != nil {
 		return err
 	}
 	if err = syncRunDirectory(root); err != nil {
@@ -68,17 +187,6 @@ func (s *Server) rememberRunAgentWithPersistence(id string, agent model.Agent, p
 	if err != nil {
 		return err
 	}
-	if err = persist(run); err != nil {
-		return err
-	}
-	s.state.mu.Lock()
-	// Stop requests and storage failures can update live state without
-	// persistMu during the writes above. Commit only the ownership field;
-	// replacing the earlier Run copy would erase their cancellation/evidence.
-	current := s.state.experiments[id]
-	current.Agents = run.Agents
-	s.state.experiments[id] = current
-	s.state.mu.Unlock()
 	return nil
 }
 func (s *Server) cleanupParticipants(id string) ([]model.Agent, error) {
@@ -86,16 +194,8 @@ func (s *Server) cleanupParticipants(id string) ([]model.Agent, error) {
 }
 
 func (s *Server) cleanupParticipantsChecked(id string, requireRecordedDrain bool) ([]model.Agent, error) {
-	var owned []model.Agent
-	data, err := os.ReadFile(filepath.Join(s.config.DataDir, ownershipDirectory, id+".json"))
-	if err == nil {
-		if len(data) > resultMetadataLimit {
-			return nil, errors.New("run ownership too large")
-		}
-		if err = json.Unmarshal(data, &owned); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	owned, err := s.readRunCleanupOwnership(id)
+	if err != nil {
 		return nil, err
 	}
 	s.state.mu.RLock()

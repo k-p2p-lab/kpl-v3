@@ -62,6 +62,7 @@ type Server struct {
 	workerCommand              func(string) *exec.Cmd
 	workerMu                   sync.Mutex
 	unreapedWorkers            map[string][]*workerproc.Process
+	workerSnapshots            map[*workerproc.Process]*workerSnapshotHold // workerMu; retained through private RPC quiescence
 	summaryRefreshActive       bool
 	attackTargets              attackTargetCache
 	libraryDownloadsMu         sync.Mutex
@@ -107,6 +108,7 @@ type Server struct {
 	queueCleanup               []string           // run IDs whose cleanup must precede new work
 	summaryRefreshIdleCancel   context.CancelFunc // cancelMu; only background metric maintenance yields to new work
 	resultDownloads            map[string]int
+	resultDownloadMu           sync.Mutex // counts only; never held during persistence or file I/O
 	resultReadPins             map[string]int
 	archiveReadSlots           chan struct{}
 	archiveStatusMu            sync.RWMutex
@@ -393,6 +395,23 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 	}
 
 	var cleanupErr, dataErr error
+	var finalizationCtx context.Context
+	var finalizationCancel context.CancelFunc
+	var finalizationErr error
+	beginFinalization := func() context.Context {
+		if finalizationCtx == nil {
+			finalizationCtx, finalizationCancel = context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+			if s.worker != nil {
+				finalizationErr = s.worker.beginFinalization(finalizationCtx)
+			}
+		}
+		return finalizationCtx
+	}
+	defer func() {
+		if finalizationCancel != nil {
+			finalizationCancel()
+		}
+	}()
 	if runErr != nil || spec.OnExit == "cancel" {
 		cancelScenario()
 		jobs.cancelAll()
@@ -436,9 +455,9 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		cleanupCancel()
 		if stopErr == nil {
 			// Slow Docker cleanup must not consume the final delivery budget.
-			drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			drainCtx := beginFinalization()
 			dataErr = s.drainRunTelemetry(drainCtx, experiment.ID)
-			drainCancel()
+			dataErr = errors.Join(finalizationErr, dataErr)
 		}
 		if err := errors.Join(stopErr, refreshErr); err != nil {
 			err = fmt.Errorf("stop scenario peers through generation %d: %w", generation, err)
@@ -447,23 +466,24 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		}
 	}
 	if runErr == nil && cleanupErr == nil && closedSingleRun {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		drainCtx := beginFinalization()
 		dataErr = s.drainRunTelemetry(drainCtx, experiment.ID)
-		drainCancel()
+		dataErr = errors.Join(finalizationErr, dataErr)
 	}
 	resultErr := errors.Join(runErr, cleanupErr, dataErr)
 	if hasPendingRunWorker(dataErr) {
 		cleanupErr = errors.Join(cleanupErr, dataErr)
 	}
 
-	observationCtx, observationCancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	observationCtx := beginFinalization()
+	dataErr = errors.Join(dataErr, finalizationErr)
+	resultErr = errors.Join(resultErr, finalizationErr)
 	if err := s.state.recordAnalysisObservation(experiment.ID, time.Now().UTC(), observationCtx); err != nil {
 		s.logger.Warn("record final analysis observation", "run", experiment.ID, "error", err)
 		dataErr = errors.Join(dataErr, err)
 		resultErr = errors.Join(resultErr, err)
 		s.state.recordRunWriteError(experiment.ID, err)
 	}
-	observationCancel()
 
 	if err := s.flushRunSources(experiment.ID); err != nil {
 		s.state.recordRunWriteError(experiment.ID, err)
@@ -833,8 +853,8 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 	}
 
 	type result struct {
-		agentID string
-		err     error
+		agent model.Agent
+		err   error
 	}
 	results := make(chan result, len(agents))
 	var group sync.WaitGroup
@@ -848,19 +868,19 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 			if err != nil {
 				err = fmt.Errorf("stop run generation on agent %s: %w", agent.ID, err)
 			}
-			results <- result{agentID: agent.ID, err: err}
+			results <- result{agent: agent, err: err}
 		}()
 	}
 	group.Wait()
 	close(results)
 
-	succeeded := make(map[string]struct{}, len(agents))
+	succeeded := make(map[string]model.Agent, len(agents))
 	var stopErrors []error
 	for result := range results {
 		if result.err != nil {
 			stopErrors = append(stopErrors, result.err)
 		} else {
-			succeeded[result.agentID] = struct{}{}
+			succeeded[result.agent.ID] = result.agent
 		}
 	}
 	for _, node := range s.matchingNodes(runID, "", "", "") {
@@ -937,7 +957,11 @@ func (s *Server) acquireAgent(ctx context.Context, nodeID string) (model.Agent, 
 	return s.acquireAgentWithPlacement(ctx, nodeID, "", nil)
 }
 
-func (s *Server) acquireAgentWithPlacement(ctx context.Context, nodeID, agentID string, rng *rand.Rand) (model.Agent, error) {
+func (s *Server) acquireAgentWithPlacement(ctx context.Context, nodeID, agentID string, rng *rand.Rand, guards ...func() error) (model.Agent, error) {
+	return s.acquireAgentWithPlacementBound(ctx, nodeID, agentID, rng, nil, guards...)
+}
+
+func (s *Server) acquireAgentWithPlacementBound(ctx context.Context, nodeID, agentID string, rng *rand.Rand, bind func(model.Agent) error, guards ...func() error) (model.Agent, error) {
 	if s.worker != nil {
 		c := s.worker
 		c.placementMu.Lock()
@@ -955,12 +979,23 @@ func (s *Server) acquireAgentWithPlacement(ctx context.Context, nodeID, agentID 
 	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	var bindErr error
+	var bindReservation func(model.Agent) error
+	if bind != nil {
+		bindReservation = func(agent model.Agent) error {
+			bindErr = bind(agent)
+			return bindErr
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return model.Agent{}, err
 		}
-		if agent, ok := s.tryReserveAgentWithPlacement(nodeID, agentID, rng); ok {
+		if agent, ok := s.tryReserveAgentWithPlacementBound(ctx, nodeID, agentID, rng, bindReservation, guards...); ok {
 			return agent, nil
+		}
+		if bindErr != nil {
+			return model.Agent{}, bindErr
 		}
 		select {
 		case <-ctx.Done():
@@ -975,18 +1010,55 @@ func (s *Server) tryReserveAgent(nodeID string) (model.Agent, bool) {
 }
 
 func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng *rand.Rand) (model.Agent, bool) {
-	s.state.mu.Lock()
-	defer s.state.mu.Unlock()
+	return s.tryReserveAgentWithPlacementContext(context.Background(), nodeID, targetAgentID, rng)
+}
+
+// Callers hold state.mu. A reservation already owned by this Node is reused,
+// including while an unavailable owner must recover before admission resumes.
+func (s *Server) existingAgentReservationLocked(nodeID, targetAgentID string) (model.Agent, bool, bool) {
 	if agentID, exists := s.state.reservations[nodeID]; exists {
 		agent, ok := s.state.agents[agentID]
+		if _, uncertain := s.state.uncertainCreates[nodeID]; uncertain {
+			return agent, true, false
+		}
 		if ok && !agent.Disabled && !time.Now().Before(s.state.agentAdmissionUntil[agent.ID]) {
-			return agent, agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
+			return agent, true, agentIsOnline(agent, time.Now()) && (targetAgentID == "" || agentID == targetAgentID)
 		}
 		delete(s.state.reservations, nodeID)
 		if ok {
 			agent.ActiveNodes = max(0, agent.ActiveNodes-1)
 			s.state.agents[agentID] = agent
 		}
+	}
+	return model.Agent{}, false, false
+}
+
+func (s *Server) tryReserveAgentWithPlacementContext(ctx context.Context, nodeID, targetAgentID string, rng *rand.Rand, guards ...func() error) (model.Agent, bool) {
+	return s.tryReserveAgentWithPlacementBound(ctx, nodeID, targetAgentID, rng, nil, guards...)
+}
+
+// bind may publish only an in-memory broker capability in state -> broker lock
+// order. Publish it before the slot so a terminal fence cannot cross the gap;
+// random draws and their private worker RPCs still happen outside state.mu.
+func (s *Server) tryReserveAgentWithPlacementBound(ctx context.Context, nodeID, targetAgentID string, rng *rand.Rand, bind func(model.Agent) error, guards ...func() error) (model.Agent, bool) {
+	s.state.mu.Lock()
+	if ctx.Err() != nil {
+		s.state.mu.Unlock()
+		return model.Agent{}, false
+	}
+	for _, guard := range guards {
+		if err := guard(); err != nil {
+			s.state.mu.Unlock()
+			return model.Agent{}, false
+		}
+	}
+	if agent, reserved, ready := s.existingAgentReservationLocked(nodeID, targetAgentID); reserved {
+		if ready && bind != nil {
+			ready = bind(agent) == nil
+		}
+		ready = ready && ctx.Err() == nil
+		s.state.mu.Unlock()
+		return agent, ready
 	}
 	var selected model.Agent
 	var candidates []model.Agent
@@ -1012,16 +1084,59 @@ func (s *Server) tryReserveAgentWithPlacement(nodeID, targetAgentID string, rng 
 		found = true
 	}
 	if !found {
+		s.state.mu.Unlock()
 		return model.Agent{}, false
 	}
 	if rng != nil {
 		// Keep seeded random placement independent of map iteration order.
 		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
+		s.state.mu.Unlock()
+		// A worker-backed RNG is a private RPC. Do not hold Controller state
+		// while waiting for it: heartbeats must keep the candidate fleet fresh.
 		selected = candidates[rng.Intn(len(candidates))]
+		s.state.mu.Lock()
+		if ctx.Err() != nil {
+			s.state.mu.Unlock()
+			return model.Agent{}, false
+		}
+		for _, guard := range guards {
+			if err := guard(); err != nil {
+				s.state.mu.Unlock()
+				return model.Agent{}, false
+			}
+		}
+		if agent, reserved, ready := s.existingAgentReservationLocked(nodeID, targetAgentID); reserved {
+			if ready && bind != nil {
+				ready = bind(agent) == nil
+			}
+			ready = ready && ctx.Err() == nil
+			s.state.mu.Unlock()
+			return agent, ready
+		}
+		current, exists := s.state.agents[selected.ID]
+		now := time.Now()
+		if !exists || current.URL != selected.URL || !current.StartedAt.Equal(selected.StartedAt) || current.Disabled ||
+			now.Before(s.state.agentAdmissionUntil[current.ID]) || !agentIsOnline(current, now) ||
+			current.Capacity > 0 && current.ActiveNodes >= current.Capacity || s.config.RunWorkers && !current.RunProcesses {
+			s.state.mu.Unlock()
+			return model.Agent{}, false
+		}
+		selected = current
+	}
+	if bind != nil {
+		if err := bind(selected); err != nil {
+			s.state.mu.Unlock()
+			return model.Agent{}, false
+		}
+	}
+	if ctx.Err() != nil {
+		s.state.mu.Unlock()
+		return model.Agent{}, false
 	}
 	selected.ActiveNodes++
 	s.state.agents[selected.ID] = selected
 	s.state.reservations[nodeID] = selected.ID
+	s.state.mu.Unlock()
 	return selected, true
 }
 

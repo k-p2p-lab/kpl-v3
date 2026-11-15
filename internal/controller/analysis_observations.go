@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -119,7 +120,9 @@ func (s *state) recordAnalysisObservation(runID string, now time.Time, contexts 
 	if s.worker != nil {
 		return s.worker.streamObservation(ctx, observation.At, data)
 	}
-	s.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.persistMu); err != nil {
+		return err
+	}
 	defer s.persistMu.Unlock()
 	deleted, err := s.resultWriteFencedLocked(runID)
 	if err != nil || deleted {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -18,7 +19,9 @@ type heartbeatLeaseContextKey struct{}
 // forgotten the full inventory. Serializing it with sends prevents an earlier
 // response from acknowledging history after this reset.
 func (s *Server) register(ctx context.Context) error {
-	s.heartbeatMu.Lock()
+	if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+		return err
+	}
 	defer s.heartbeatMu.Unlock()
 	return s.registerLocked(ctx)
 }
@@ -40,7 +43,9 @@ func (s *Server) registerLocked(ctx context.Context) error {
 func (s *Server) heartbeat(ctx context.Context) error {
 	finishView := s.acquireRunView()
 	defer finishView()
-	s.heartbeatMu.Lock()
+	if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+		return err
+	}
 	defer s.heartbeatMu.Unlock()
 	stopLease := func() {}
 	if s.config.RunWorkerFactory != nil {

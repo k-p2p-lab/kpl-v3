@@ -51,6 +51,11 @@ func TestControllerShutdownWaitsForCleanupAndFinalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Submission is asynchronous. This test exercises shutdown of an active
+	// Run, after its clock and first phase have actually started.
+	queueAwait(t, server, experiment.ID, func(run model.Experiment) bool {
+		return run.State == "running" && run.Phase == 1 && !run.StartedAt.IsZero()
+	})
 	// Hold an SSE request open; BaseContext cancellation must drain it too.
 	client := &http.Client{Timeout: 2 * time.Second}
 	streamRequest, _ := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/api/v1/stream", nil)
@@ -90,6 +95,72 @@ func TestControllerShutdownWaitsForCleanupAndFinalState(t *testing.T) {
 	var final model.Experiment
 	if err := json.Unmarshal(data, &final); err != nil || final.State != "canceled" || final.FinishedAt.IsZero() {
 		t.Fatalf("final experiment = %+v, decode error = %v", final, err)
+	}
+}
+
+func TestControllerShutdownCancelsQueuedExperimentBeforeItsClockStarts(t *testing.T) {
+	server := newLifecycleTestController(t)
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(model.AgentHeartbeat{Agent: model.Agent{ID: "agent"}})
+	}))
+	defer agent.Close()
+	if _, err := server.state.registerAgent(model.Agent{ID: "agent", URL: agent.URL}); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done, finished := make(chan error, 1), make(chan struct{})
+	go func() { defer close(finished); done <- server.serve(ctx, listener) }()
+	defer func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("queued shutdown did not finish its actual work owners")
+		}
+	}()
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get("http://" + listener.Addr().String() + "/api/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Controller did not finish startup: %d", response.StatusCode)
+	}
+	head := queueTestEnqueue(t, server, "analysis")
+	queueTestAwait(t, head.entered, "previous work cleanup")
+	defer head.once.Do(func() { close(head.release) })
+	run, err := server.StartScenario(t.Context(), []byte("name: queued-shutdown\nphases:\n  - {action: wait, duration: 1m}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueAwait(t, server, run.ID, func(run model.Experiment) bool { return run.State == "queued" && run.StartedAt.IsZero() })
+	cancel()
+	head.once.Do(func() { close(head.release) })
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not cancel the queued experiment")
+	}
+	data, err := os.ReadFile(filepath.Join(server.config.DataDir, currentRunsDirectory, run.ID, "experiment.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final model.Experiment
+	if err := json.Unmarshal(data, &final); err != nil || final.State != "canceled" || !final.StartedAt.IsZero() || final.FinishedAt.IsZero() {
+		t.Fatalf("queued experiment started or lost its cancellation: state=%s started=%v finished=%v error=%v", final.State, final.StartedAt, final.FinishedAt, err)
 	}
 }
 

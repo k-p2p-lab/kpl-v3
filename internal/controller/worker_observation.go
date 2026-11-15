@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
 
@@ -78,7 +79,9 @@ func (c *runWorkerClient) streamObservation(ctx context.Context, at time.Time, d
 }
 
 func (b *runWorkerBroker) observationOperation(ctx context.Context, method string, raw json.RawMessage) (any, error) {
-	b.observationMu.Lock()
+	if err := contextlock.Lock(ctx, &b.observationMu); err != nil {
+		return nil, err
+	}
 	defer b.observationMu.Unlock()
 	b.mu.Lock()
 	closed := b.closed
@@ -110,11 +113,14 @@ func (b *runWorkerBroker) observationOperation(ctx context.Context, method strin
 		if b.observationStage != nil {
 			return nil, errors.New("a Run observation transfer is already active")
 		}
-		stage, err := b.newObservationStage(info)
+		stage, err := b.newObservationStage(ctx, info)
 		if err != nil {
 			return nil, err
 		}
 		b.observationStage = stage
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, b.clearObservationStageLocked())
+		}
 		return nil, nil
 	case "observation.chunk":
 		var chunk workerObservationChunk
@@ -158,9 +164,11 @@ func (b *runWorkerBroker) observationOperation(ctx context.Context, method strin
 	return nil, operationErr
 }
 
-func (b *runWorkerBroker) newObservationStage(info workerObservationInfo) (*workerObservationStage, error) {
+func (b *runWorkerBroker) newObservationStage(ctx context.Context, info workerObservationInfo) (*workerObservationStage, error) {
 	s := b.server
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return nil, err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(b.runID); err != nil || deleted {
 		return nil, errors.Join(err, errors.New("observation Run is deleted"))
@@ -228,7 +236,9 @@ func (b *runWorkerBroker) commitObservationStage(ctx context.Context, stage *wor
 		return err
 	}
 	s := b.server
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(b.runID); err != nil || deleted {
 		return errors.Join(err, errors.New("observation Run is deleted"))
@@ -324,7 +334,9 @@ func isRunWorkerStageTemporary(name string) bool {
 // the FIFO cleanup turn. A previous failed unlink or parent crash must not let
 // an abandoned transfer survive a later claim of a clean Run boundary.
 func (s *Server) cleanupRunWorkerStages(ctx context.Context, id string) (resultErr error) {
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(id); err != nil || deleted {
 		return err

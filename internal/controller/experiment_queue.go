@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
@@ -63,6 +64,9 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 		err := s.cleanupBeforeResume(ctx, ids, spec)
 		if err == nil {
 			for _, id := range ids {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				s.state.mu.RLock()
 				collecting := s.state.experiments[id].DataState == "collecting"
 				s.state.mu.RUnlock()
@@ -70,11 +74,19 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 				if collecting {
 					// A retained network may have produced evidence after its
 					// scenario ended. Seal that evidence before releasing it.
-					dataErr = s.state.recordAnalysisObservation(id, time.Now().UTC())
+					dataErr = s.state.recordAnalysisObservation(id, time.Now().UTC(), ctx)
+					// Preserve a pre-write cancellation for retry. A genuine I/O
+					// failure joined with cancellation must still mark incomplete data.
+					if contextErr := ctx.Err(); contextErr != nil && (dataErr == nil || dataErr == contextErr) {
+						return contextErr
+					}
 					dataErr = errors.Join(dataErr, s.flushRunSources(id))
 					if dataErr != nil {
 						s.state.recordRunWriteError(id, dataErr)
 					}
+				}
+				if contextErr := ctx.Err(); contextErr != nil {
+					return errors.Join(dataErr, contextErr)
 				}
 				s.updateExperiment(id, func(run *model.Experiment) {
 					run.CleanupState, run.CleanupError = "complete", ""
@@ -93,7 +105,7 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 					}
 				})
 			}
-			if err := s.completeQueueCleanup(ids); err != nil {
+			if err := s.completeQueueCleanupContext(ctx, ids); err != nil {
 				return fmt.Errorf("clear confirmed Peer cleanup: %w", err)
 			}
 			// A deletion or late inventory recovery can add a durable cleanup
@@ -128,7 +140,13 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 // barriers in that same critical section so deletion cannot recreate a marker
 // after it has been cleared but before the live obligation is removed.
 func (s *Server) completeQueueCleanup(ids []string) error {
-	s.cancelMu.Lock()
+	return s.completeQueueCleanupContext(context.Background(), ids)
+}
+
+func (s *Server) completeQueueCleanupContext(ctx context.Context, ids []string) error {
+	if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+		return err
+	}
 	defer s.cancelMu.Unlock()
 	if err := s.clearPendingWorkCleanup(ids); err != nil {
 		return err

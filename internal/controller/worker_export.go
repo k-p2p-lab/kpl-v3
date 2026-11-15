@@ -114,7 +114,7 @@ func (s *Server) exportMetricsWithWorker(ctx context.Context, snapshot *resultSn
 	process, err := workerproc.Start(ctx, "controller-export", workerSummaryStart{RunID: snapshot.result.ID, Snapshot: describeWorkerSnapshot(snapshot)}, broker, workerproc.Options{Command: s.workerCommand})
 	if err != nil {
 		if process != nil {
-			s.rememberUnreapedWorker(snapshot.result.ID, process)
+			s.rememberUnreapedWorkerSnapshot(snapshot.result.ID, process, snapshot)
 		}
 		return model.Metrics{}, err
 	}
@@ -124,7 +124,7 @@ func (s *Server) exportMetricsWithWorker(ctx context.Context, snapshot *resultSn
 	closeErr := process.CloseContext(stopCtx)
 	stop()
 	if closeErr != nil {
-		s.rememberUnreapedWorker(snapshot.result.ID, process)
+		s.rememberUnreapedWorkerSnapshot(snapshot.result.ID, process, snapshot)
 	}
 	if err := errors.Join(workErr, closeErr); err != nil {
 		return model.Metrics{}, err

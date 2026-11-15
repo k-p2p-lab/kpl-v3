@@ -172,7 +172,12 @@ func TestCachedBatchRunDecoderRejectsUntrustedOrUnsettledProjection(t *testing.T
 	for _, name := range []string{"analysis-version", "format-version", "run-id", "hash", "revision", "pending-window", "trailing-data", "oversized", "wrong-kind", "raw-source"} {
 		t.Run(name, func(t *testing.T) {
 			value := expected[0]
-			snapshot := *base
+			snapshot := resultSnapshot{
+				analysisCacheKind: base.analysisCacheKind,
+				result:            base.result,
+				exportedAt:        base.exportedAt,
+				storedState:       base.storedState,
+			}
 			data, err := json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)

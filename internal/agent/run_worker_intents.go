@@ -59,6 +59,7 @@ func (s *Server) beginPeerIntent(proc *process, node model.Node) (model.Node, er
 	}
 	s.mu.Lock()
 	proc.intentPath, proc.containerID = path, name
+	proc.intentSyncPending = false
 	s.mu.Unlock()
 	node.Metadata = maps.Clone(node.Metadata)
 	node.Metadata["supervisorAttemptName"] = name
@@ -85,15 +86,34 @@ func (s *Server) commitPeerIntent(proc *process, id string) error {
 	return err
 }
 
-func (s *Server) clearPeerIntent(proc *process) error {
+func (s *Server) clearPeerIntent(proc *process, path string) error {
 	s.mu.RLock()
-	path := proc.intentPath
+	current, syncPending := proc.intentPath, proc.intentSyncPending
 	s.mu.RUnlock()
-	if path == "" {
+	if current == "" {
 		return nil
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove confirmed Peer creation intent: %w", err)
+	if current != path {
+		return errors.New("Peer creation intent changed before confirmed removal")
+	}
+	if !syncPending {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove confirmed Peer creation intent: %w", err)
+		}
+		// The termination and terminal history are already durable. Preserve
+		// this narrower obligation if only the directory sync fails: a retry
+		// must not try to read the file we have just successfully unlinked.
+		s.mu.Lock()
+		if proc.intentPath != path {
+			completed := proc.intentPath == ""
+			s.mu.Unlock()
+			if completed {
+				return nil
+			}
+			return errors.New("Peer creation intent changed during confirmed removal")
+		}
+		proc.intentSyncPending = true
+		s.mu.Unlock()
 	}
 	if err := syncTelemetryDirectory(filepath.Dir(path)); err != nil {
 		return err
@@ -101,6 +121,10 @@ func (s *Server) clearPeerIntent(proc *process) error {
 	s.mu.Lock()
 	if proc.intentPath == path {
 		proc.intentPath = ""
+		proc.intentSyncPending = false
+	} else if proc.intentPath != "" {
+		s.mu.Unlock()
+		return errors.New("Peer creation intent changed during directory sync")
 	}
 	s.mu.Unlock()
 	return nil
@@ -109,10 +133,14 @@ func (s *Server) clearPeerIntent(proc *process) error {
 func (s *Server) completePeerIntent(proc *process, event model.TraceEvent, state, message string) error {
 	s.mu.RLock()
 	path := proc.intentPath
+	syncPending := proc.intentSyncPending
 	node := compactRunWorkerNode(cloneNodeStatus(proc.node))
 	s.mu.RUnlock()
 	if path == "" {
 		return s.queueTermination(event)
+	}
+	if syncPending {
+		return s.clearPeerIntent(proc, path)
 	}
 	intent, err := s.readPeerIntent(path)
 	if err != nil {
@@ -147,7 +175,7 @@ func (s *Server) completePeerIntent(proc *process, event model.TraceEvent, state
 	if err := s.queueTermination(event); err != nil {
 		return err
 	}
-	return s.clearPeerIntent(proc)
+	return s.clearPeerIntent(proc, path)
 }
 
 // A supervisor restart owns old intents independently of the lost Run process.
@@ -196,8 +224,17 @@ func (s *Server) recoverPeerIntents(ctx context.Context) error {
 				return err
 			}
 			s.history.mu.Lock()
-			err = s.history.saveFence(intent.RunID, ^uint64(0))
+			node, found, err := s.history.storedNode(intent.NodeID)
+			if err == nil && found && (node.AgentID != intent.AgentID || node.RunID != intent.RunID || node.Generation != intent.Generation || node.StartedAt.IsZero() || intent.StartedAt.IsZero() || !node.StartedAt.Equal(intent.StartedAt)) {
+				err = errors.New("saved Peer creation intent does not match its terminal history instance")
+			}
 			if err == nil {
+				err = s.history.saveFence(intent.RunID, ^uint64(0))
+			}
+			// An unlink whose directory sync was interrupted may reappear.
+			// Do not rewrite its already confirmed outcome and timestamps:
+			// reclaiming the same container again is not a new Peer failure.
+			if err == nil && (!found || node.Metadata["cleanupComplete"] != "true") {
 				err = s.history.saveNodes([]model.Node{{ID: intent.NodeID, AgentID: intent.AgentID, RunID: intent.RunID, Generation: intent.Generation, State: model.NodeFailed, StartedAt: intent.StartedAt, LastSeen: time.Now().UTC(), Error: "Agent supervisor restarted before Peer finalization", Metadata: map[string]string{"runtime": "docker", "cleanupComplete": "true"}}})
 			}
 			s.history.mu.Unlock()

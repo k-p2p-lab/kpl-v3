@@ -61,6 +61,7 @@ type Config struct {
 type process struct {
 	workerEpoch           string
 	intentPath            string
+	intentSyncPending     bool
 	admissionDone         chan struct{}
 	gatewayURL            string
 	node                  model.Node

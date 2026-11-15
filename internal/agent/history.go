@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	bolt "go.etcd.io/bbolt"
 )
@@ -183,10 +184,16 @@ func (s *Server) lockAdmission(ctx context.Context, request model.CreateNodeRequ
 }
 
 func (s *Server) reclaimHistory() error {
+	return s.reclaimHistoryContext(context.Background())
+}
+
+func (s *Server) reclaimHistoryContext(ctx context.Context) error {
 	if s.history == nil {
 		return nil
 	}
-	s.history.mu.Lock()
+	if err := contextlock.Lock(ctx, &s.history.mu); err != nil {
+		return err
+	}
 	defer s.history.mu.Unlock()
 	s.mu.RLock()
 	candidates := []*process{}
@@ -312,7 +319,9 @@ func (s *Server) fenceRetiredRuns(ctx context.Context) error {
 	if s.history == nil {
 		return nil
 	}
-	s.history.mu.Lock()
+	if err := contextlock.Lock(ctx, &s.history.mu); err != nil {
+		return err
+	}
 	defer s.history.mu.Unlock()
 	dir, err := os.Open(filepath.Join(s.history.directory, "runs"))
 	if err != nil {

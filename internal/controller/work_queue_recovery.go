@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -34,7 +35,9 @@ func (s *Server) recoverWorkCleanup(ctx context.Context) error {
 	// The current/future submissions already have live schedulers and must
 	// never receive a recovery fence for their newly reserved Run IDs.
 	scheduled := make(map[string]bool)
-	s.cancelMu.Lock()
+	if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+		return err
+	}
 	for _, slot := range s.experimentQueue {
 		if slot.batch != nil {
 			for _, id := range slot.batch.queuedIDs {
@@ -127,12 +130,10 @@ func (s *Server) recoverWorkCleanup(ctx context.Context) error {
 // with the deletion fence, retaining cleanup ownership without restoring deleted
 // history. All filesystem checks here are bounded local Controller metadata.
 func (s *Server) mergeRecoveredWorkCleanup(ctx context.Context, candidates map[string]bool, restored map[string]model.Experiment, scheduled map[string]bool) error {
-	s.cancelMu.Lock()
-	defer s.cancelMu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := s.lockWorkPersistence(ctx); err != nil {
 		return err
 	}
-	s.state.persistMu.Lock()
+	defer s.cancelMu.Unlock()
 	defer s.state.persistMu.Unlock()
 	deleted := make(map[string]bool, len(restored))
 	for id := range restored {
@@ -165,4 +166,36 @@ func (s *Server) mergeRecoveredWorkCleanup(ctx context.Context, candidates map[s
 	}
 	s.state.mu.Unlock()
 	return s.persistQueueCleanupLocked()
+}
+
+// Never wait for persistence while holding cancelMu: Stop and new work need it
+// to cancel this waiter. Keep a granted FIFO persistence turn when cancelMu is
+// free, using only TryLock in that reverse order so no lock cycle is possible.
+func (s *Server) lockWorkPersistence(ctx context.Context) error {
+	for {
+		if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+			return err
+		}
+		if s.state.persistMu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				s.state.persistMu.Unlock()
+				s.cancelMu.Unlock()
+				return err
+			}
+			return nil
+		}
+		s.cancelMu.Unlock()
+		if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+			return err
+		}
+		if s.cancelMu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				s.cancelMu.Unlock()
+				s.state.persistMu.Unlock()
+				return err
+			}
+			return nil
+		}
+		s.state.persistMu.Unlock()
+	}
 }

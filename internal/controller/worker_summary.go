@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
@@ -90,12 +91,46 @@ func makeRunWorkerSummary(accumulator *runMetricAccumulator, runID string, now t
 	return summary
 }
 
+// workerMu protects publication and the close owner. A snapshot remains here
+// until OS reaping, private RPC quiescence and its actual close all complete.
+type workerSnapshotHold struct {
+	snapshots []*resultSnapshot
+	closing   bool
+	done      chan struct{}
+}
+
 func (s *Server) rememberUnreapedWorker(id string, process *workerproc.Process) {
+	s.rememberUnreapedWorkerSnapshot(id, process, nil)
+}
+
+func (s *Server) rememberUnreapedWorkerSnapshot(id string, process *workerproc.Process, snapshot *resultSnapshot) {
+	if snapshot != nil {
+		// Each snapshot has one active worker. Publish its deferred-close
+		// guard before exposing ownership to a concurrent reaper or caller.
+		snapshot.unreapedWorker.Store(process)
+	}
 	s.workerMu.Lock()
 	if s.unreapedWorkers == nil {
 		s.unreapedWorkers = make(map[string][]*workerproc.Process)
 	}
-	s.unreapedWorkers[id] = append(s.unreapedWorkers[id], process)
+	if snapshot != nil {
+		if s.workerSnapshots == nil {
+			s.workerSnapshots = make(map[*workerproc.Process]*workerSnapshotHold)
+		}
+		hold := s.workerSnapshots[process]
+		if hold == nil {
+			hold = &workerSnapshotHold{done: make(chan struct{})}
+			s.workerSnapshots[process] = hold
+		}
+		hold.snapshots = append(hold.snapshots, snapshot)
+	}
+	known := false
+	for _, previous := range s.unreapedWorkers[id] {
+		known = known || previous == process
+	}
+	if !known {
+		s.unreapedWorkers[id] = append(s.unreapedWorkers[id], process)
+	}
 	s.workerMu.Unlock()
 	s.cancelMu.Lock()
 	s.rememberQueueCleanupLocked(id)
@@ -106,21 +141,85 @@ func (s *Server) rememberUnreapedWorker(id string, process *workerproc.Process) 
 	}
 }
 
-func (s *Server) waitControllerWorkers(ctx context.Context, ids []string) error {
-	for _, id := range ids {
-		s.workerMu.Lock()
-		workers := append([]*workerproc.Process(nil), s.unreapedWorkers[id]...)
+func (s *Server) closeWorkerSnapshots(ctx context.Context, process *workerproc.Process) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.workerMu.Lock()
+	hold := s.workerSnapshots[process]
+	if hold == nil {
 		s.workerMu.Unlock()
-		for _, process := range workers {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-process.Done():
-			}
+		return nil
+	}
+	if hold.closing {
+		s.workerMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-hold.done:
+			return nil
+		}
+	}
+	hold.closing = true
+	for {
+		snapshots := hold.snapshots
+		hold.snapshots = nil
+		s.workerMu.Unlock()
+		for _, snapshot := range snapshots {
+			snapshot.close()
 		}
 		s.workerMu.Lock()
-		delete(s.unreapedWorkers, id)
+		if len(hold.snapshots) != 0 {
+			continue
+		}
+		delete(s.workerSnapshots, process)
+		close(hold.done)
 		s.workerMu.Unlock()
+		return nil
+	}
+}
+
+func (s *Server) waitControllerWorkers(ctx context.Context, ids []string) error {
+	for _, id := range ids {
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			s.workerMu.Lock()
+			workers := append([]*workerproc.Process(nil), s.unreapedWorkers[id]...)
+			s.workerMu.Unlock()
+			if len(workers) == 0 {
+				break
+			}
+			completed := make(map[*workerproc.Process]bool, len(workers))
+			for _, process := range workers {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-process.Done():
+				}
+				if err := s.closeWorkerSnapshots(ctx, process); err != nil {
+					return err
+				}
+				completed[process] = true
+			}
+			// A later failure may publish another owner while this waiter is
+			// reaping its snapshot. Remove only the confirmed processes and
+			// leave any new snapshot/worker for the next pass.
+			s.workerMu.Lock()
+			retained := s.unreapedWorkers[id][:0]
+			for _, process := range s.unreapedWorkers[id] {
+				if !completed[process] || s.workerSnapshots[process] != nil {
+					retained = append(retained, process)
+				}
+			}
+			if len(retained) == 0 {
+				delete(s.unreapedWorkers, id)
+			} else {
+				s.unreapedWorkers[id] = retained
+			}
+			s.workerMu.Unlock()
+		}
 	}
 	return nil
 }
@@ -223,7 +322,9 @@ func (s *Server) refreshRunMetricSummary(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	rebased, err := s.state.rebaseRetiredWorkerSummaryLocked(id, time.Now().UTC())
 	s.state.persistMu.Unlock()
 	if err != nil || rebased {
@@ -334,14 +435,24 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	defer snapshot.close()
+	snapshotOwned := true
+	defer func() {
+		if snapshotOwned {
+			snapshot.close()
+		}
+	}()
 	if snapshot.active {
 		return errResultBusy
 	}
 	process, err := workerproc.Start(ctx, "controller-summary", workerSummaryStart{RunID: id, Snapshot: describeWorkerSnapshot(snapshot), EventRevision: eventRevisionOf(snapshot.files)}, workerBinarySourceHandler(s.workerSnapshotSource([]*resultSnapshot{snapshot})), workerproc.Options{RunID: id, Command: s.workerCommand})
 	if err != nil {
 		if process != nil {
-			s.rememberUnreapedWorker(id, process)
+			select {
+			case <-process.Done():
+			default:
+				s.rememberUnreapedWorkerSnapshot(id, process, snapshot)
+				snapshotOwned = false
+			}
 		}
 		return err
 	}
@@ -353,7 +464,8 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 	select {
 	case <-process.Done():
 	default:
-		s.rememberUnreapedWorker(id, process)
+		s.rememberUnreapedWorkerSnapshot(id, process, snapshot)
+		snapshotOwned = false
 	}
 	if err := errors.Join(executeErr, closeErr); err != nil {
 		return err
@@ -361,12 +473,12 @@ func (s *Server) computeWorkerSummary(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	current, err := s.runSourceRevision(id)
+	current, err := s.runSourceRevisionContext(ctx, id)
 	if err != nil {
 		return err
 	}
 	if current != snapshot.result.SourceRevision {
 		return fmt.Errorf("summary source changed during refresh")
 	}
-	return s.publishWorkerSummary(summary)
+	return s.publishWorkerSummaryContext(ctx, summary)
 }

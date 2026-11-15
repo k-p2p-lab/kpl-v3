@@ -33,7 +33,7 @@ services:
         published: ${KPL_HTTP_PORT:-8080}
         protocol: tcp
         mode: host
-    stop_grace_period: 15m
+    stop_grace_period: 20m
     deploy:
       labels:
         io.kpl.application: kp2plab-v3

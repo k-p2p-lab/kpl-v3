@@ -47,6 +47,7 @@ type workerCreateLease struct {
 	attempted         bool
 	possibleAdmission bool
 	inFlight          int
+	agentIdentity     createAgentIdentity
 }
 
 type workerCreateAuthorizationError struct {
@@ -91,7 +92,7 @@ func (b *runWorkerBroker) bindCreateReservation(id string, owner model.Agent) er
 	if b.createLeases == nil {
 		b.createLeases = make(map[string]*workerCreateLease)
 	}
-	b.createLeases[id] = &workerCreateLease{agentID: owner.ID, baseURL: owner.URL, startedAt: owner.StartedAt, generation: b.generation}
+	b.createLeases[id] = &workerCreateLease{agentID: owner.ID, baseURL: owner.URL, startedAt: owner.StartedAt, generation: b.generation, agentIdentity: createAgentIdentityOf(owner)}
 	return nil
 }
 

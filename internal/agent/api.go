@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -101,7 +102,10 @@ func (s *Server) handleRunAction(w http.ResponseWriter, r *http.Request) {
 		if s.config.RunWorkerFactory != nil {
 			s.stopRunGeneration(parts[0], ^uint64(0))
 			if s.history != nil {
-				s.history.mu.Lock()
+				if err := contextlock.Lock(ctx, &s.history.mu); err != nil {
+					writeJSON(w, http.StatusServiceUnavailable, model.RunDrainError{Error: err.Error(), Code: model.RunWorkerPendingCode, WorkerPending: true})
+					return
+				}
 				err := s.history.saveFence(parts[0], ^uint64(0))
 				s.history.mu.Unlock()
 				if err != nil {

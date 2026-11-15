@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -18,7 +20,17 @@ type runJournalIndex struct {
 	sequences map[measurementSessionKey]sequenceRanges
 }
 
-func (s *state) appendJournalEvents(runID string, events []model.TraceEvent) (resultErr error) {
+func (s *state) appendJournalEvents(runID string, events []model.TraceEvent) error {
+	return s.appendJournalEventsContext(context.Background(), runID, events)
+}
+
+func (s *state) appendJournalEventsContext(ctx context.Context, runID string, events []model.TraceEvent) (resultErr error) {
+	// No write has started while waiting for this lock. A canceled request can
+	// release its decoder slot without recording scientific data damage. Once
+	// acquired, preserve the existing durable commit and error reporting.
+	if err := contextlock.Lock(ctx, &s.persistMu); err != nil {
+		return err
+	}
 	defer func() {
 		if errors.Is(resultErr, errJournalIndexRequired) {
 			if s.requestJournalRecovery != nil {
@@ -28,7 +40,6 @@ func (s *state) appendJournalEvents(runID string, events []model.TraceEvent) (re
 			s.recordRunWriteError(runID, resultErr)
 		}
 	}()
-	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	if runID != "" && !validResultID(runID) {
 		return errors.New("invalid journal Run identity")
@@ -75,8 +86,10 @@ func (s *state) publishJournalEvents(runID string, accepted []model.TraceEvent) 
 	}
 }
 
-func (s *Server) publishWorkerSummary(summary runWorkerSummary) error {
-	s.state.persistMu.Lock()
+func (s *Server) publishWorkerSummaryContext(ctx context.Context, summary runWorkerSummary) error {
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(summary.RunID); err != nil || deleted {
 		return err
@@ -157,6 +170,10 @@ func (s *Server) publishWorkerSummary(summary runWorkerSummary) error {
 	}
 	s.state.notify()
 	return nil
+}
+
+func (s *Server) publishWorkerSummary(summary runWorkerSummary) error {
+	return s.publishWorkerSummaryContext(context.Background(), summary)
 }
 
 func (s *state) workerMetricSummary(id string) (runWorkerSummary, bool) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
@@ -35,7 +36,9 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	if err := s.cleanupRunWorkerStages(ctx, id); err != nil {
 		return err
 	}
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	deleted, err := s.state.resultWriteFencedLocked(id)
 	if err != nil {
 		s.state.persistMu.Unlock()
@@ -203,6 +206,9 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	}
 	if err := s.verifyRetiredRuntime(id); err != nil {
 		return err
+	}
+	if err := s.completeQueueCleanupContext(ctx, []string{id}); err != nil {
+		return fmt.Errorf("retire confirmed Run cleanup marker: %w", err)
 	}
 	s.state.clearRetiredAdmissionHints(id)
 	s.state.notify()

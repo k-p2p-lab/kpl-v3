@@ -34,7 +34,7 @@ type runtimeRoleLogHandler struct {
 
 func (*runtimeRoleLogHandler) Enabled(context.Context, slog.Level) bool { return true }
 func (h *runtimeRoleLogHandler) Handle(ctx context.Context, record slog.Record) error {
-	if record.Message != "runtime health" && record.Message != "agent listening" && record.Message != "controller listening" {
+	if record.Message != "runtime health" && record.Message != "agent listening" && record.Message != "controller listening" && record.Message != "result archive worker stopped" {
 		return nil
 	}
 	fields := make(map[string]slog.Value)
@@ -173,6 +173,29 @@ func TestControllerRuntimeHealthSurvivesCleanupAndStopsOnReturn(t *testing.T) {
 	address := listener.Addr().String()
 	listener.Close()
 	logger, records := runtimeRoleTestLogger()
+	archiveStopped := false
+	awaitArchiveStop := func() {
+		if archiveStopped {
+			return
+		}
+		// Service exit deliberately does not join a disconnected NAS syscall.
+		// This local fixture must still reclaim its cooperative archive worker
+		// before TempDir cleanup removes the directories it can be touching.
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case record := <-records:
+				if record.msg == "result archive worker stopped" {
+					archiveStopped = true
+					return
+				}
+			case <-timer.C:
+				t.Error("local archive worker did not stop after cancellation")
+				return
+			}
+		}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	finished := make(chan struct{})
@@ -184,6 +207,7 @@ func TestControllerRuntimeHealthSurvivesCleanupAndStopsOnReturn(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Error("Controller fixture did not exit during test cleanup")
 		}
+		awaitArchiveStop()
 	}()
 	directory := t.TempDir()
 	go func() {
@@ -201,6 +225,7 @@ func TestControllerRuntimeHealthSurvivesCleanupAndStopsOnReturn(t *testing.T) {
 	assertRuntimeHealthDuringCleanup(t, ctx, health, done)
 	releaseOnce.Do(func() { close(release) })
 	awaitRuntimeRoleReturn(t, health, done)
+	awaitArchiveStop()
 }
 
 func TestAgentRuntimeHealthSurvivesFinalDrainAndStopsOnReturn(t *testing.T) {

@@ -279,6 +279,38 @@ func (h *agentHistory) containsStored(id string) (bool, error) {
 	return found, err
 }
 
+// Load one terminal record without scanning replay pages or keeping a database
+// transaction open while the caller performs filesystem or Docker operations.
+func (h *agentHistory) storedNode(id string) (model.Node, bool, error) {
+	db, err := h.store()
+	if err != nil {
+		return model.Node{}, false, err
+	}
+	hash := sha256.Sum256([]byte(id))
+	var data []byte
+	if err := db.View(func(tx *bolt.Tx) error {
+		stored := tx.Bucket(historyNodesBucket).Get(hash[:])
+		if len(stored) > heartbeatBodyLimit {
+			return errors.New("retired Peer record exceeds size limit")
+		}
+		data = bytes.Clone(stored)
+		return nil
+	}); err != nil {
+		return model.Node{}, false, err
+	}
+	if data == nil {
+		return model.Node{}, false, nil
+	}
+	node, err := validateHistoryNode(data)
+	if err != nil {
+		return model.Node{}, false, err
+	}
+	if node.ID != id {
+		return model.Node{}, false, errors.New("retired Peer record identity mismatch")
+	}
+	return node, true, nil
+}
+
 func (h *agentHistory) saveNodes(nodes []model.Node) error {
 	if len(nodes) == 0 {
 		return nil

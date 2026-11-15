@@ -77,39 +77,66 @@ func (s *Server) fenceExperimentNetwork(ctx context.Context, request model.Exper
 	if request.RunID == "" || request.Epoch == "" || request.RequestedAt.IsZero() {
 		return errors.New("experiment network identity is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.config.RunWorkerFactory != nil {
 		if err := s.runWorkerAdmissionReady(request.RunID); err != nil {
 			return err
 		}
-		stored, exists, err := s.history.fence(request.RunID)
-		if err != nil {
+	}
+	for {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		s.mu.RLock()
-		current, currentExists := s.runFences[request.RunID]
+		revision := s.historyRevision
 		s.mu.RUnlock()
-		if exists && stored == ^uint64(0) || currentExists && current == ^uint64(0) {
+		var stored uint64
+		var exists bool
+		if s.config.RunWorkerFactory != nil {
+			var err error
+			stored, exists, err = s.history.fence(request.RunID)
+			if err != nil {
+				return err
+			}
+		}
+		s.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		// A finalization or history retirement can replace the fence file
+		// while it is being read. Never restore a network binding from that
+		// old inode after the Run's reset has already been verified.
+		if revision != s.historyRevision {
+			s.mu.Unlock()
+			continue
+		}
+		current, currentExists := s.runFences[request.RunID]
+		if s.config.RunWorkerFactory != nil && (exists && stored == ^uint64(0) || currentExists && current == ^uint64(0)) {
+			s.mu.Unlock()
 			return errors.New("experiment Run has already been finalized")
 		}
-	}
-	s.mu.Lock()
-	if !s.startupReconciled || s.shuttingDown || s.host != nil && s.host.RebootPending {
-		s.mu.Unlock()
-		return errors.New("Agent is not ready for network reset")
-	}
-	if s.networkRequest.Epoch != request.Epoch && !s.networkRequest.RequestedAt.IsZero() && !request.RequestedAt.After(s.networkRequest.RequestedAt) {
-		s.mu.Unlock()
-		return errors.New("stale network preparation")
-	}
-	for _, proc := range s.processes {
-		if !proc.exited || proc.cleanupErr != nil {
+		if !s.startupReconciled || s.shuttingDown || s.host != nil && s.host.RebootPending {
 			s.mu.Unlock()
-			return errors.New("Peer removal must finish before network reset")
+			return errors.New("Agent is not ready for network reset")
 		}
+		if s.networkRequest.Epoch != request.Epoch && !s.networkRequest.RequestedAt.IsZero() && !request.RequestedAt.After(s.networkRequest.RequestedAt) {
+			s.mu.Unlock()
+			return errors.New("stale network preparation")
+		}
+		for _, proc := range s.processes {
+			if !proc.exited || proc.cleanupErr != nil {
+				s.mu.Unlock()
+				return errors.New("Peer removal must finish before network reset")
+			}
+		}
+		s.experimentNetwork = nil
+		s.networkRequest = request
+		s.mu.Unlock()
+		break
 	}
-	s.experimentNetwork = nil
-	s.networkRequest = request
-	s.mu.Unlock()
 	// A daemon inventory also catches containers left by an interrupted create
 	// or a previous Agent instance. Do not remove them or report cleanup success.
 	data, err := s.docker.run(ctx, nil, "ps", "--all", "--quiet", "--filter", "label=io.kpl.managed=true", "--filter", "label=io.kpl.network="+s.docker.network)

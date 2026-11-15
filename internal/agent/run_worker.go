@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 )
@@ -34,6 +35,11 @@ type agentRunWorker struct {
 	closing   bool
 	transport *http.Transport
 	closeMu   sync.Mutex
+	// closeMu also protects finalization progress across pending reset proofs.
+	// A reaped worker can remain owned while late ingress is still being drained.
+	finishAcknowledged bool
+	finalizationDone   bool
+	finalizationError  error
 }
 
 func (w *agentRunWorker) call(ctx context.Context, method string, in, out any) error {
@@ -400,13 +406,27 @@ func (s *Server) runWorkerBroker(w *agentRunWorker) workerproc.Handler {
 
 func (s *Server) finishRunWorker(ctx context.Context, id string) error {
 	if s.history != nil {
-		s.history.mu.Lock()
+		if err := contextlock.Lock(ctx, &s.history.mu); err != nil {
+			return &runWorkerPendingError{fmt.Errorf("wait for Run fence persistence: %w", err)}
+		}
 		err := s.history.saveFence(id, ^uint64(0))
 		s.history.mu.Unlock()
 		if err != nil {
 			return &runWorkerPendingError{err}
 		}
 	}
+	// Publish durable finalization to network admission under the same state
+	// lock used to commit a new binding. A previously opened fence file can
+	// still describe the old inode after the durable save replaces it.
+	s.mu.Lock()
+	if fence, exists := s.runFences[id]; !exists || fence != ^uint64(0) {
+		if s.runFences == nil {
+			s.runFences = make(map[string]uint64)
+		}
+		s.runFences[id] = ^uint64(0)
+		s.historyRevision++
+	}
+	s.mu.Unlock()
 	if err := s.prepareRunReset(ctx, id); err != nil {
 		return err
 	}
@@ -434,40 +454,52 @@ func (s *Server) finishRunWorker(ctx context.Context, id string) error {
 	case <-ctx.Done():
 		return &runWorkerPendingError{ctx.Err()}
 	}
-	w.closeMu.Lock()
+	if err := contextlock.Lock(ctx, &w.closeMu); err != nil {
+		return &runWorkerPendingError{fmt.Errorf("wait for Run finalization: %w", err)}
+	}
 	defer w.closeMu.Unlock()
 	s.runWorkersMu.Lock()
-	failure := w.failure
+	if w.finalizationError == nil {
+		w.finalizationError = w.failure
+	}
 	w.closing = true
 	s.runWorkersMu.Unlock()
-	if w.process != nil {
+	if w.process != nil && !w.finalizationDone {
 		select {
 		case <-w.process.Done():
-			if failure == nil {
-				failure = errors.Join(w.process.Wait(), errors.New("process exited before requested finalization"))
+			if !w.finishAcknowledged && w.finalizationError == nil {
+				w.finalizationError = errors.New("process exited before requested finalization")
 			}
 		default:
-			if err := w.call(ctx, "run.finish", nil, nil); err != nil {
-				if ctx.Err() != nil {
-					return &runWorkerPendingError{err}
+			if !w.finishAcknowledged {
+				if err := w.call(ctx, "run.finish", nil, nil); err != nil {
+					if ctx.Err() != nil {
+						return &runWorkerPendingError{err}
+					}
+					w.finalizationError = errors.Join(w.finalizationError, err)
+				} else {
+					w.finishAcknowledged = true
 				}
-				failure = errors.Join(failure, err)
 			}
-			if err := w.process.CloseContext(ctx); err != nil {
-				select {
-				case <-w.process.Done():
-					failure = errors.Join(failure, err)
-				default:
-					return &runWorkerPendingError{err}
-				}
+		}
+		if err := w.process.CloseContext(ctx); err != nil {
+			select {
+			case <-w.process.Done():
+				w.finalizationError = errors.Join(w.finalizationError, err)
+			default:
+				return &runWorkerPendingError{err}
 			}
 		}
 		if err := w.process.Wait(); err != nil {
 			var exit *exec.ExitError
 			if errors.As(err, &exit) && exit.ExitCode() > 0 {
-				failure = errors.Join(failure, err)
+				w.finalizationError = errors.Join(w.finalizationError, err)
 			}
 		}
+		// CloseContext/Wait have confirmed both OS reaping and private RPC
+		// quiescence. A later ingress/proof failure must not forget that fact or
+		// a real worker failure when this same finalization is retried.
+		w.finalizationDone = true
 	}
 	w.cancel()
 	w.transport.CloseIdleConnections()
@@ -480,14 +512,16 @@ func (s *Server) finishRunWorker(ctx context.Context, id string) error {
 		return err
 	}
 	s.runWorkersMu.Lock()
-	delete(s.runWorkers, id)
+	if s.runWorkers[id] == w {
+		delete(s.runWorkers, id)
+	}
 	s.runWorkersMu.Unlock()
 	if w.process != nil {
 		s.logger.Info("Agent Run experiment process reaped", "id", s.config.ID, "run", id, "pid", w.process.PID())
 	}
 	s.logger.Info("Agent Run reset verified", "id", s.config.ID, "run", id, "reset", proof)
-	if failure != nil {
-		return &runWorkerFailedError{failure}
+	if w.finalizationError != nil {
+		return &runWorkerFailedError{w.finalizationError}
 	}
 	return nil
 }

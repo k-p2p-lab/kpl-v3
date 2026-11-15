@@ -190,7 +190,7 @@ func (s *Server) createReservedNode(ctx context.Context, request model.CreateNod
 			}
 			continue
 		}
-		if err := s.rememberRunAgent(request.RunID, agent); err != nil {
+		if err := s.rememberRunAgentContext(ctx, request.RunID, agent); err != nil {
 			s.releaseReservation(request.ID)
 			return err
 		}

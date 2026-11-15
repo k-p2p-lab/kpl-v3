@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
 	"io"
 	"math"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -111,6 +114,8 @@ type resultArchiveFlight struct {
 }
 
 type resultSnapshot struct {
+	closeOnce          sync.Once
+	unreapedWorker     atomic.Pointer[workerproc.Process]
 	analysisCacheKind  string
 	releaseArchiveRead func()
 	acquireArchiveRead func(context.Context) (func(), error)
@@ -124,13 +129,25 @@ type resultSnapshot struct {
 }
 
 func (snapshot *resultSnapshot) close() {
-	for _, file := range snapshot.files {
-		file.close()
+	if process := snapshot.unreapedWorker.Load(); process != nil {
+		select {
+		case <-process.Done():
+		default:
+			// A failed worker owns this snapshot now. Its caller may still
+			// run a deferred close; the registered reaper closes it after
+			// private source callbacks have actually stopped.
+			return
+		}
 	}
-	if snapshot.release != nil {
-		snapshot.release()
-		snapshot.release = nil
-	}
+	snapshot.closeOnce.Do(func() {
+		for _, file := range snapshot.files {
+			file.close()
+		}
+		if snapshot.release != nil {
+			snapshot.release()
+			snapshot.release = nil
+		}
+	})
 }
 
 // Result IDs are directory names, never paths or names normalized into paths.
@@ -493,7 +510,10 @@ func (s *Server) resultDeletionBusyLocked(id string) bool {
 	s.state.mu.RLock()
 	experiment := s.state.experiments[id]
 	s.state.mu.RUnlock()
-	return experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || s.resultDownloads[id] > 0 || s.resultReadPins[id] > 0
+	s.resultDownloadMu.Lock()
+	downloading := s.resultDownloads[id] > 0
+	s.resultDownloadMu.Unlock()
+	return experiment.State == "running" || experiment.State == "queued" || s.cancels[id] != nil || s.repeatBatches[id] != nil || downloading || s.resultReadPins[id] > 0
 }
 
 // Caller holds the same locks as resultDeletionBusyLocked.
@@ -882,7 +902,9 @@ func (s *Server) captureResultFilesWithOptions(ctx context.Context, id string, d
 	// Event appends and metadata replacements use this same lock. Only open,
 	// stat and the in-memory ownership check belong in the critical section.
 	err = func() error {
-		s.state.persistMu.Lock()
+		if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+			return err
+		}
 		defer s.state.persistMu.Unlock()
 		deleted, err := s.state.resultDeletedLocked(id)
 		if err != nil {
@@ -933,17 +955,21 @@ func (s *Server) captureResultFilesWithOptions(ctx context.Context, id string, d
 		snapshot.active = s.resultActive(id)
 		snapshot.exportedAt = time.Now().UTC()
 		if download {
+			s.resultDownloadMu.Lock()
 			if s.resultDownloads == nil {
 				s.resultDownloads = make(map[string]int)
 			}
 			s.resultDownloads[id]++
+			s.resultDownloadMu.Unlock()
 			snapshot.release = func() {
-				s.state.persistMu.Lock()
+				// Files have been closed before this release. A counter-only
+				// lease must not wait behind unrelated durable writes.
+				s.resultDownloadMu.Lock()
 				s.resultDownloads[id]--
 				if s.resultDownloads[id] == 0 {
 					delete(s.resultDownloads, id)
 				}
-				s.state.persistMu.Unlock()
+				s.resultDownloadMu.Unlock()
 			}
 		}
 		return nil

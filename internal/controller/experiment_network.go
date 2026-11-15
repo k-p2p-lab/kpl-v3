@@ -21,7 +21,7 @@ func (s *Server) prepareExperimentNetwork(ctx context.Context, experiment model.
 	request := model.ExperimentNetworkRequest{RunID: experiment.ID, Epoch: rand.Text(), RequestedAt: time.Now().UTC()}
 	started := time.Now()
 	stageStarted := started
-	stage := "Agent network fence"
+	stage := "record network cleanup ownership"
 	s.logger.Info("experiment network preparation started", "run", experiment.ID, "epoch", request.Epoch, "stage", stage)
 	advance := func(next string) {
 		s.logger.Info("experiment network preparation advanced", "run", experiment.ID, "epoch", request.Epoch, "completedStage", stage, "stageElapsed", time.Since(stageStarted), "outcome", "ready", "stage", next, "elapsed", time.Since(started))
@@ -51,6 +51,10 @@ func (s *Server) prepareExperimentNetwork(ctx context.Context, experiment model.
 		return errors.New("cannot reset experiment network without registered Agents")
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+	if err := s.rememberRunNetworkAgents(ctx, experiment.ID, agents); err != nil {
+		return fmt.Errorf("record network cleanup ownership: %w", err)
+	}
+	advance("Agent network fence")
 	// Include disabled Agents: they can still own Peers and must participate in
 	// the cleanup barrier before a shared experiment overlay is removed.
 	if err := runOperations(ctx, len(agents), true, 8, nil, false, func(ctx context.Context, i int) error {

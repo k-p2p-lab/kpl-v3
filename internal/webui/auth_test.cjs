@@ -84,3 +84,75 @@ test('host reboot admission metadata is preserved without treating a generic fai
  accepted=undefined;
  await assert.rejects(context.api('/api/v1/agent-hosts/reboot',{method:'POST'}),error=>error.accepted===undefined);
 });
+
+test('HTTP errors preserve their status for every non-object or unreadable JSON body', async () => {
+  const bodies = [null, [], ['synthetic-private-body'], 'synthetic-private-body', 42, true, false];
+  for (const status of [404, 409, 422, 503]) {
+    for (const body of bodies) {
+      const context = {Headers, state:{}, fetch:async()=>new Response(JSON.stringify(body), {status, statusText:'Fixture failure'})};
+      vm.createContext(context); vm.runInContext(functions, context);
+      await assert.rejects(context.api('/api/v1/results/a', {method:'DELETE'}), error => {
+        assert.equal(error.status, status);
+        assert.equal(error.message, 'Fixture failure');
+        assert.equal(error.code, undefined);
+        assert.equal(error.accepted, undefined);
+        assert.ok(!error.message.includes('synthetic-private-body'));
+        return true;
+      });
+    }
+    for (const body of ['', '{broken']) {
+      const context = {Headers, state:{}, fetch:async()=>new Response(body, {status, statusText:'Fixture failure'})};
+      vm.createContext(context); vm.runInContext(functions, context);
+      await assert.rejects(context.api('/api/v1/results/a'), error => error.status === status && error.message === 'Fixture failure');
+    }
+    const context = {Headers, state:{}, fetch:async()=>({ok:false, status, statusText:'Fixture failure', json:async()=>{
+      throw Object.assign(new Error('synthetic canceled body read'), {name:'AbortError'});
+    }})};
+    vm.createContext(context); vm.runInContext(functions, context);
+    await assert.rejects(context.api('/api/v1/results/a'), error => error.status === status && error.message === 'Fixture failure');
+  }
+});
+
+test('null error bodies retain confirmed absence and busy semantics across selected deletions', async () => {
+  const {prepareDeletion, createDeletions} = require('./static/library-deletions.js');
+  const results = [{id:'a', state:'completed'}, {id:'b', state:'completed'}];
+  for (const status of [404, 409]) {
+    const calls = [];
+    const context = {Headers, state:{}, fetch:async url=>{
+      calls.push(url);
+      return url.endsWith('/a') ? new Response('null', {status, statusText:'Fixture failure'}) : new Response(null, {status:204});
+    }};
+    vm.createContext(context); vm.runInContext(functions, context);
+    const plan = prepareDeletion('results', ['run:a', 'run:b'], results.map(run=>({key:'run:'+run.id})), results);
+    const report = await createDeletions({api:context.api}).execute(plan);
+    assert.deepEqual(calls, ['/api/v1/results/a', '/api/v1/results/b']);
+    assert.deepEqual(report.deleted, status === 404 ? ['run:a', 'run:b'] : ['run:b']);
+    assert.equal(report.failed.length, status === 404 ? 0 : 1);
+    assert.deepEqual(report.remaining, []);
+  }
+});
+
+test('null error bodies do not turn explicit bulk admission rejections into unknown outcomes', async () => {
+  const {prepare, createAdmissions} = require('./static/result-bulk-actions.js');
+  const results = [{id:'a', state:'completed'}, {id:'b', state:'completed'}];
+  for (const status of [404, 409, 422]) {
+    const calls = [];
+    const context = {Headers, state:{}, fetch:async url=>{
+      calls.push(url);
+      return url.endsWith('/a') ? new Response('null', {status, statusText:'Fixture failure'})
+        : new Response(JSON.stringify({id:'job-b', runId:'b', state:'queued'}), {status:202});
+    }};
+    vm.createContext(context); vm.runInContext(functions, context);
+    const report = await createAdmissions({api:context.api}).execute(prepare('analysis', ['run:a', 'run:b'], results));
+    assert.equal(report.unknown.length, 0);
+    if (status === 422) {
+      assert.equal(report.failed.length, 1);
+      assert.equal(report.remaining.length, 1);
+      assert.equal(calls.length, 1);
+    } else {
+      assert.equal(report.skipped.length, 1);
+      assert.equal(report.accepted.length, 1);
+      assert.equal(calls.length, 2);
+    }
+  }
+});

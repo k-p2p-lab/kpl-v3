@@ -78,6 +78,9 @@ func scanDecodedAnalysisFileWithWorkers[T any](ctx context.Context, file resultF
 	if file.file == nil && file.readAt == nil && len(file.parts) == 0 {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	workCtx, cancel := context.WithCancel(ctx)
 	jobs := make(chan *analysisDecodeBatch[T], workers*2)
@@ -128,6 +131,12 @@ func scanDecodedAnalysisFileWithWorkers[T any](ctx context.Context, file resultF
 			batch.values[index] = zero
 		}
 		if batch.err != nil {
+			// The serial scanner checks cancellation before decoding the next
+			// row. A consumer may have canceled while handling the preceding
+			// valid row, after this batch's parser already found its failure.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return fmt.Errorf("%s line %d: %w", file.name, batch.firstLine+batch.decoded, batch.err)
 		}
 		pendingBytes -= len(batch.data)

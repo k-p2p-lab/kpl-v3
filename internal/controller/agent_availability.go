@@ -138,6 +138,7 @@ func (s *Server) handleAgentEnabled(w http.ResponseWriter, r *http.Request) {
 		s.state.mu.RLock()
 		agent = s.state.agents[agent.ID]
 		s.state.mu.RUnlock()
+		s.wakeAnalysisAgentLocked(agent.ID)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, status, agent)

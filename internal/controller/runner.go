@@ -78,6 +78,7 @@ type Server struct {
 	agentRefreshMu             sync.Mutex
 	agentLookupIP              func(context.Context, string) ([]net.IPAddr, error)
 	submissionMu               sync.Mutex
+	analysisWakePending        atomic.Bool
 	archiveQueueLoaded         bool
 	archiveLastScan            time.Time
 	archiveChecking            bool
@@ -1144,6 +1145,7 @@ func (s *Server) tryReserveAgentWithPlacementBound(ctx context.Context, nodeID, 
 // A single-agent join picks its target once, then waits for that Agent's
 // capacity for every replica rather than spilling the batch to other Agents.
 func (s *Server) selectBatchAgent(ctx context.Context, rng *rand.Rand) (string, error) {
+	requireRunProcesses := s.config.RunWorkers || s.worker != nil
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1153,7 +1155,7 @@ func (s *Server) selectBatchAgent(ctx context.Context, rng *rand.Rand) (string, 
 		s.state.mu.RLock()
 		var candidates []string
 		for _, agent := range s.state.agents {
-			if !agent.Disabled && !time.Now().Before(s.state.agentAdmissionUntil[agent.ID]) && agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
+			if !agent.Disabled && (!requireRunProcesses || agent.RunProcesses) && !time.Now().Before(s.state.agentAdmissionUntil[agent.ID]) && agentIsOnline(agent, time.Now()) && (agent.Capacity <= 0 || agent.ActiveNodes < agent.Capacity) {
 				candidates = append(candidates, agent.ID)
 			}
 		}

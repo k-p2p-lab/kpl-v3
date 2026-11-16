@@ -8,7 +8,7 @@ function job(payload,state='queued',hostState='queued'){
 }
 function fixture(handler,storage=new Map(),options={}){
  const elements=new Map(),listeners=new Map(),requests=[],timers=new Map(),inputs=[];let nextTimer=0,nextID=0;
- const element=id=>{if(!elements.has(id))elements.set(id,{id,textContent:'',innerHTML:'',hidden:false,disabled:false,open:false,checked:false,indeterminate:false,setAttribute(name,value){this[name]=value;},focus(){document.activeElement=this;},showModal(){this.open=true;},close(){this.open=false;},addEventListener(){}});return elements.get(id);};
+ const element=id=>{if(!elements.has(id))elements.set(id,{id,textContent:'',innerHTML:'',hidden:false,disabled:false,open:false,checked:false,indeterminate:false,listeners:{},setAttribute(name,value){this[name]=value;},focus(){document.activeElement=this;},showModal(){this.open=true;},close(){this.open=false;this.listeners.close?.();},addEventListener(type,callback){this.listeners[type]=callback;}});return elements.get(id);};
  const ids=['selectAgentHosts','agentHostSelection','rebootAgentHosts','clearAgentHosts','viewHostReboot','agentHostStatus','agentHostAvailability','agentHostDialog','agentHostTargets','agentHostDialogSummary','agentHostDialogStatus','confirmAgentHostReboot','closeAgentHostDialog','refreshHostReboot','agentHostDialogError'];
  ids.forEach(element);
  const document={querySelector:selector=>elements.get(selector.slice(1)),querySelectorAll:()=>inputs,addEventListener(type,handler){if(!listeners.has(type))listeners.set(type,[]);listeners.get(type).push(handler);}};
@@ -251,6 +251,102 @@ test('readonly queue inspection does not create a durable reboot submission',asy
  const h=fixture(()=>job(payload,'completed','rebooted'));await h.view.openJob(payload.id);
  assert.equal(h.storage.size,0);assert.equal(h.element('confirmAgentHostReboot').hidden,true);
  h.action('confirmAgentHostReboot');await turn();assert.equal(h.requests.filter(request=>request.options.method==='POST').length,0);
+});
+
+test('only the latest readonly inspection can choose the displayed reboot request',async()=>{
+ const pending=new Map(),h=fixture(path=>new Promise(resolve=>pending.set(path.split('/').at(-1),resolve)));
+ const first=h.view.openJob('host-reboot-first'),second=h.view.openJob('host-reboot-second');
+ pending.get('host-reboot-second')(job({id:'host-reboot-second',targets:[]},'completed'));await second;
+ const summary=h.element('agentHostDialogSummary').textContent;
+ pending.get('host-reboot-first')(job({id:'host-reboot-first',targets:[]},'completed'));await first;
+ assert.equal(h.element('agentHostDialogSummary').textContent,summary);
+ assert.match(summary,/host-reboot-second/);assert.equal(h.storage.size,0);
+ assert.ok(h.requests.every(request=>request.options.method!=='POST'));
+});
+
+for(const action of ['close-button','native-close','selection','new-draft','clear-selection']){
+ test(`a late readonly inspection cannot replace ${action}`,async()=>{
+  let resolve;const h=fixture(()=>new Promise(yes=>resolve=yes));
+  h.view.update([agent()]);h.master(true);h.action('rebootAgentHosts');
+  const pending=h.view.openJob('host-reboot-late');
+  if(action==='close-button')h.action('closeAgentHostDialog');
+  else if(action==='native-close')h.element('agentHostDialog').close();
+  else if(action==='selection')h.change('node-a',false);
+  else if(action==='clear-selection')h.action('clearAgentHosts');
+  else h.action('rebootAgentHosts');
+  const summary=h.element('agentHostDialogSummary').textContent,open=h.element('agentHostDialog').open;
+  resolve(job({id:'host-reboot-late',targets:[]},'completed'));await pending;
+  assert.equal(h.element('agentHostDialogSummary').textContent,summary);
+  assert.equal(h.element('agentHostDialog').open,open);
+  assert.equal(h.storage.size,0);assert.ok(h.requests.every(request=>request.options.method!=='POST'));
+ });
+}
+
+test('late readonly inspection errors do not replace a newer successful status',async()=>{
+ let reject;const h=fixture(path=>path.endsWith('host-reboot-first')?new Promise((_,no)=>reject=no):job({id:'host-reboot-second',targets:[]},'completed'));
+ const first=h.view.openJob('host-reboot-first');await h.view.openJob('host-reboot-second');
+ const summary=h.element('agentHostDialogSummary').textContent,status=h.element('agentHostStatus').textContent;
+ reject(new Error('synthetic stale status error'));await first;
+ assert.equal(h.element('agentHostDialogSummary').textContent,summary);
+ assert.equal(h.element('agentHostStatus').textContent,status);
+});
+
+for(const inspectionTiming of ['before-ack','after-ack']){
+ test(`older readonly inspection cannot replace a valid submission ${inspectionTiming}`,async()=>{
+  let resolveOther,resolveOwn,ownPayload;
+  const h=fixture((path,options)=>{
+   if(options.method==='POST'){ownPayload=JSON.parse(options.body);return new Promise(resolve=>resolveOwn=resolve);}
+   if(path.endsWith('host-reboot-older-inspection'))return new Promise(resolve=>resolveOther=resolve);
+   return job(ownPayload,'completed','rebooted');
+  });
+  h.view.update([agent()]);h.master(true);h.action('rebootAgentHosts');
+  const pending=h.view.openJob('host-reboot-older-inspection');
+  h.action('confirmAgentHostReboot');h.action('confirmAgentHostReboot');
+  const posted=h.requests.find(request=>request.options.method==='POST');assert.ok(posted);
+  const stored=[...h.storage.values()][0];
+  const finishInspection=async()=>{resolveOther(job({id:'host-reboot-older-inspection',targets:[]},'completed'));await pending;};
+  if(inspectionTiming==='before-ack')await finishInspection();
+  resolveOwn(job(ownPayload));await turn();
+  if(inspectionTiming==='after-ack')await finishInspection();
+  assert.match(h.element('agentHostDialogSummary').textContent,new RegExp(ownPayload.id));
+  assert.deepEqual(JSON.parse([...h.storage.values()][0]).payload,JSON.parse(stored).payload);
+  assert.equal(h.requests.filter(request=>request.options.method==='POST').length,1);
+  h.runPoll();await turn();
+  assert.match(h.element('agentHostDialogSummary').textContent,new RegExp(ownPayload.id+' · completed'));
+  assert.equal(h.requests.filter(request=>request.options.method==='POST').length,1);
+ });
+}
+
+test('a rejected draft confirmation does not cancel a newer valid readonly inspection',async()=>{
+ let resolveOther;const h=fixture(()=>new Promise(resolve=>resolveOther=resolve));
+ h.view.update([agent()]);h.master(true);h.action('rebootAgentHosts');
+ const pending=h.view.openJob('host-reboot-inspection');
+ const changed=agent();changed.host.rebootEnabled=false;h.view.update([changed]);
+ h.element('confirmAgentHostReboot').disabled=false;h.action('confirmAgentHostReboot');
+ assert.equal(h.requests.filter(request=>request.options.method==='POST').length,0);
+ assert.match(h.element('agentHostDialogError').textContent,/disabled/);
+ resolveOther(job({id:'host-reboot-inspection',targets:[]},'completed'));await pending;
+ assert.match(h.element('agentHostDialogSummary').textContent,/host-reboot-inspection/);
+});
+
+test('an ignored duplicate submission keeps a later readonly inspection and the original receipt',async()=>{
+ let resolveOwn,resolveOther,ownPayload;
+ const h=fixture((path,options)=>{
+  if(options.method==='POST'){ownPayload=JSON.parse(options.body);return new Promise(resolve=>resolveOwn=resolve);}
+  if(path.endsWith('host-reboot-later-inspection'))return new Promise(resolve=>resolveOther=resolve);
+  return job(ownPayload,'completed','rebooted');
+ });
+ h.view.update([agent()]);h.master(true);h.action('rebootAgentHosts');h.action('confirmAgentHostReboot');
+ const pending=h.view.openJob('host-reboot-later-inspection');
+ h.element('confirmAgentHostReboot').disabled=false;h.action('confirmAgentHostReboot');
+ resolveOther(job({id:'host-reboot-later-inspection',targets:[]},'completed'));await pending;
+ resolveOwn(job(ownPayload));await turn();
+ assert.match(h.element('agentHostDialogSummary').textContent,/host-reboot-later-inspection/);
+ assert.equal(h.requests.filter(request=>request.options.method==='POST').length,1);
+ assert.deepEqual(JSON.parse([...h.storage.values()][0]).payload,ownPayload);
+ h.action('closeAgentHostDialog');h.runPoll();await turn();
+ assert.equal(h.element('agentHostDialog').open,false);
+ assert.equal(JSON.parse([...h.storage.values()][0]).job.state,'completed');
 });
 
 test('failed and interrupted operation errors remain visible as plain text',async()=>{

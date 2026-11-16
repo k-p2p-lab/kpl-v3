@@ -12,12 +12,13 @@ import (
 	"testing"
 )
 
-// This reference was captured from the v9 implementation before binary child
-// transport, indexed churn history, and parallel research projection. Preserve
-// the complete scientific artifact while optimizing its calculation and IPC.
-func TestAnalysisPerformancePreservesVersion9Reference(t *testing.T) {
-	const referenceVersion = 9
-	const referenceSHA256 = "0b884334810a0335337825a949e5376fd0d3b4c65e78a23f882be9a327c296a9"
+// The v9 baseline predates binary child transport and parallel projection:
+// SHA256 0b884334810a0335337825a949e5376fd0d3b4c65e78a23f882be9a327c296a9.
+// An independent complete JSON comparison verified that v10 changes only the
+// analysisVersion field in this fixture. Keep the full artifact regression.
+func TestAnalysisPerformancePreservesVersion10Reference(t *testing.T) {
+	const referenceVersion = 10
+	const referenceSHA256 = "bdbe30bfe387a7c67b603838349e7a6507b0b18ae330a9e1c4b1ee4ec627b1a4"
 	if currentAnalysisVersion != referenceVersion {
 		t.Fatalf("analysis definition changed to v%d; evaluate and replace the v%d scientific reference", currentAnalysisVersion, referenceVersion)
 	}
@@ -51,7 +52,7 @@ func TestAnalysisPerformancePreservesVersion9Reference(t *testing.T) {
 			}
 			actual := fmt.Sprintf("%x", sha256.Sum256(data))
 			if actual != referenceSHA256 {
-				path := filepath.Join(t.TempDir(), "actual-analysis-v9.json")
+				path := filepath.Join(t.TempDir(), "actual-analysis-v10.json")
 				if err := os.WriteFile(path, data, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -61,11 +62,14 @@ func TestAnalysisPerformancePreservesVersion9Reference(t *testing.T) {
 	}
 }
 
-// Membership/churn indexes and parallel message projections must also preserve
-// the original v9 research output, including floating-point reduction order.
-func TestResearchPerformancePreservesVersion9Reference(t *testing.T) {
-	const referenceVersion = 9
-	const referenceSHA256 = "4952d22a7b35053f0b5d0ae2bdf1fbc2ae7b6f1a22e293f22b4159ff7b42a5d1"
+// The original v9 research SHA256 was
+// 4952d22a7b35053f0b5d0ae2bdf1fbc2ae7b6f1a22e293f22b4159ff7b42a5d1.
+// Compensated v10 statistics change seven mean/deviation scalars by at most
+// seven ULP in this fixture; every other JSON value and order was compared.
+// Serial and parallel calculations must preserve the full v10 artifact.
+func TestResearchPerformancePreservesVersion10Reference(t *testing.T) {
+	const referenceVersion = 10
+	const referenceSHA256 = "0c99dc848609b1bcf4208d385a5775d6eba798eb20cb3b2274b70c2cecf6bba6"
 	if currentAnalysisVersion != referenceVersion {
 		t.Fatalf("analysis definition changed to v%d; evaluate and replace the v%d scientific reference", currentAnalysisVersion, referenceVersion)
 	}
@@ -82,7 +86,7 @@ func TestResearchPerformancePreservesVersion9Reference(t *testing.T) {
 			}
 			actual := fmt.Sprintf("%x", sha256.Sum256(data))
 			if actual != referenceSHA256 {
-				path := filepath.Join(t.TempDir(), "actual-research-v9.json")
+				path := filepath.Join(t.TempDir(), "actual-research-v10.json")
 				if err := os.WriteFile(path, data, 0600); err != nil {
 					t.Fatal(err)
 				}

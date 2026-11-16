@@ -102,6 +102,9 @@ func workerSourceHandler(snapshots []*resultSnapshot) workerproc.Handler {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if int64(n) != length {
+			return nil, io.ErrUnexpectedEOF
+		}
 		return workerSourceBytes{Data: buffer[:n], EOF: errors.Is(err, io.EOF) || request.Offset+int64(n) >= file.size}, nil
 	}
 }

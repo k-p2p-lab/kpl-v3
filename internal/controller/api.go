@@ -406,6 +406,7 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.wakeAnalysisAgent(registered.ID)
 	s.writeAgentCapacityHeader(w, registered.ID)
 	writeJSON(w, http.StatusCreated, registered)
 }
@@ -424,6 +425,7 @@ func (s *Server) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.wakeAnalysisAgent(heartbeat.Agent.ID)
 	s.writeAgentCapacityHeader(w, heartbeat.Agent.ID)
 	w.WriteHeader(http.StatusNoContent)
 }

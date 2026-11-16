@@ -61,7 +61,7 @@
     const document = environment.document;
     const timer = environment.setTimeout || setTimeout, clearTimer = environment.clearTimeout || clearTimeout;
     let options, initialized = false, groups = new Map(), draft = null, receipt = null, inspection = null;
-    let submitting = false, polling = false, pollTimer = null, focus = null, unidentifiedAgents = 0;
+    let submitting = false, polling = false, pollTimer = null, focus = null, unidentifiedAgents = 0, inspectionVersion = 0;
     const selected = new Map();
     const element = id => document?.querySelector?.("#" + id);
     const text = (id,value) => { const target=element(id); if(target)target.textContent=value; };
@@ -162,11 +162,11 @@
     }
     function select(nodeId,checked) {
       if(submitting)return;
-      if(!checked){selected.delete(nodeId);render();return;}
+      if(!checked){inspectionVersion++;selected.delete(nodeId);render();return;}
       const group=groups.get(nodeId);
       if(!group||selectionUnavailable(group))return;
       if(selected.size>=128&&!selected.has(nodeId)){notice("Select at most 128 hosts.",true);render();return;}
-      selected.set(nodeId,targetFor(group));
+      inspectionVersion++;selected.set(nodeId,targetFor(group));
       render();
     }
     function show() {
@@ -198,6 +198,7 @@
       if(typeof id==="string")return openJob(id);
       if(submitting||pending()||!selected.size)return;
       const error=selectionError(false);if(error){notice(error,true);return;}
+      inspectionVersion++;
       draft={targets:[...selected.values()].sort((a,b)=>a.nodeId.localeCompare(b.nodeId)).map(target=>({...target,hostname:groups.get(target.nodeId)?.hostname}))};
       receipt=null;inspection=null;text("agentHostDialogError","");renderDialog();show();
     }
@@ -226,6 +227,7 @@
         receipt={version:1,payload:{id,targets:draft.targets.map(({hostname,...target})=>target),confirm:true},uncertain:true};
       }
       const id=receipt.payload.id;
+      inspectionVersion++;
       // Preserve the exact target boot IDs and operation identity before sending.
       // Reloads and uncertain replies may only retry this same payload manually.
       store();submitting=true;text("agentHostDialogError","");render();renderDialog();
@@ -260,14 +262,16 @@
     }
     async function openJob(id) {
       if(!id)return;
+      const version=++inspectionVersion;
       if(receipt?.payload.id===id){draft=null;inspection=null;renderDialog();show();void refresh();return;}
       try{
         const job=await request("/api/v1/agent-hosts/reboot/"+encodeURIComponent(id));
+        if(version!==inspectionVersion)return;
         if(!validJob(job,id))throw new Error("Unexpected host reboot status response.");
         // Inspecting another tab's work must never replace this tab's durable
         // original operation identity after an uncertain submission response.
         inspection=job;draft=null;text("agentHostDialogError","");renderDialog();show();schedulePoll();
-      }catch(error){notice(error.message||"Could not open host reboot status.",true);}
+      }catch(error){if(version===inspectionVersion)notice(error.message||"Could not open host reboot status.",true);}
     }
     function init(configuration) {
       options=configuration;if(initialized)return;initialized=true;
@@ -280,11 +284,12 @@
         const button=event.target.closest?.("#rebootAgentHosts, #clearAgentHosts, #viewHostReboot, #confirmAgentHostReboot, #closeAgentHostDialog, #refreshHostReboot");
         if(!button||button.disabled)return;event.preventDefault();
         if(button.id==="rebootAgentHosts")open();
-        else if(button.id==="clearAgentHosts"){selected.clear();render();}
-        else if(button.id==="viewHostReboot"){draft=null;inspection=null;renderDialog();show();void refresh();}
+        else if(button.id==="clearAgentHosts"){inspectionVersion++;selected.clear();render();}
+        else if(button.id==="viewHostReboot"){inspectionVersion++;draft=null;inspection=null;renderDialog();show();void refresh();}
         else if(button.id==="confirmAgentHostReboot")void submit();
         else if(button.id==="refreshHostReboot")void refresh();
         else{
+          inspectionVersion++;
           element("agentHostDialog")?.close?.();
           inspection=null;schedulePoll();
           const target=element(receipt?"viewHostReboot":"rebootAgentHosts");
@@ -292,7 +297,7 @@
         }
       });
       element("agentHostDialog")?.addEventListener?.("cancel",event=>{if(submitting)event.preventDefault();});
-      element("agentHostDialog")?.addEventListener?.("close",()=>{inspection=null;schedulePoll();});
+      element("agentHostDialog")?.addEventListener?.("close",()=>{inspectionVersion++;inspection=null;schedulePoll();});
       render();if(receipt)void refresh();
     }
     return {init,update,checkbox,beforeRender,afterRender,open,openJob};

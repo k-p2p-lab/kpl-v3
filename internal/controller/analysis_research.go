@@ -161,6 +161,46 @@ func (a *researchAccumulator) observe(e model.TraceEvent) {
 	}
 }
 
+// Keep only constant-size state, including when aggregating many score maps.
+// Scaling prevents overflow; compensation reduces signed cancellation error.
+type finiteMeanAccumulator struct {
+	scale, sum, correction float64
+	count                  int
+}
+
+func (a *finiteMeanAccumulator) add(value float64) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return
+	}
+	if magnitude := math.Abs(value); magnitude > a.scale {
+		ratio := a.scale / magnitude
+		a.sum *= ratio
+		a.correction *= ratio
+		a.scale = magnitude
+	}
+	a.count++
+	if a.scale == 0 {
+		return
+	}
+	x := value / a.scale
+	next := a.sum + x
+	if math.Abs(a.sum) >= math.Abs(x) {
+		a.correction += (a.sum - next) + x
+	} else {
+		a.correction += (x - next) + a.sum
+	}
+	a.sum = next
+}
+
+func (a finiteMeanAccumulator) normalized() float64 {
+	if a.count == 0 {
+		return 0
+	}
+	return (a.sum + a.correction) / float64(a.count)
+}
+
+func (a finiteMeanAccumulator) average() float64 { return a.normalized() * a.scale }
+
 func analysisStats(values []float64) analysisStatistic {
 	finite := make([]float64, 0, len(values))
 	scale := 0.
@@ -175,12 +215,11 @@ func analysisStats(values []float64) analysisStatistic {
 		return out
 	}
 	sort.Float64s(finite)
-	mean := 0.
-	if scale > 0 {
-		for i, v := range finite {
-			mean += (v/scale - mean) / float64(i+1)
-		}
+	average := finiteMeanAccumulator{scale: scale}
+	for _, value := range finite {
+		average.add(value)
 	}
+	mean := average.normalized()
 	variance := 0.
 	if scale > 0 {
 		for _, v := range finite {
@@ -189,10 +228,18 @@ func analysisStats(values []float64) analysisStatistic {
 		}
 	}
 	out.Average = numberPointer(mean * scale)
-	out.Deviation = numberPointer(math.Sqrt(variance) * scale)
+	// Every normalized sample lies in [-1, 1], so its population variance
+	// cannot exceed one. Roundoff above that bound can otherwise overflow a
+	// representable deviation when scale is near MaxFloat64.
+	out.Deviation = numberPointer(math.Sqrt(math.Min(variance, 1)) * scale)
 	median := finite[len(finite)/2]
 	if len(finite)%2 == 0 {
-		median = finite[len(finite)/2-1]/2 + median/2
+		lower := finite[len(finite)/2-1]
+		if math.Abs(lower) <= math.MaxFloat64/2 && math.Abs(median) <= math.MaxFloat64/2 {
+			median = (lower + median) / 2
+		} else {
+			median = lower/2 + median/2
+		}
 	}
 	out.Median = numberPointer(median)
 	return out

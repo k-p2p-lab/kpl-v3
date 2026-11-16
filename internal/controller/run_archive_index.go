@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -301,6 +303,29 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 			}
 			s.archiveProgress()
 		}
+		if err == nil {
+			// Only validated metadata may become the authoritative local index.
+			// Validate the exact bytes that will be published, including legacy
+			// archives without a manifest; a repaired remote can then be retried.
+			var result savedResult
+			if decodeErr := json.Unmarshal(small["experiment.json"], &result); decodeErr != nil {
+				err = fmt.Errorf("decode archive experiment.json: %w", decodeErr)
+			} else if result.ID != id || result.State == "" {
+				err = errors.New("archive experiment.json has an invalid ID or state")
+			}
+		}
+		if data, exists := small[resultNoteFile]; err == nil && exists {
+			if len(data) > resultNoteFileLimit {
+				err = errors.New("archive saved note is too large")
+			} else if _, decodeErr := decodeScopedNoteJSON(bytes.NewReader(data), id, false); decodeErr != nil {
+				err = fmt.Errorf("decode archive note: %w", decodeErr)
+			}
+		}
+		if data, exists := small[analysisJobFile]; err == nil && exists {
+			if _, decodeErr := decodeAnalysisJobJSON(bytes.NewReader(data), id); decodeErr != nil {
+				err = fmt.Errorf("decode archive analysis job: %w", decodeErr)
+			}
+		}
 		if err == nil && legacy {
 			for _, name := range append(append([]string{}, resultSourceFiles[:]...), analysisJobFile, analysisResultFile, analysisSummaryFile, analysisArtifactFile(analysisResultFile, 1), analysisArtifactFile(analysisSummaryFile, 1)) {
 				file, readErr := openResultFile(remote, name)
@@ -358,7 +383,7 @@ func (s *Server) importArchivedRuns(ctx context.Context) error {
 			if importing != nil && !errors.Is(importing, os.ErrNotExist) {
 				return importing
 			}
-			if legacy && existingMetadata == nil && errors.Is(importing, os.ErrNotExist) {
+			if existingMetadata == nil && errors.Is(importing, os.ErrNotExist) {
 				return nil
 			}
 			// Persist intent before creating metadata so a crash halfway through

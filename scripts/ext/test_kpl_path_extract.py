@@ -221,6 +221,64 @@ class PathExtractorCLITests(unittest.TestCase):
         self.assertEqual(float(messages[0]["mean_hop"]), 2.0)
         self.assertEqual(self.snapshot(source), original)
 
+    def archive_input(self):
+        source = self.chain_input()
+        archived = self.root / RUN_ID
+        source.rename(archived)
+        manifest = {"version": 1, "runId": RUN_ID, "files": {}, "logs": {}}
+        for name in ("events.jsonl", "observations.jsonl"):
+            data = (archived / name).read_bytes()
+            manifest["logs"][name] = [{"object": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}]
+        manifest["files"]["experiment.json"] = {"object": "experiment.json"}
+        return archived, manifest
+
+    def test_explicit_archive_verification_requires_every_expected_hash(self):
+        source, original_manifest = self.archive_input()
+        cases = ("empty", "missing", "partial", "null", "malformed", "uppercase", "wrong")
+        for kind in cases:
+            with self.subTest(kind=kind):
+                manifest = json.loads(json.dumps(original_manifest))
+                entry = manifest["logs"]["observations.jsonl" if kind == "partial" else "events.jsonl"][0]
+                if kind in ("missing", "partial"):
+                    entry.pop("sha256")
+                elif kind == "empty":
+                    entry["sha256"] = ""
+                elif kind == "null":
+                    entry["sha256"] = None
+                elif kind == "malformed":
+                    entry["sha256"] = "not-a-sha256"
+                elif kind == "uppercase":
+                    entry["sha256"] = entry["sha256"].upper()
+                else:
+                    entry["sha256"] = "0" * 64
+                (source / ".kpl-archive.json").write_text(json.dumps(manifest))
+                before = self.snapshot(source)
+                result, output = self.extract(source, "--verify-archive-sha256", "--list-sources")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(result.stderr, r"SHA-256|archive object/size/hash")
+                self.assertFalse(output.exists())
+                self.assertEqual(self.snapshot(source), before)
+                if kind in ("empty", "missing", "partial", "null", "wrong"):
+                    legacy, output = self.extract(source, "--list-sources")
+                    self.assert_success(legacy)
+                    self.assertFalse(output.exists())
+
+    def test_archive_verification_keeps_scientific_outputs_unchanged(self):
+        source, manifest = self.archive_input()
+        (source / ".kpl-archive.json").write_text(json.dumps(manifest))
+        before = self.snapshot(source)
+        plain, plain_out = self.extract(source, "--workers", "1")
+        verified, verified_out = self.extract(source, "--workers", "1", "--verify-archive-sha256")
+        self.assert_success(plain)
+        self.assert_success(verified)
+        for name in CSV_FILES:
+            self.assertEqual(self.csv_bytes(plain_out / name), self.csv_bytes(verified_out / name), name)
+        unverified = json.loads((plain_out / "manifest.json").read_text())
+        confirmed = json.loads((verified_out / "manifest.json").read_text())
+        for key in ("run_id", "counts", "event_type_counts", "input_experiment", "definitions"):
+            self.assertEqual(unverified[key], confirmed[key], key)
+        self.assertEqual(self.snapshot(source), before)
+
 
 if __name__ == "__main__":
     unittest.main()

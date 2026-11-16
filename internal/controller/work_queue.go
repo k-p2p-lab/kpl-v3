@@ -182,7 +182,7 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 			continue
 		}
 		for _, worker := range s.analysisGroupWorkers {
-			if used[worker.url] {
+			if used[worker.url] || !s.analysisWorkerEligibleLocked(worker.url, worker.agent) {
 				continue
 			}
 			used[worker.url] = true
@@ -201,6 +201,50 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 		}
 	}
 	return ready
+}
+
+// Agent status delivery must not wait for a lifecycle owner holding cancelMu.
+// Coalesce contended changes; the callback scans only the existing frozen pool.
+func (s *Server) wakeAnalysisAgent(agentID string) {
+	if s.cancelMu.TryLock() {
+		s.wakeAnalysisAgentLocked(agentID)
+		s.cancelMu.Unlock()
+		return
+	}
+	if s.analysisWakePending.CompareAndSwap(false, true) {
+		go func() {
+			s.cancelMu.Lock()
+			// Clear before scanning so a change after this point schedules the
+			// next scan instead of getting lost behind this wake's completion.
+			s.analysisWakePending.Store(false)
+			s.wakeAnalysisAgentLocked("")
+			s.cancelMu.Unlock()
+		}()
+	}
+}
+
+// Caller holds cancelMu. Empty agentID means coalesced status changes.
+func (s *Server) wakeAnalysisAgentLocked(agentID string) {
+	if s.shuttingDown || !s.analysisGroupReady || s.summaryRefreshActive || len(s.queueCleanup) != 0 {
+		return
+	}
+	for _, worker := range s.analysisGroupWorkers {
+		if worker.agent == nil || agentID != "" && worker.agent.ID != agentID {
+			continue
+		}
+		pending, used := false, false
+		for _, slot := range s.experimentQueue {
+			if !slot.resultAnalysis {
+				break
+			}
+			pending = pending || !slot.opened
+			used = used || slot.opened && slot.analysisWorkerURL == worker.url
+		}
+		if pending && !used && s.analysisWorkerEligibleLocked(worker.url, worker.agent) {
+			s.updateQueuePositionsLocked()
+			return
+		}
+	}
 }
 
 func (s *Server) removeWorkLocked(slot *workSlot) {

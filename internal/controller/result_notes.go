@@ -81,8 +81,12 @@ func decodeScopedNote(file resultFile, id string, group bool) (resultNote, error
 	if file.size > resultNoteFileLimit {
 		return resultNote{}, errors.New("saved note is too large")
 	}
+	return decodeScopedNoteJSON(io.NewSectionReader(file.file, 0, file.size), id, group)
+}
+
+func decodeScopedNoteJSON(reader io.Reader, id string, group bool) (resultNote, error) {
 	var note resultNote
-	decoder := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size))
+	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&note); err != nil {
 		return resultNote{}, err
 	}

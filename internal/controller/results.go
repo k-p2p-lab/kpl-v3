@@ -1194,14 +1194,18 @@ func (s *Server) releaseResultArchiveSlot() {
 	<-s.resultArchiveSlots
 }
 
-func (s *Server) finishResultArchiveFlight(runID string, flight *resultArchiveFlight, candidate *resultArchiveInfo) {
+func (s *Server) finishResultArchiveFlight(ctx context.Context, runID string, flight *resultArchiveFlight, candidate *resultArchiveInfo) (publicationErr error) {
 	if candidate != nil {
 		// A size inspection may finish after deletion. Coordinate with the
 		// deletion marker so it cannot repopulate the removed result's cache.
-		s.state.persistMu.Lock()
-		defer s.state.persistMu.Unlock()
-		if deleted, err := s.state.resultDeletedLocked(runID); err != nil || deleted {
+		if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+			publicationErr = err
 			candidate = nil
+		} else {
+			defer s.state.persistMu.Unlock()
+			if deleted, err := s.state.resultDeletedLocked(runID); err != nil || deleted {
+				candidate = nil
+			}
 		}
 	}
 	s.resultArchiveMu.Lock()
@@ -1213,6 +1217,7 @@ func (s *Server) finishResultArchiveFlight(runID string, flight *resultArchiveFl
 		delete(s.resultArchiveFlights, runID)
 		close(flight.done)
 	}
+	return publicationErr
 }
 
 // prepareResultArchive caches only the exact byte count, not the archive. A
@@ -1252,7 +1257,7 @@ func (s *Server) prepareResultArchiveInfo(ctx context.Context, snapshot *resultS
 		s.resultArchiveFlights[runID] = flight
 		s.resultArchiveMu.Unlock()
 		if err := s.acquireResultArchiveSlot(ctx); err != nil {
-			s.finishResultArchiveFlight(runID, flight, nil)
+			s.finishResultArchiveFlight(ctx, runID, flight, nil)
 			return resultArchiveInfo{}, err
 		}
 
@@ -1275,9 +1280,9 @@ func (s *Server) prepareResultArchiveInfo(ctx context.Context, snapshot *resultS
 		}
 
 		if err == nil {
-			s.finishResultArchiveFlight(runID, flight, &candidate)
+			err = s.finishResultArchiveFlight(ctx, runID, flight, &candidate)
 		} else {
-			s.finishResultArchiveFlight(runID, flight, nil)
+			s.finishResultArchiveFlight(ctx, runID, flight, nil)
 		}
 		if err != nil {
 			return resultArchiveInfo{}, err

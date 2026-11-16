@@ -1,8 +1,10 @@
 package master
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -38,14 +40,16 @@ func (a *App) printVersion(version string, args []string, configured bool) error
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(report)
 	}
-	fmt.Fprintf(a.Stdout, "kpl %s\nSource revision: %s\nModified source: %s\nGo version: %s\nExecutable SHA256: %s\n", report.CLI.Version, report.CLI.Revision, sourceModifiedField(report.CLI), report.CLI.GoVersion, knownVersionField(report.CLI.BinaryHash))
+	var output bytes.Buffer
+	fmt.Fprintf(&output, "kpl %s\nSource revision: %s\nModified source: %s\nGo version: %s\nExecutable SHA256: %s\n", report.CLI.Version, report.CLI.Revision, sourceModifiedField(report.CLI), report.CLI.GoVersion, knownVersionField(report.CLI.BinaryHash))
 	if report.CLI.BuildTime != "" {
-		fmt.Fprintf(a.Stdout, "Built at: %s\n", report.CLI.BuildTime)
+		fmt.Fprintf(&output, "Built at: %s\n", report.CLI.BuildTime)
 	}
 	if configured {
-		fmt.Fprintf(a.Stdout, "Configured image: %s\nConfigured registry digest: %s\n", knownVersionField(report.ConfiguredImage), knownVersionField(report.ImageDigest))
+		fmt.Fprintf(&output, "Configured image: %s\nConfigured registry digest: %s\n", knownVersionField(report.ConfiguredImage), knownVersionField(report.ImageDigest))
 	}
-	return nil
+	_, err := io.Copy(a.Stdout, &output)
+	return err
 }
 
 func knownVersionField(value string) string {

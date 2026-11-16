@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
 var errSubmissionConflict = errors.New("submission key already belongs to a different request")
@@ -48,7 +50,9 @@ func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, coun
 	}
 	hash := sha256.Sum256(append(prefix, raw...))
 	digest := hex.EncodeToString(hash[:])
-	s.submissionMu.Lock()
+	if err := contextlock.Lock(ctx, &s.submissionMu); err != nil {
+		return model.Experiment{}, err
+	}
 	defer s.submissionMu.Unlock()
 	path := filepath.Join(s.config.DataDir, "run-submissions")
 	if err := os.MkdirAll(path, 0700); err != nil {
@@ -76,6 +80,14 @@ func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, coun
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return model.Experiment{}, e
 	} else {
+		// Definite input rejection has not admitted work. Bind the key only
+		// after these checks; storage failures after binding remain replayable.
+		if count < 1 || count > maxScenarioRepetitions {
+			return model.Experiment{}, fmt.Errorf("repetitions must be an integer between 1 and %d", maxScenarioRepetitions)
+		}
+		if _, err := scenario.Parse(raw); err != nil {
+			return model.Experiment{}, err
+		}
 		receipt = submissionReceipt{Version: 1, Digest: digest, BatchID: id}
 		if e = writeAnalysisJSON(root, name+".json", receipt); e != nil {
 			return model.Experiment{}, e
@@ -93,8 +105,13 @@ func (s *Server) submitScenarioFromLibrary(ctx context.Context, raw []byte, coun
 			return model.Experiment{}, e
 		}
 	}
-	s.cancelMu.Lock()
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+		return model.Experiment{}, err
+	}
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		s.cancelMu.Unlock()
+		return model.Experiment{}, err
+	}
 	err = s.rollbackBatchExtensionLocked(id)
 	if err == nil {
 		var deleted bool

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 )
 
 const currentRunsDirectory = "current-run"
@@ -93,11 +95,15 @@ func readRunArchive(root *os.Root, id string) (runArchiveManifestData, error) {
 			return manifest, errors.New("invalid archived log")
 		}
 		seen := map[string]bool{}
+		segments := map[string]bool{}
 		for _, file := range files {
-			if !safeArchiveObject(file.Object) || file.Size < 0 || seen[file.Object] || file.Segment != "" && !logSegment(file.Segment, name) {
+			if !safeArchiveObject(file.Object) || file.Size < 0 || seen[file.Object] || file.Segment != "" && (!logSegment(file.Segment, name) || segments[file.Segment]) {
 				return manifest, errors.New("invalid archived segment")
 			}
 			seen[file.Object] = true
+			if file.Segment != "" {
+				segments[file.Segment] = true
+			}
 		}
 	}
 	return manifest, nil
@@ -404,7 +410,9 @@ func (s *Server) resolveArchivedRead(ctx context.Context, id string, files []res
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return nil, err
+	}
 	deleted, err := s.state.resultDeletedLocked(id)
 	quarantined := false
 	if err == nil && !deleted {

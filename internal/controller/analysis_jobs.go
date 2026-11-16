@@ -16,7 +16,7 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
-const currentAnalysisVersion = 9
+const currentAnalysisVersion = 10
 const analysisJobLimit = 32
 const analysisJobFile = "analysis-job.json"
 const analysisResultFile = "analysis-result.json"
@@ -210,27 +210,35 @@ func (s *Server) loadAnalysisJob(id string) (*analysisJob, error) {
 	if file.size > resultMetadataLimit {
 		return nil, errors.New("analysis job metadata is too large")
 	}
+	status, err := decodeAnalysisJobJSON(io.NewSectionReader(file.file, 0, file.size), id)
+	if err != nil {
+		return nil, err
+	}
+	job := &analysisJob{status: status}
+	s.analysisJobs[id] = job
+	return job, nil
+}
+
+func decodeAnalysisJobJSON(reader io.Reader, id string) (analysisJobStatus, error) {
 	var status analysisJobStatus
-	decoder := json.NewDecoder(io.NewSectionReader(file.file, 0, file.size))
+	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&status); err != nil {
-		return nil, fmt.Errorf("read analysis job: %w", err)
+		return status, fmt.Errorf("read analysis job: %w", err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, errors.New("analysis job metadata contains trailing data")
+		return status, errors.New("analysis job metadata contains trailing data")
 	}
 	if status.Version != 1 || status.RunID != id || !validResultID(status.ID) || status.SavedAnalysisID != "" && !validResultID(status.SavedAnalysisID) || status.ArtifactSlot < 0 || status.ArtifactSlot > 1 {
-		return nil, errors.New("invalid analysis job metadata")
+		return status, errors.New("invalid analysis job metadata")
 	}
 	switch status.State {
 	case "queued", "running":
 		status.State, status.Phase, status.Error = "interrupted", "interrupted", "Controller restarted before analysis completed. Retry to start again."
 	case "completed", "failed", "interrupted", "canceled":
 	default:
-		return nil, errors.New("invalid analysis job state")
+		return status, errors.New("invalid analysis job state")
 	}
-	job := &analysisJob{status: status}
-	s.analysisJobs[id] = job
-	return job, nil
+	return status, nil
 }
 
 func (s *Server) analysisJobStatus(id string) (analysisJobStatus, error) {

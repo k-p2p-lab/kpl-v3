@@ -177,6 +177,7 @@ func WorkerFactory(ctx context.Context, kind string, bootstrap json.RawMessage, 
 	var runMu sync.Mutex
 	var cancel context.CancelFunc
 	started := false
+	cancelRequested := false
 	return func(callCtx context.Context, method string, input json.RawMessage) (any, error) {
 		switch method {
 		case "placement-draw":
@@ -193,6 +194,7 @@ func WorkerFactory(ctx context.Context, kind string, bootstrap json.RawMessage, 
 			return rng.Int63(), nil
 		case "cancel":
 			runMu.Lock()
+			cancelRequested = true
 			if cancel != nil {
 				cancel()
 			}
@@ -207,6 +209,9 @@ func WorkerFactory(ctx context.Context, kind string, bootstrap json.RawMessage, 
 			started = true
 			runCtx, stop := context.WithCancel(callCtx)
 			cancel = stop
+			if cancelRequested {
+				stop()
+			}
 			client.ctx = callCtx
 			runMu.Unlock()
 			defer stop()

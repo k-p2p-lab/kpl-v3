@@ -214,7 +214,10 @@
                 !["queued", "running"].includes(job.state) &&
                 (job.state !== "completed" || job.stale)
               )
-                job = await request(path, { method: "POST" }, signal);
+                job = await request(path, {
+                  method: "POST", headers: {"Content-Type": "application/json"},
+                  body: JSON.stringify({expectedAnalysis: {id: job.id || "", state: job.state || "idle"}}),
+                }, signal);
               if (signal.aborted) return;
               onJob(job);
               e.job = job;

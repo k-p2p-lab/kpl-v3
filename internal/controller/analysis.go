@@ -139,6 +139,9 @@ func scanAnalysisFile(ctx context.Context, file resultFile, consume func([]byte)
 	if file.file == nil && file.readAt == nil && len(file.parts) == 0 {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	reportAnalysisProgress(ctx, file.name, 0)
 	reader := analysisProgressReader{Reader: file.reader(), report: func(n int64) { reportAnalysisProgress(ctx, file.name, n) }}
 	scanner := bufio.NewScanner(reader)

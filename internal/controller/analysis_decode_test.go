@@ -163,6 +163,37 @@ func TestDecodedAnalysisRetainsEarliestCrossBatchError(t *testing.T) {
 	}
 }
 
+func TestDecodedAnalysisCancellationPrecedesFollowingMalformedRow(t *testing.T) {
+	for _, validRows := range []int{1, 2, 255, 256, 257} {
+		var input strings.Builder
+		for index := 1; index <= validRows; index++ {
+			fmt.Fprintf(&input, "{\"index\":%d}\n", index)
+		}
+		input.WriteString("invalid-json\n")
+		file := decodedAnalysisTestFile("events.jsonl", input.String())
+		for _, workers := range []int{1, 2, 4, 8} {
+			t.Run(fmt.Sprintf("rows_%d/workers_%d", validRows, workers), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				consumed := 0
+				err := scanDecodedAnalysisFileWithWorkers(ctx, file, workers, func(value struct{ Index int }) error {
+					consumed++
+					if value.Index != consumed {
+						t.Fatalf("source order changed: got %d, want %d", value.Index, consumed)
+					}
+					if consumed == validRows {
+						cancel()
+					}
+					return nil
+				})
+				if !errors.Is(err, context.Canceled) || consumed != validRows {
+					t.Fatalf("later parse error replaced cancellation: workers=%d consumed=%d/%d error=%v", workers, consumed, validRows, err)
+				}
+			})
+		}
+	}
+}
+
 func TestDecodedAnalysisRetainsScannerLimitAndEarlierConsumerFailure(t *testing.T) {
 	file := decodedAnalysisTestFile("observations.jsonl", "{\"index\":1}\n{\"index\":2,\"padding\":\""+strings.Repeat("x", 16<<20)+"\"}\n")
 	type row struct {
@@ -185,6 +216,33 @@ func TestDecodedAnalysisRetainsScannerLimitAndEarlierConsumerFailure(t *testing.
 type decodedAnalysisFailingReader struct {
 	data []byte
 	err  error
+}
+
+type decodedAnalysisCanceledReadProbe struct {
+	calls atomic.Int32
+}
+
+func (reader *decodedAnalysisCanceledReadProbe) ReadAt([]byte, int64) (int, error) {
+	reader.calls.Add(1)
+	return 0, errors.New("unexpected read after cancellation")
+}
+
+func TestDecodedAnalysisAlreadyCanceledDoesNotStartSourceRead(t *testing.T) {
+	for _, workers := range []int{1, 2, 4, 8} {
+		t.Run(fmt.Sprint(workers), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			reader := new(decodedAnalysisCanceledReadProbe)
+			file := resultFile{name: "events.jsonl", size: 1, readAt: reader}
+			err := scanDecodedAnalysisFileWithWorkers(ctx, file, workers, func(struct{}) error {
+				t.Fatal("canceled scan consumed a row")
+				return nil
+			})
+			if !errors.Is(err, context.Canceled) || reader.calls.Load() != 0 {
+				t.Fatalf("already-canceled scan started source I/O: workers=%d reads=%d error=%v", workers, reader.calls.Load(), err)
+			}
+		})
+	}
 }
 
 func (reader decodedAnalysisFailingReader) ReadAt(p []byte, offset int64) (int, error) {
@@ -230,6 +288,34 @@ func TestDecodedAnalysisPreservesSourceReadErrors(t *testing.T) {
 			if fmt.Sprint(err) != fmt.Sprint(baselineErr) || errors.Is(err, sourceFailure) != errors.Is(baselineErr, sourceFailure) || !reflect.DeepEqual(got, expected) {
 				t.Fatalf("%d workers, failAt=%d: read/callback outcome changed: rows=%d error=%v, want rows=%d error=%v", workers, failAt, len(got), err, len(expected), baselineErr)
 			}
+		}
+	}
+}
+
+func TestDecodedAnalysisFinalCancellationRetainsSourceReadFailure(t *testing.T) {
+	for _, validRows := range []int{1, 256, 257} {
+		var input strings.Builder
+		for index := 1; index <= validRows; index++ {
+			fmt.Fprintf(&input, "{\"index\":%d}\n", index)
+		}
+		sourceFailure := fmt.Errorf("source disconnected: %w", io.ErrUnexpectedEOF)
+		file := resultFile{name: "events.jsonl", size: int64(input.Len() + 1), readAt: decodedAnalysisFailingReader{data: []byte(input.String()), err: sourceFailure}}
+		for _, workers := range []int{1, 2, 4, 8} {
+			t.Run(fmt.Sprintf("rows_%d/workers_%d", validRows, workers), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				consumed := 0
+				err := scanDecodedAnalysisFileWithWorkers(ctx, file, workers, func(value struct{ Index int }) error {
+					consumed++
+					if consumed == validRows {
+						cancel()
+					}
+					return nil
+				})
+				if !errors.Is(err, sourceFailure) || consumed != validRows {
+					t.Fatalf("final cancellation replaced source read failure: workers=%d consumed=%d/%d error=%v", workers, consumed, validRows, err)
+				}
+			})
 		}
 	}
 }

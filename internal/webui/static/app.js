@@ -364,7 +364,8 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...fetchOptions, headers, credentials: "same-origin" });
   if (response.status === 401) redirectToLogin();
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: response.statusText }));
+    const body = await response.json().catch(() => null);
+    const error = body && typeof body === "object" && !Array.isArray(body) ? body : {};
     const failure = new Error(error.error || response.statusText);
     failure.status = response.status;
     if (typeof error.code === "string") failure.code = error.code;
@@ -2790,10 +2791,13 @@ function setupTopologyControls() {
 }
 
 function scenarioSubmissionKey(payload) {
- let previous; try {previous=JSON.parse(sessionStorage.getItem("kpl.pending-submission"))} catch {}
- if(previous?.payload===payload&&previous.key)return previous.key;
+ // Restore once per page; null records a receipt already confirmed here.
+ let previous=state.scenarioSubmissionReceipt;
+ if(previous===undefined)try {previous=JSON.parse(sessionStorage.getItem("kpl.pending-submission"))} catch {}
+ if(previous?.payload===payload&&previous.key){state.scenarioSubmissionReceipt=previous;return previous.key;}
  const key=globalThis.crypto?.randomUUID?.() || `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
- try {sessionStorage.setItem("kpl.pending-submission",JSON.stringify({payload,key}))} catch {}
+ state.scenarioSubmissionReceipt={payload,key};
+ try {sessionStorage.setItem("kpl.pending-submission",JSON.stringify(state.scenarioSubmissionReceipt))} catch {}
  return key;
 }
 
@@ -2833,6 +2837,10 @@ async function submitScenarioRun() {
       headers: { "Content-Type": "application/json", "Idempotency-Key": submissionKey },
       body: payload,
     }, "run");
+    if (typeof run?.id !== "string" || !run.id) {
+      throw new Error("Unexpected experiment response. Keep the scenario and Runs unchanged and choose Run again to confirm the submission.");
+    }
+    state.scenarioSubmissionReceipt=null;
     try {sessionStorage.removeItem("kpl.pending-submission")} catch {}
     if (state.scenarioEditorVersion === editorVersion && $("#scenarioDialog").open) {
       $("#scenarioDialog").close();

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function fixture({ request = async () => [], render = async () => {} } = {}) {
+function fixture({ request = async () => [], render = async () => {}, schedule = setTimeout, cancelTimer = clearTimeout } = {}) {
   const elements = new Map(), statuses = [];
   let parses = 0;
   const element = selector => {
@@ -15,8 +15,9 @@ function fixture({ request = async () => [], render = async () => {} } = {}) {
     return elements.get(selector);
   };
   const sandbox = {
-    AbortController, DOMException, setTimeout, clearTimeout,
+    AbortController, DOMException, setTimeout:schedule, clearTimeout:cancelTimer,
     KPLResearch: { labels: { frt: 'First receipt' } },
+    KPLResultImages: { jobDescription: job => job.state },
     KPLResearchCompare: { buildCharts: () => [] },
     KPLResearchFiles: { parseImport() {
       parses++;
@@ -32,6 +33,120 @@ function fixture({ request = async () => [], render = async () => {} } = {}) {
   return { element, statuses, ui, parses: () => parses };
 }
 const settled = () => new Promise(resolve => setImmediate(resolve));
+
+async function selectSavedComparison(fixture) {
+  fixture.element('#loadResearchRuns').listeners.click();
+  await settled();
+  fixture.element('#researchRuns').querySelectorAll = () => [{
+    dataset:{researchRow:'0'},
+    querySelector:selector=>({
+      'input[type="checkbox"]':{checked:true},
+      '[data-field="series"]':{value:'Series'},
+      '[data-field="case"]':{value:'Case'},
+      '[data-field="params"]':{value:''},
+    })[selector],
+  }];
+}
+
+for (const state of ['idle', 'completed', 'failed', 'interrupted', 'canceled']) {
+  test(`comparison admission pins the observed ${state} analysis attempt`, async () => {
+    const observed = {runId:'run', id:state === 'idle' ? '' : 'observed', state, stale:state === 'completed'};
+    let posts = 0, rendered = 0;
+    const f = fixture({
+      request:async(url, options)=>{
+        if (url === '/api/v1/results') return [{id:'run', name:'Run', state:'completed'}];
+        if (options.method === 'POST') {
+          posts++;
+          assert.equal(options.headers['Content-Type'], 'application/json');
+          assert.deepEqual(JSON.parse(options.body), {expectedAnalysis:{id:observed.id, state}});
+          return {runId:'run', id:'confirmed', state:'completed'};
+        }
+        if (url.includes('/summary?')) return {result:{id:'run'}, analysisId:'confirmed'};
+        return observed;
+      },
+      render:async()=>{ rendered++; },
+    });
+    await selectSavedComparison(f);
+    f.element('#drawResearchCompare').listeners.click();
+    await settled();
+    assert.equal(posts, 1);
+    assert.equal(rendered, 1, f.statuses.at(-1));
+  });
+}
+
+test('comparison does not admit another attempt after the observed analysis changes', async () => {
+  const observed = {runId:'run', id:'', state:'idle'};
+  const current = {runId:'run', id:'external-fast-failure', state:'failed'};
+  let posts = 0, admitted = 0, summaries = 0, rendered = 0;
+  const f = fixture({
+    request:async(url, options)=>{
+      if (url === '/api/v1/results') return [{id:'run', name:'Run', state:'completed'}];
+      if (options.method === 'POST') {
+        posts++;
+        const expected = options.body && JSON.parse(options.body).expectedAnalysis;
+        // Match the Controller's optional-expectation compatibility contract.
+        if (expected && (expected.id !== current.id || expected.state !== current.state)) {
+          throw Object.assign(new Error('Analysis attempt changed; refresh its status before retrying.'),
+            {status:409, code:'analysis-attempt-changed'});
+        }
+        admitted++;
+        return {runId:'run', id:'unobserved-retry', state:'completed'};
+      }
+      if (url.includes('/summary?')) { summaries++; return {result:{id:'run'}, analysisId:'unobserved-retry'}; }
+      return observed;
+    },
+    render:async()=>{ rendered++; },
+  });
+  await selectSavedComparison(f);
+  f.element('#drawResearchCompare').listeners.click();
+  await settled();
+  assert.equal(posts, 1);
+  assert.equal(admitted, 0, 'a delayed comparison overwrote the newly failed attempt');
+  assert.equal(summaries, 0);
+  assert.equal(rendered, 0);
+  assert.match(f.statuses.at(-1), /attempt changed; refresh/);
+});
+
+for (const state of ['running', 'queued', 'completed']) {
+  test(`comparison joins an existing ${state} analysis without another admission`, async () => {
+    let posts = 0, rendered = 0, reads = 0;
+    const f = fixture({
+      schedule:setImmediate, cancelTimer:clearImmediate,
+      request:async(url, options)=>{
+        if (url === '/api/v1/results') return [{id:'run', name:'Run', state:'completed'}];
+        if (options.method === 'POST') posts++;
+        if (url.includes('/summary?')) return {result:{id:'run'}, analysisId:'existing'};
+        return {runId:'run', id:'existing', state:reads++ === 0 ? state : 'completed'};
+      },
+      render:async()=>{ rendered++; },
+    });
+    await selectSavedComparison(f);
+    f.element('#drawResearchCompare').listeners.click();
+    for (let attempt=0; attempt<4 && !rendered; attempt++) await settled();
+    assert.equal(posts, 0);
+    assert.equal(rendered, 1, f.statuses.at(-1));
+  });
+}
+
+for (const failure of [Object.assign(new Error('synthetic missing job'), {status:404}), new TypeError('synthetic transport failure')]) {
+  test(`comparison stops after ${failure.status === 404 ? 'a missing job' : 'a transport failure'} without submitting analysis`, async () => {
+    let posts = 0, rendered = 0;
+    const f = fixture({
+      request:async(url, options)=>{
+        if (url === '/api/v1/results') return [{id:'run', name:'Run', state:'completed'}];
+        if (options.method === 'POST') posts++;
+        throw failure;
+      },
+      render:async()=>{ rendered++; },
+    });
+    await selectSavedComparison(f);
+    f.element('#drawResearchCompare').listeners.click();
+    await settled();
+    assert.equal(posts, 0);
+    assert.equal(rendered, 0);
+    assert.equal(f.statuses.at(-1), failure.message);
+  });
+}
 
 test('clearing the active analysis releases message options while retaining imported files', async () => {
   const { ui, element } = fixture();

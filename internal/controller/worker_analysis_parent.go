@@ -263,11 +263,19 @@ func (s *Server) computeAssignedAnalysis(ctx context.Context, slot *workSlot, in
 	if slot.analysisAgent == nil {
 		return nil, analysisProcessResult{}, errors.New("remote analysis requires an assigned Agent identity")
 	}
+	if err := s.checkAnalysisWorkerAdmission(ctx, slot.analysisWorkerURL, slot.analysisAgent); err != nil {
+		return nil, analysisProcessResult{}, err
+	}
 	if err := s.trackAnalysisWorker(ctx, slot.analysisWorkerURL, *slot.analysisAgent); err != nil {
 		return nil, analysisProcessResult{}, err
 	}
 	source := s.remoteAnalysisSnapshotSource(snapshots)
-	artifacts, result, err := computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.config.AnalysisAgentToken, input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond, s.config.AnalysisPrefetchMiB)
+	var artifacts *workerAnalysisArtifacts
+	var result analysisProcessResult
+	err := s.checkAnalysisWorkerAdmission(ctx, slot.analysisWorkerURL, slot.analysisAgent)
+	if err == nil {
+		artifacts, result, err = computeRemoteAnalysis(ctx, slot.analysisWorkerURL, s.config.AnalysisAgentToken, input, root, source, progress, metadata, s.config.AnalysisTransferMiBPerSecond, s.config.AnalysisPrefetchMiB)
+	}
 	if !errors.Is(err, errRemoteAnalysisCleanupUnconfirmed) {
 		err = errors.Join(err, s.clearAnalysisWorker(slot.analysisWorkerURL))
 	}

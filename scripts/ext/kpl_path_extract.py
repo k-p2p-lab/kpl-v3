@@ -175,6 +175,8 @@ def locate_inputs(args: argparse.Namespace) -> tuple[list[Source], list[Source],
                     size = item.get("size")
                     sha = item.get("sha256", "")
                     segment = item.get("segment", "")
+                    if args.verify_archive_sha256 and (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+                        raise ValueError(f"Archive segment SHA-256 is missing or invalid for verification: {logical}: {obj!r}")
                     if (not isinstance(obj, str) or not obj or
                             Path(obj).name != obj or obj.startswith(".") or "\\" in obj or
                             not isinstance(size, int) or isinstance(size, bool) or size < 0 or

@@ -6,12 +6,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -125,18 +127,36 @@ func serve(ctx context.Context, listen string, handler http.Handler, logger *slo
 		return err
 	}
 	defer listener.Close()
-	server := &http.Server{Addr: listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 4 * time.Minute}
+	requestCtx, cancelRequests := context.WithCancel(ctx)
+	defer cancelRequests()
+	lifetime := &networkHandlerLifetime{handler: handler, done: make(chan struct{})}
+	server := &http.Server{Addr: listen, Handler: lifetime, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, WriteTimeout: 4 * time.Minute,
+		BaseContext: func(net.Listener) context.Context { return requestCtx }}
+	var stopOnce sync.Once
+	stopServer := func() {
+		stopOnce.Do(func() {
+			lifetime.stop()
+			cancelRequests()
+			_ = server.Close()
+		})
+	}
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = server.Close()
+			stopServer()
 		case <-done:
 		}
 	}()
 	logger.Info("network service listening", "listen", listener.Addr().String())
 	err = server.Serve(listener)
+	stopServer()
+	joinCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), networkServiceShutdownTimeout)
+	defer cancel()
+	if joinErr := lifetime.wait(joinCtx); joinErr != nil {
+		return errors.Join(err, fmt.Errorf("network service shutdown did not finish active requests: %w", joinErr))
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

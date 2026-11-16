@@ -357,9 +357,19 @@ func (s *swarm) loadServices(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var services []string
+	var services, fullIDs []string
 	present := make(map[string]bool)
 	for _, id := range ids {
+		// Unlike network/task listings, service ls has no --no-trunc flag.
+		// Resolve its abbreviated ID before inspecting ownership or mutating.
+		fullID, err := s.output(ctx, "service", "inspect", "--format", "{{.ID}}", id)
+		if err != nil {
+			return err
+		}
+		if !swarmID.MatchString(fullID) || !strings.HasPrefix(fullID, id) {
+			return errors.New("Docker returned an invalid or mismatched full service ID")
+		}
+		id = fullID
 		identity, err := s.output(ctx, "service", "inspect", "--format", `{{.Spec.Name}}|{{index .Spec.Labels "io.kpl.application"}}`, id)
 		if err != nil {
 			return err
@@ -380,9 +390,48 @@ func (s *swarm) loadServices(ctx context.Context) error {
 			return errors.New("Docker returned duplicate service ownership")
 		}
 		services = append(services, parts[0])
+		fullIDs = append(fullIDs, id)
 		present[component] = true
 	}
-	s.services, s.serviceIDs, s.present = services, ids, present
+	s.services, s.serviceIDs, s.present = services, fullIDs, present
+	return nil
+}
+
+// Keep lifecycle operations on the services whose ownership was inspected.
+// A name can resolve to a different service during a long clean shutdown.
+func (s *swarm) ownedServiceID(service string) (string, error) {
+	for index, name := range s.services {
+		if index < len(s.serviceIDs) && (service == name || service == s.serviceIDs[index]) {
+			return s.serviceIDs[index], nil
+		}
+	}
+	return "", fmt.Errorf("service %s has no verified ownership identity", service)
+}
+
+func (s *swarm) verifyServices(ctx context.Context, retiredMayBeAbsent bool) error {
+	current := *s
+	if err := current.loadServices(ctx); err != nil {
+		return err
+	}
+	observed := make(map[string]string, len(current.services))
+	for index, name := range current.services {
+		id := current.serviceIDs[index]
+		original, err := s.ownedServiceID(id)
+		if err != nil || original != id {
+			return fmt.Errorf("stack service %s appeared during lifecycle changes; deployment was not submitted", id)
+		}
+		observed[id] = name
+	}
+	for index, name := range s.services {
+		id := s.serviceIDs[index]
+		if observed[id] == name {
+			continue
+		}
+		if observed[id] == "" && retiredMayBeAbsent && legacyAnalysisWorker(strings.TrimPrefix(name, s.stack+"_")) {
+			continue
+		}
+		return fmt.Errorf("verified stack service %s (%s) disappeared or changed identity; deployment was not submitted", name, id)
+	}
 	return nil
 }
 

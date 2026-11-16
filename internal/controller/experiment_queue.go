@@ -42,7 +42,9 @@ func (s *Server) rememberQueueCleanupLocked(id string) {
 // even if that head is canceled. Ownership records survive result deletion, so
 // removing a failed result cannot lose the Agent addresses needed for fencing.
 func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec scenario.Scenario, progress ...func(string)) error {
-	s.cancelMu.Lock()
+	if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+		return err
+	}
 	ids := slices.Clone(s.queueCleanup)
 	s.cancelMu.Unlock()
 	if len(ids) == 0 {
@@ -52,7 +54,20 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 		if len(progress) > 0 && progress[0] != nil {
 			progress[0](value)
 		} else if waitingID != "" {
-			s.updateExperiment(waitingID, func(run *model.Experiment) { run.PhaseName = value })
+			// This is transient queue progress. Publishing it must not wait for
+			// durable metadata or prevent cancellation of the cleanup itself.
+			// An active scenario retains its own phase and measurement clock.
+			s.state.mu.Lock()
+			run, exists := s.state.experiments[waitingID]
+			changed := exists && run.State == "queued" && run.PhaseName != value
+			if changed {
+				run.PhaseName = value
+				s.state.experiments[waitingID] = run
+			}
+			s.state.mu.Unlock()
+			if changed {
+				s.state.notify()
+			}
 		}
 	}
 	phase("Waiting for previous Peer cleanup")
@@ -88,7 +103,7 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 				if contextErr := ctx.Err(); contextErr != nil {
 					return errors.Join(dataErr, contextErr)
 				}
-				s.updateExperiment(id, func(run *model.Experiment) {
+				if err := s.updateExperimentContext(ctx, id, func(run *model.Experiment) {
 					run.CleanupState, run.CleanupError = "complete", ""
 					run.TelemetryPending = false
 					// Preserve already incomplete evidence from a failed run.
@@ -103,7 +118,9 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 							run.DataState = "incomplete"
 						}
 					}
-				})
+				}); err != nil {
+					return fmt.Errorf("persist confirmed Peer cleanup for %s: %w", id, err)
+				}
 			}
 			if err := s.completeQueueCleanupContext(ctx, ids); err != nil {
 				return fmt.Errorf("clear confirmed Peer cleanup: %w", err)
@@ -111,7 +128,9 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 			// A deletion or late inventory recovery can add a durable cleanup
 			// obligation while the Agent round-trip above is in progress. Drain
 			// that newly known work before this head claims experiment isolation.
-			s.cancelMu.Lock()
+			if err := contextlock.Lock(ctx, &s.cancelMu); err != nil {
+				return err
+			}
 			ids = slices.Clone(s.queueCleanup)
 			s.cancelMu.Unlock()
 			if len(ids) == 0 {

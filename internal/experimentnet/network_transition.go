@@ -124,7 +124,7 @@ func (m *Manager) createFreshNetwork(ctx context.Context, request model.Experime
 		// Do not inspect the retiring ID: it can legitimately disappear between
 		// ls and inspect. Only an unexpected/new ID needs full verification.
 		if len(ids) == 1 && ids[0] != oldID {
-			observed, err := m.inspect(ctx)
+			observed, err := m.inspectID(ctx, ids[0])
 			if err != nil {
 				return "", errors.Join(failure, fmt.Errorf("inspect after creation failure: %w", err))
 			}

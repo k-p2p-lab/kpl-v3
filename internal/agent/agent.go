@@ -70,6 +70,7 @@ type process struct {
 	cancel                context.CancelFunc
 	exited                bool
 	containerID           string
+	createUncertain       bool // mu; the daemon may still complete an interrupted create.
 	done                  chan struct{}
 	cleanupErr            error
 	exitErr               error // mu; process failure survives container-removal retries.
@@ -289,9 +290,13 @@ func (s *Server) serve(ctx context.Context, listener, metricsListener net.Listen
 	s.logger.Info("agent startup cleaning previous Peer containers", "id", s.config.ID)
 	cleanupStarted := time.Now()
 	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, containerStopTimeout)
-	err = s.docker.removeAgentContainers(cleanupCtx, s.config.ID)
-	if err == nil && s.config.RunWorkerFactory != nil {
+	// Resolve durable attempt identities before bulk removal can erase the
+	// positive existence evidence needed by an interrupted create.
+	if s.config.RunWorkerFactory != nil {
 		err = s.recoverPeerIntents(cleanupCtx)
+	}
+	if err == nil {
+		err = s.docker.removeAgentContainers(cleanupCtx, s.config.ID)
 	}
 	cleanupCancel()
 	if err != nil {

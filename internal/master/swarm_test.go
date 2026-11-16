@@ -277,6 +277,7 @@ func TestSwarmWebLogsUseSeparateContextWithoutShell(t *testing.T) {
 
 func TestSwarmTaskEvidenceRejectsFailuresAndKeepsHistoricalFailures(t *testing.T) {
 	s, r, _ := newSwarmFixture(t, "restart")
+	s.services, s.serviceIDs = []string{"kpl_agent"}, []string{"agent"}
 	r.handle = func(_ context.Context, c Command) (string, error) {
 		if c.Args[0] == "service" {
 			return "newest older failed", nil
@@ -318,10 +319,20 @@ type swarmLifecycleModel struct {
 	failStop, failPull bool
 }
 
+func swarmFixtureServiceName(reference string) string {
+	if name := map[string]string{"controller": "kpl_controller", "agent": "kpl_agent", "monitor": "kpl_prometheus", "networkmanager": "kpl_network-manager", "resource": "kpl_resource-monitor", "grafana": "kpl_grafana"}[reference]; name != "" {
+		return name
+	}
+	return reference
+}
+
 func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, error) {
 	a := c.Args
 	joined := strings.Join(a, " ")
 	last := a[len(a)-1]
+	if a[0] == "service" && (a[1] == "ps" || a[1] == "update") {
+		last = swarmFixtureServiceName(last)
+	}
 	if a[0] == "build" {
 		return "", errors.New("restart must not build source")
 	}
@@ -393,6 +404,9 @@ func (m *swarmLifecycleModel) handle(_ context.Context, c Command) (string, erro
 			}
 			return "controller agent monitor", nil
 		case "inspect":
+			if a[3] == "{{.ID}}" {
+				return last, nil
+			}
 			if a[3] == retiredAnalysisEnvironmentFormat {
 				return "", nil
 			}
@@ -467,11 +481,11 @@ func TestSwarmRestartPullsBeforeControllerThenAgentCleanup(t *testing.T) {
 				}
 			}
 			if tc.stop {
-				if deploy >= 0 || !slices.Equal(order, []string{"kpl_controller"}) {
+				if deploy >= 0 || !slices.Equal(order, []string{"controller"}) {
 					t.Fatalf("unclean Controller advanced restart: %v", order)
 				}
 			} else {
-				if deploy < 0 || !slices.Equal(order, []string{"kpl_controller", "kpl_agent", "kpl_prometheus"}) {
+				if deploy < 0 || !slices.Equal(order, []string{"controller", "agent", "monitor"}) {
 					t.Fatalf("wrong stop/deploy order: %v", order)
 				}
 			}
@@ -638,7 +652,7 @@ func TestSwarmRestartRechecksOwnershipAfterPull(t *testing.T) {
 		if c.Args[0] == "pull" {
 			pulled = true
 		}
-		if pulled && len(c.Args) > 1 && c.Args[0] == "service" && c.Args[1] == "inspect" {
+		if pulled && len(c.Args) > 3 && c.Args[0] == "service" && c.Args[1] == "inspect" && c.Args[3] != "{{.ID}}" {
 			return "kpl_controller|foreign-application", nil
 		}
 		return model.handle(ctx, c)
@@ -656,6 +670,7 @@ func TestSwarmRemoveNodeRetainsLabelsUntilCleanExit(t *testing.T) {
 		t.Run(fmt.Sprint(clean), func(t *testing.T) {
 			s, r, _ := newSwarmFixture(t, "remove-node")
 			s.present["agent"] = true
+			s.services, s.serviceIDs = []string{"kpl_agent"}, []string{"agent"}
 			s.options.nodes = []string{"node1"}
 			paused := false
 			r.handle = func(_ context.Context, c Command) (string, error) {

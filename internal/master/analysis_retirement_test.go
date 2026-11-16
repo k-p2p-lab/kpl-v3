@@ -34,6 +34,9 @@ func (m *retirementMigrationModel) handle(ctx context.Context, c Command) (strin
 			}
 		case "inspect":
 			if last == m.workerID {
+				if args[3] == "{{.ID}}" {
+					return last, nil
+				}
 				return "kpl_analysis-worker-1|" + swarmApplication, nil
 			}
 		case "ps":

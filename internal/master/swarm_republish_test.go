@@ -310,3 +310,62 @@ func TestSwarmRepublishPreflightDoesNotRemoveKnownInvalidDeployments(t *testing.
 		})
 	}
 }
+
+func TestSwarmRepublishVerifiesPlacementAfterPartialLabelCleanup(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want map[string]bool
+	}{
+		{"unselected-label-retained", []string{"--republish", "workertwo"}, nil},
+		{"label-inspection-error", []string{"--republish", "workertwo"}, nil},
+		{"malformed-label-inventory", []string{"--republish", "workertwo"}, nil},
+		{"same-explicit-node", []string{"--republish", "workerone"}, map[string]bool{"workerone": true}},
+		{"same-bare-selection", []string{"--republish"}, map[string]bool{"workerone": true}},
+		{"same-worker-selection", []string{"--republish", "--workers"}, map[string]bool{"workerone": true, "workertwo": true}},
+		{"same-all-selection", []string{"--republish", "--all"}, map[string]bool{"control": true, "workerone": true, "workertwo": true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, runner, output := newSwarmFixture(t, "restart")
+			model := newRepublishLifecycleModel()
+			runner.handle = func(ctx context.Context, c Command) (string, error) {
+				a := c.Args
+				if a[0] == "node" && a[1] == "update" && slices.Contains(a, "--label-rm") && a[len(a)-1] == "workerone" {
+					return "", errors.New("fixture old Agent label removal failed")
+				}
+				if a[0] == "node" && a[1] == "ls" && slices.Contains(a, "--filter") && model.base.removed {
+					if test.name == "label-inspection-error" {
+						return "", errors.New("fixture Agent placement inventory unavailable")
+					}
+					if test.name == "malformed-label-inventory" {
+						return "invalid,node", nil
+					}
+				}
+				return model.handle(ctx, c)
+			}
+			err := s.a.RunSwarm(t.Context(), "restart", test.args)
+			if test.want == nil {
+				if err == nil || !strings.Contains(err.Error(), "republish stopped after stack removal") || !model.base.removed {
+					t.Fatalf("unverified placement was accepted or the partial removal state was hidden: %v", err)
+				}
+				for _, step := range [][]string{{"build"}, {"buildx"}, {"push"}, {"pull"}, {"stack", "deploy"}} {
+					if swarmCallIndex(runner.calls, step...) >= 0 {
+						t.Fatalf("republish continued after unverified placement: %v", step)
+					}
+				}
+				return
+			}
+			if err != nil || len(model.labels) != len(test.want) {
+				t.Fatalf("matching retained labels prevented the intended placement: labels=%v err=%v", model.labels, err)
+			}
+			for node := range test.want {
+				if !model.labels[node] {
+					t.Fatalf("republish lost intended Agent node %s: %v", node, model.labels)
+				}
+			}
+			if !strings.Contains(output.String(), "Could not clear Agent label") {
+				t.Fatal("partial remove label failure was not reported")
+			}
+		})
+	}
+}

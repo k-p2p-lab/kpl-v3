@@ -383,6 +383,9 @@ func TestRunProcessSupervisorRecoveryRetainsFailedIntents(t *testing.T) {
 	if _, err := s.beginPeerIntent(proc, proc.node); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.commitPeerIntent(proc, fakeContainerID); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(proc.intentPath)
 	if err != nil {
 		t.Fatal(err)

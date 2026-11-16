@@ -6,11 +6,42 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"strings"
 )
 
 const swarmResetFormat = `{{.Name}}|{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{.Internal}}|{{.Ingress}}|{{.ConfigOnly}}|{{.EnableIPv6}}|{{.ConfigFrom.Network}}|{{.IPAM.Driver}}|{{len .IPAM.Options}}|{{len .IPAM.Config}}|{{len .Containers}}|{{index .Labels "io.kpl.application"}}|{{index .Labels "io.kpl.stack"}}|{{range $key, $value := .Labels}}{{if and (ne $key "io.kpl.application") (ne $key "io.kpl.stack") (ne $key "io.kpl.execution")}}custom{{end}}{{end}}|{{range $key, $value := .Options}}{{if ne $key "com.docker.network.driver.overlay.vxlanid_list"}}custom{{end}}{{end}}`
 const swarmIPAMFormat = `{{range .IPAM.Config}}{{json .Subnet}}|{{json .Gateway}}|{{json .IPRange}}|{{len .AuxAddress}}{{end}}`
+const swarmResetEndpointsFormat = `{{json .Containers}}`
+
+var swarmEndpointID = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func (s *swarm) validResetPeerNetwork(ctx context.Context, id string) (bool, error) {
+	metadata, err := s.output(ctx, "network", "inspect", "--format", swarmResetFormat, id)
+	if err != nil {
+		return false, err
+	}
+	prefix := s.network + "|overlay|swarm|true|false|false|false|false||default|0|1|"
+	suffix := "|" + swarmApplication + "|" + s.stack + "||"
+	if metadata == prefix+"0"+suffix {
+		return true, nil
+	}
+	if metadata != prefix+"1"+suffix {
+		return false, nil
+	}
+	raw, err := s.output(ctx, "network", "inspect", "--format", swarmResetEndpointsFormat, id)
+	if err != nil {
+		return false, err
+	}
+	var endpoints map[string]struct{ Name, EndpointID string }
+	if err := json.Unmarshal([]byte(raw), &endpoints); err != nil {
+		return false, fmt.Errorf("inspect Peer network endpoints: %w", err)
+	}
+	endpoint, ok := endpoints["lb-"+s.network]
+	// Docker's per-overlay LB sandbox has no container object. Accept only its
+	// exact identity and leave its lifecycle to Docker's network removal API.
+	return len(endpoints) == 1 && ok && endpoint.Name == s.network+"-endpoint" && swarmEndpointID.MatchString(endpoint.EndpointID), nil
+}
 
 func (s *swarm) peerNetworkUnused(ctx context.Context) error {
 	services, err := s.output(ctx, "service", "ls", "--quiet", "--filter", "label=com.docker.stack.namespace="+s.stack)
@@ -96,12 +127,11 @@ func (s *swarm) resetPeerNetwork(ctx context.Context) error {
 	if !swarmID.MatchString(id) {
 		return errors.New("Docker returned invalid or ambiguous Peer network ID")
 	}
-	expected := s.network + "|overlay|swarm|true|false|false|false|false||default|0|1|0|" + swarmApplication + "|" + s.stack + "||"
-	metadata, err := s.output(ctx, "network", "inspect", "--format", swarmResetFormat, id)
+	valid, err := s.validResetPeerNetwork(ctx, id)
 	if err != nil {
 		return err
 	}
-	if metadata != expected {
+	if !valid {
 		return errors.New("Peer network reset requires an empty helper-owned IPv4 overlay with default IPAM and no custom settings")
 	}
 	ipam, err := s.output(ctx, "network", "inspect", "--format", swarmIPAMFormat, id)
@@ -123,11 +153,11 @@ func (s *swarm) resetPeerNetwork(ctx context.Context) error {
 	if err := s.peerNetworkUnused(ctx); err != nil {
 		return err
 	}
-	metadata, err = s.output(ctx, "network", "inspect", "--format", swarmResetFormat, id)
+	valid, err = s.validResetPeerNetwork(ctx, id)
 	if err != nil {
 		return err
 	}
-	if metadata != expected {
+	if !valid {
 		return errors.New("Peer network changed or acquired containers before reset; no changes made")
 	}
 	fmt.Fprintf(s.a.Stdout, "Recreating Peer network %s (%s), preserving subnet %s and gateway %s.\n", s.network, id, subnet, gateway)
@@ -144,7 +174,7 @@ func (s *swarm) resetPeerNetwork(ctx context.Context) error {
 	if !swarmID.MatchString(newID) || newID == id {
 		return errors.New("Peer network recreation returned invalid or unchanged ID; inspect Docker before deploying")
 	}
-	metadata, err = s.output(ctx, "network", "inspect", "--format", swarmResetFormat, newID)
+	valid, err = s.validResetPeerNetwork(ctx, newID)
 	if err != nil {
 		return err
 	}
@@ -152,7 +182,7 @@ func (s *swarm) resetPeerNetwork(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if metadata != expected || currentIPAM != ipam {
+	if !valid || currentIPAM != ipam {
 		return errors.New("recreated Peer network settings differ from original; inspect Docker before deploying")
 	}
 	fmt.Fprintf(s.a.Stdout, "Peer network recreated with new ID %s. Services, containers, placement labels, configuration and data volumes were not changed. Deploy separately, then verify cross-host connectivity.\n", newID)

@@ -142,6 +142,9 @@ func TestSwarmRestartRemovesRetiredAnalysisWorkerAfterVerifiedStop(t *testing.T)
 				return "controller agent monitor " + workerID, nil
 			case "inspect":
 				if last == workerID {
+					if args[3] == "{{.ID}}" {
+						return last, nil
+					}
 					return worker + "|" + swarmApplication, nil
 				}
 			case "ps":
@@ -158,7 +161,7 @@ func TestSwarmRestartRemovesRetiredAnalysisWorkerAfterVerifiedStop(t *testing.T)
 			}
 		}
 		if args[0] == "inspect" && last == workerTask {
-			if model.paused[worker] {
+			if model.paused[workerID] {
 				stopped = true
 				return "analysisnode|shutdown|analysiscontainer|0|0|ok", nil
 			}
@@ -202,6 +205,9 @@ func TestSwarmRepublishVerifiesRetiredAnalysisWorkerShutdown(t *testing.T) {
 				}
 			case "inspect":
 				if last == workerID {
+					if args[3] == "{{.ID}}" {
+						return last, nil
+					}
 					return "kpl_analysis-worker-1|" + swarmApplication, nil
 				}
 			case "ps":
@@ -264,6 +270,9 @@ func TestSwarmDeployRetiresOwnedAnalysisServicesBeforePublishingProof(t *testing
 						}
 					case "inspect":
 						if last == workerID {
+							if args[3] == "{{.ID}}" {
+								return last, nil
+							}
 							return worker + "|" + swarmApplication, nil
 						}
 					case "ps":

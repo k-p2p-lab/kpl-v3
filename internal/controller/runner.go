@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/auth"
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/workerproc"
@@ -1799,23 +1800,34 @@ func (s *Server) callAgent(ctx context.Context, baseURL, method, path string, in
 }
 
 func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) {
+	_ = s.updateExperimentContext(context.Background(), runID, update)
+}
+
+// Cancellation can abandon the persistence queue before the transaction starts.
+// Once admitted, finish the durable write and report its actual result.
+func (s *Server) updateExperimentContext(ctx context.Context, runID string, update func(*model.Experiment)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.worker != nil {
 		s.worker.update(runID, update)
-		return
+		return nil
 	}
-	s.state.persistMu.Lock()
+	if err := contextlock.Lock(ctx, &s.state.persistMu); err != nil {
+		return err
+	}
 	defer s.state.persistMu.Unlock()
 	if deleted, err := s.state.resultWriteFencedLocked(runID); err != nil || deleted {
 		if err != nil {
 			s.logger.Warn("check deleted experiment", "run", runID, "error", err)
 		}
-		return
+		return err
 	}
 	s.state.mu.Lock()
 	experiment, exists := s.state.experiments[runID]
 	if !exists {
 		s.state.mu.Unlock()
-		return
+		return nil
 	}
 	update(&experiment)
 	if s.config.RunWorkers && (experiment.State == "completed" || experiment.State == "failed" || experiment.State == "canceled") {
@@ -1835,11 +1847,14 @@ func (s *Server) updateExperiment(runID string, update func(*model.Experiment)) 
 	if err := s.persistExperiment(experiment); err != nil {
 		s.logger.Warn("persist experiment state", "run", runID, "error", err)
 		s.state.recordRunWriteError(runID, err)
+		return err
 	} else if s.config.RunWorkers {
 		if _, err := s.state.rebaseRetiredWorkerSummaryLocked(runID, time.Now().UTC()); err != nil {
 			s.logger.Warn("rebase sealed runtime summary after metadata update", "run", runID, "error", err)
+			return err
 		}
 	}
+	return nil
 }
 
 func (s *Server) persistManifest(experiment model.Experiment, raw []byte) error {

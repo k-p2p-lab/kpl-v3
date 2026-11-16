@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -63,7 +64,9 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	if _, err := controlURL(config.ControllerURL); err != nil {
 		return nil, err
 	}
-	return &Manager{config: config, command: dockerCommand, logger: slog.Default().With("role", "network-manager"), client: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &Manager{config: config, command: dockerCommand, logger: slog.Default().With("role", "network-manager"), client: &http.Client{Transport: transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // Limit daemon output, including failure messages, without buffering inventories.
@@ -238,33 +241,75 @@ func (m *Manager) prepare(ctx context.Context, request model.ExperimentNetworkRe
 		if err := json.Unmarshal(data, &previous); err != nil {
 			return result, err
 		}
+		if previous.Epoch == request.Epoch && (previous.RunID != request.RunID || !previous.RequestedAt.Equal(request.RequestedAt) || !maps.Equal(previous.Agents, request.Agents)) {
+			return result, errors.New("network preparation epoch is already bound to a different request")
+		}
 		if previous.Epoch != request.Epoch && !request.RequestedAt.After(previous.RequestedAt) {
 			return result, errors.New("stale network preparation")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	if err := m.persist("request.json", request); err != nil {
-		return result, err
+	if previous.Epoch != request.Epoch {
+		if err := m.persist("request.json", request); err != nil {
+			return result, err
+		}
 	}
 	progress.step("verify Swarm nodes")
 	if err := m.clusterReady(ctx); err != nil {
 		return result, err
 	}
 	progress.step("inspect Peer overlay")
+	var acknowledged model.ExperimentNetwork
+	data, activeErr := os.ReadFile(filepath.Join(m.config.DataDir, "active.json"))
+	var activeParseErr error
+	if activeErr == nil {
+		activeParseErr = json.Unmarshal(data, &acknowledged)
+	}
+	if previous.Epoch == request.Epoch {
+		if activeErr != nil && !errors.Is(activeErr, os.ErrNotExist) {
+			return result, fmt.Errorf("read acknowledged network recovery state: %w", activeErr)
+		}
+		if activeParseErr != nil {
+			return result, fmt.Errorf("invalid acknowledged network recovery state: %w", activeParseErr)
+		}
+	}
+	if activeErr == nil && activeParseErr == nil && acknowledged.RunID == request.RunID && acknowledged.Epoch == request.Epoch {
+		// An acknowledged retry is read-only. A name view can regress to the
+		// retiring overlay after creation; it must never trigger another reset
+		// or removal of the gateway already serving the recorded immutable ID.
+		if !identifier.MatchString(acknowledged.NetworkID) {
+			return result, errors.New("acknowledged Peer network identity is invalid")
+		}
+		network, err := m.inspectID(ctx, acknowledged.NetworkID)
+		if err != nil {
+			return result, err
+		}
+		if network.Labels["io.kpl.execution"] != request.Epoch {
+			return result, errors.New("acknowledged Peer network execution identity changed")
+		}
+		progress.step("verify acknowledged gateway")
+		id, err := m.acknowledgedGatewayID(network)
+		if err != nil {
+			return result, err
+		}
+		observed, err := m.inspectGateway(ctx, request, id, network.ID, network.IPAM.Config[0].Subnet)
+		if err != nil {
+			return result, err
+		}
+		if observed != acknowledged {
+			return result, errors.New("acknowledged gateway addresses or network identity changed")
+		}
+		if err := m.gatewayReady(ctx, acknowledged.GatewayURL); err != nil {
+			return result, err
+		}
+		return acknowledged, nil
+	}
 	network, err := m.inspect(ctx)
 	if err != nil {
 		return result, err
 	}
 	if network != nil && network.Labels["io.kpl.execution"] == request.Epoch {
-		progress.step("verify acknowledged gateway")
-		data, err := os.ReadFile(filepath.Join(m.config.DataDir, "active.json"))
-		if err == nil && json.Unmarshal(data, &result) == nil && result.NetworkID == network.ID && result.Epoch == request.Epoch && result.RunID == request.RunID {
-			if err := m.gatewayReady(ctx, result.GatewayURL); err != nil {
-				return model.ExperimentNetwork{}, err
-			}
-			return result, nil
-		}
 		return model.ExperimentNetwork{}, errors.New("previous preparation is incomplete; start a new experiment attempt after cleanup")
 	}
 	var allocation networkAllocation
@@ -516,23 +561,10 @@ func (m *Manager) createGateway(ctx context.Context, request model.ExperimentNet
 		return result, err
 	}
 	progress.step("verify gateway attachments")
-	output, err = m.command(ctx, nil, "inspect", "--format", "{{json .NetworkSettings.Networks}}", id)
+	result, err = m.inspectGateway(ctx, request, id, networkID, subnet)
 	if err != nil {
-		return result, err
+		return model.ExperimentNetwork{}, err
 	}
-	var endpoints map[string]struct {
-		IPAddress string
-		NetworkID string
-	}
-	if err := json.Unmarshal(output, &endpoints); err != nil {
-		return result, err
-	}
-	control, peer := net.ParseIP(endpoints[m.config.ControlNetwork].IPAddress), net.ParseIP(endpoints[m.config.PeerNetwork].IPAddress)
-	if control == nil || control.To4() == nil || peer == nil || peer.To4() == nil || endpoints[m.config.PeerNetwork].NetworkID != networkID {
-		return result, errors.New("gateway network attachments could not be verified")
-	}
-	result = model.ExperimentNetwork{RunID: request.RunID, Epoch: request.Epoch, NetworkID: networkID, NetworkName: m.config.PeerNetwork,
-		GatewayURL: "http://" + net.JoinHostPort(control.String(), "18081"), PeerGatewayURL: "http://" + net.JoinHostPort(peer.String(), "18081")}
 	progress.step("wait for gateway listener")
 	if err := m.gatewayReady(ctx, result.GatewayURL); err != nil {
 		return model.ExperimentNetwork{}, err

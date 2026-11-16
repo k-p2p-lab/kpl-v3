@@ -308,6 +308,16 @@ func TestDockerCreateCleansUpFailures(t *testing.T) {
 			d, logPath := fakeDocker(t, map[string]string{"FAIL": stage})
 			node, config := dockerTestConfig(t, false)
 			id, apiURL, err := d.create(context.Background(), node, config)
+			if stage == "create" {
+				if !errors.Is(err, errDockerCreateUncertain) || !errors.Is(err, errDockerCleanup) || !dockerPeerName.MatchString(id) || apiURL != "" {
+					t.Fatalf("unconfirmed create lost its cleanup ownership: %q, %q, %v", id, apiURL, err)
+				}
+				calls := dockerCalls(t, logPath)
+				if calls[len(calls)-1].Args[0] != "inspect" {
+					t.Fatal("unknown create did not require positive existence evidence")
+				}
+				return
+			}
 			if err == nil || id != "" || apiURL != "" {
 				t.Fatalf("failed create = %q, %q, %v", id, apiURL, err)
 			}
@@ -316,11 +326,7 @@ func TestDockerCreateCleansUpFailures(t *testing.T) {
 			if len(last) != 3 || last[0] != "rm" || last[1] != "--force" {
 				t.Fatalf("cleanup = %v", last)
 			}
-			if stage == "create" {
-				if !dockerPeerName.MatchString(last[2]) {
-					t.Fatalf("cleanup name = %q", last[2])
-				}
-			} else if last[2] != fakeContainerID {
+			if last[2] != fakeContainerID {
 				t.Fatalf("cleanup ID = %q", last[2])
 			}
 		})

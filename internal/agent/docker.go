@@ -34,10 +34,11 @@ const (
 )
 
 var (
-	errDockerCleanup  = errors.New("Docker cleanup failed")
-	dockerNetworkName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
-	dockerContainerID = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	dockerPeerName    = regexp.MustCompile(`^kpl-peer-[a-f0-9]{20}-[a-f0-9]{12}$`)
+	errDockerCleanup         = errors.New("Docker cleanup failed")
+	errDockerCreateUncertain = errors.New("Peer create outcome is unconfirmed")
+	dockerNetworkName        = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+	dockerContainerID        = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	dockerPeerName           = regexp.MustCompile(`^kpl-peer-[a-f0-9]{20}-[a-f0-9]{12}$`)
 )
 
 // dockerRuntime runs one peer in each private container network namespace. It
@@ -119,7 +120,12 @@ func (d *dockerRuntime) create(ctx context.Context, node model.Node, configData 
 	return d.createWithAdmission(ctx, node, configData, nil)
 }
 
-func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node, configData []byte, admitted func()) (id, apiURL string, err error) {
+type dockerAdmissionHooks struct {
+	before  func() error
+	created func(string) error
+}
+
+func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node, configData []byte, admitted func(time.Time), hooks ...dockerAdmissionHooks) (id, apiURL string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
@@ -162,13 +168,31 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 	// A unique attempt suffix lets cleanup find a container even if the CLI is
 	// interrupted after daemon creation but before it returns the container ID.
 	cleanupTarget := name
+	issued, uncertain := false, false
+	var lifecycle dockerAdmissionHooks
+	if len(hooks) > 0 {
+		lifecycle = hooks[0]
+	}
 	defer func() {
-		if err == nil {
+		if err == nil || !issued {
 			return
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		if cleanupErr := d.remove(cleanupCtx, cleanupTarget); cleanupErr != nil {
+		var cleanupErr error
+		if uncertain {
+			var observed string
+			observed, cleanupErr = d.removeUncertainCreate(cleanupCtx, name, node, lifecycle.created)
+			if observed != "" {
+				cleanupTarget, uncertain = observed, false
+			}
+		} else {
+			cleanupErr = d.remove(cleanupCtx, cleanupTarget)
+		}
+		if cleanupErr != nil {
+			if uncertain {
+				err = errors.Join(err, errDockerCreateUncertain)
+			}
 			err = errors.Join(err, fmt.Errorf("%w for peer container %s: %w", errDockerCleanup, cleanupTarget, cleanupErr))
 			// Preserve the exact attempt ID/name so stop-all can retry a
 			// transient cleanup failure without touching unrelated peers.
@@ -195,21 +219,38 @@ func (d *dockerRuntime) createWithAdmission(ctx context.Context, node model.Node
 		deadline = parentDeadline
 	}
 	admissionCtx, admissionCancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer admissionCancel()
+	if lifecycle.before != nil {
+		if err := lifecycle.before(); err != nil {
+			return "", "", err
+		}
+	}
+	issued, uncertain = true, true
 	output, err := d.run(admissionCtx, nil, args...)
 	admissionCancel()
 	if err != nil {
+		var commandErr *dockerCommandError
+		if errors.As(err, &commandErr) && !commandErr.started {
+			issued, uncertain = false, false
+		}
 		return "", "", fmt.Errorf("create peer container: %w", err)
 	}
 	id = strings.TrimSpace(string(output))
 	if !dockerContainerID.MatchString(id) {
 		return "", "", fmt.Errorf("Docker create returned an invalid container ID")
 	}
-	cleanupTarget = id
+	createdAt := time.Now()
+	if lifecycle.created != nil {
+		if err := lifecycle.created(id); err != nil {
+			return "", "", fmt.Errorf("persist admitted Peer container identity: %w", err)
+		}
+	}
+	cleanupTarget, uncertain = id, false
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
 	if admitted != nil {
-		admitted()
+		admitted(createdAt)
 	}
 	// Busy daemons can spend much of admission's budget just allocating the
 	// container. Give copying, startup and inspection a fresh shared budget;
@@ -319,6 +360,36 @@ func (d *dockerRuntime) remove(ctx context.Context, id string) error {
 		return d.waitUntilRemoved(ctx, id)
 	}
 	return fmt.Errorf("remove peer container %s: %w", id, err)
+}
+
+// A disconnected create can still be running on the daemon. Absence of its
+// unique name is not completion evidence. Observe the exact owned attempt and
+// persist its immutable ID before removal can erase that positive evidence.
+func (d *dockerRuntime) removeUncertainCreate(ctx context.Context, name string, node model.Node, observed func(string) error) (string, error) {
+	if !dockerPeerName.MatchString(name) {
+		return "", fmt.Errorf("%w: invalid Peer attempt name", errDockerCreateUncertain)
+	}
+	format := `{"ID":{{json .Id}},"Name":{{json .Name}},"Labels":{{json .Config.Labels}}}`
+	data, err := d.run(ctx, nil, "inspect", "--type", "container", "--format", format, name)
+	if err != nil {
+		return "", fmt.Errorf("%w: exact Peer attempt %s has not been confirmed: %w", errDockerCreateUncertain, name, err)
+	}
+	var identity struct {
+		ID, Name string
+		Labels   map[string]string
+	}
+	if json.Unmarshal(data, &identity) != nil || !dockerContainerID.MatchString(identity.ID) || identity.Name != "/"+name ||
+		identity.Labels["io.kpl.managed"] != "true" || identity.Labels["io.kpl.network"] != d.network ||
+		identity.Labels["io.kpl.agent"] != node.AgentID || identity.Labels["io.kpl.run"] != node.RunID ||
+		identity.Labels["io.kpl.node"] != node.ID || identity.Labels["io.kpl.generation"] != strconv.FormatUint(node.Generation, 10) {
+		return "", fmt.Errorf("%w: exact Peer attempt %s returned a different identity", errDockerCreateUncertain, name)
+	}
+	if observed != nil {
+		if err := observed(identity.ID); err != nil {
+			return "", fmt.Errorf("%w: persist observed Peer container identity: %w", errDockerCreateUncertain, err)
+		}
+	}
+	return identity.ID, d.remove(ctx, identity.ID)
 }
 
 // Docker may keep removing a container after its original CLI command was
@@ -448,6 +519,14 @@ func (d *dockerRuntime) run(ctx context.Context, input io.Reader, args ...string
 	return d.runWithOutput(ctx, input, &limitedDockerOutput{}, args...)
 }
 
+type dockerCommandError struct {
+	cause   error
+	started bool
+}
+
+func (e *dockerCommandError) Error() string { return e.cause.Error() }
+func (e *dockerCommandError) Unwrap() error { return e.cause }
+
 func (d *dockerRuntime) runWithOutput(ctx context.Context, input io.Reader, output interface {
 	io.Writer
 	Bytes() []byte
@@ -476,7 +555,7 @@ func (d *dockerRuntime) runWithOutput(ctx context.Context, input io.Reader, outp
 	}
 	if err != nil {
 		combined := append(output.Bytes(), stderr.Bytes()...)
-		return combined, fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(combined)))
+		return combined, &dockerCommandError{cause: fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(combined))), started: command.Process != nil}
 	}
 	// Docker logs forwards the container's stderr there even on success. For
 	// machine-readable commands, keep CLI warnings separate from stdout JSON/IDs.

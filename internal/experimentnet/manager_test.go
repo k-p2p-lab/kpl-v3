@@ -208,11 +208,23 @@ func (f *fakeNetworkDocker) command(ctx context.Context, input io.Reader, args .
 		if strings.Contains(call, "{{.Image}}") {
 			return []byte("sha256:test-image"), nil
 		}
+		if strings.Contains(call, gatewayInspectionFormat) {
+			pid := 0
+			if f.gateway {
+				pid = 4242
+			}
+			return json.Marshal(gatewayInspection{ID: "gateway-container", Name: "/kpl-network-gateway", Running: f.gateway, PID: pid,
+				Labels:   map[string]string{"io.kpl.network-gateway": "kpl", "com.docker.stack.namespace": "kpl", "io.kpl.execution": f.network.Labels["io.kpl.execution"]},
+				Networks: map[string]gatewayNetworkEndpoint{"kpl-control": {IPAddress: "10.90.0.2", NetworkID: "control-network"}, "kpl-peers": {IPAddress: "10.11.0.2", NetworkID: f.network.ID}}})
+		}
 		if strings.Contains(call, "io.kpl.network-gateway") {
 			if args[len(args)-1] == "gateway-container" && f.gateway {
 				return []byte("kpl"), nil
 			}
 			return nil, errors.New("No such container: " + args[len(args)-1])
+		}
+		if args[len(args)-1] == "manager-task" {
+			return []byte(`{"kpl-control":{"IPAddress":"10.90.0.3","NetworkID":"control-network"}}`), nil
 		}
 		return fmt.Appendf(nil, `{"kpl-control":{"IPAddress":"10.90.0.2","NetworkID":"control-network"},"kpl-peers":{"IPAddress":"10.11.0.2","NetworkID":%q}}`, f.network.ID), nil
 	}

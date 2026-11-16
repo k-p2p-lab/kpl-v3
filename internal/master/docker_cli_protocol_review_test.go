@@ -128,3 +128,72 @@ func TestSwarmNetworkRecreationRetriesDockerDaemonNameConflict(t *testing.T) {
 		t.Fatalf("transient Engine name conflict was not retried: id=%s creates=%d err=%v\noutput=%s", id, creates.Load(), err, output)
 	}
 }
+
+func TestSwarmNetworkResetAcceptsDockerInternalLBProtocol(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker CLI is not installed")
+	}
+	oldID, newID := strings.Repeat("b", 64), strings.Repeat("c", 64)
+	var removed, created atomic.Bool
+	var removes, creates atomic.Int32
+	network := func(id string) map[string]any {
+		endpoints := map[string]any{}
+		if id == oldID {
+			endpoints["lb-kpl-peers"] = map[string]string{"Name": "kpl-peers-endpoint", "EndpointID": strings.Repeat("a", 64)}
+		}
+		return map[string]any{"Id": id, "Name": "kpl-peers", "Driver": "overlay", "Scope": "swarm", "Attachable": true, "IPAM": map[string]any{"Driver": "default", "Options": map[string]string{}, "Config": []map[string]any{{"Subnet": "10.42.0.0/24", "Gateway": "10.42.0.1"}}}, "Containers": endpoints, "Labels": map[string]string{"io.kpl.application": swarmApplication, "io.kpl.stack": "kpl"}, "Options": map[string]string{}}
+	}
+	node := map[string]any{"ID": "controlnode", "Spec": map[string]any{"Availability": "active"}, "Description": map[string]any{"Platform": map[string]string{"OS": "linux"}}, "Status": map[string]string{"State": "ready"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/_ping":
+			w.Header().Set("API-Version", "1.44")
+			w.Header().Set("OSType", "linux")
+			_, _ = w.Write([]byte("OK"))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/services"):
+			_, _ = w.Write([]byte("[]"))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/nodes"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{node})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/nodes/"):
+			_ = json.NewEncoder(w).Encode(node)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/networks"):
+			if created.Load() {
+				_ = json.NewEncoder(w).Encode([]map[string]any{network(newID)})
+			} else if removed.Load() {
+				_, _ = w.Write([]byte("[]"))
+			} else {
+				_ = json.NewEncoder(w).Encode([]map[string]any{network(oldID)})
+			}
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/networks/"):
+			id := oldID
+			if created.Load() {
+				id = newID
+			}
+			_ = json.NewEncoder(w).Encode(network(id))
+		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/networks/"+oldID):
+			removes.Add(1)
+			removed.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/networks/create"):
+			creates.Add(1)
+			created.Store(true)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"Id": newID})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "unsupported isolated fixture endpoint"})
+		}
+	}))
+	defer server.Close()
+	s, _, output := newSwarmFixture(t, "reset-peer-network")
+	s.a.Runner = ExecRunner{}
+	s.a.Environ = []string{"PATH=" + os.Getenv("PATH"), "DOCKER_CONFIG=" + t.TempDir(), "DOCKER_HOST=tcp://" + strings.TrimPrefix(server.URL, "http://"), "DOCKER_API_VERSION=1.44"}
+	s.timeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err := s.resetPeerNetwork(ctx)
+	if err != nil || removes.Load() != 1 || creates.Load() != 1 {
+		t.Fatalf("valid internal LB blocked reset: err=%v removes=%d creates=%d output=%s", err, removes.Load(), creates.Load(), output.String())
+	}
+}

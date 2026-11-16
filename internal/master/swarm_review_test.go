@@ -46,7 +46,7 @@ func TestSwarmDeployRechecksOwnershipAfterImagePull(t *testing.T) {
 		if command.Args[0] == "pull" {
 			pulled = true
 		}
-		if pulled && command.Args[0] == "service" && command.Args[1] == "inspect" {
+		if pulled && command.Args[0] == "service" && command.Args[1] == "inspect" && command.Args[3] != "{{.ID}}" {
 			return "kpl_controller|unrelated-application", nil
 		}
 		return model.handle(ctx, command)
@@ -100,6 +100,7 @@ func TestSwarmRemoveNodeAllowsDrainedAndPausedHostsOnlyWithCleanExit(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			s, runner, _ := newSwarmFixture(t, "remove-node")
 			s.present["agent"] = true
+			s.services, s.serviceIDs = []string{"kpl_agent"}, []string{"agent"}
 			s.options.nodes = []string{"selected-worker"}
 			stopped := false
 			runner.handle = func(_ context.Context, command Command) (string, error) {

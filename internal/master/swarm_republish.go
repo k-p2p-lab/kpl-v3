@@ -99,6 +99,18 @@ func (s *swarm) restartRepublish(ctx context.Context) error {
 	if err := s.remove(ctx); err != nil {
 		return fmt.Errorf("republish stopped during removal; image publishing and deployment were not started: %w", err)
 	}
+	// Standalone remove clears labels on a best-effort basis. Retained labels
+	// outside this frozen selection would silently expand the next global Agent
+	// deployment, so verify placement before spending time publishing an image.
+	remaining, err := s.selectedNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("republish stopped after stack removal; cannot verify Agent placement labels, image publishing and deployment were not started: %w", err)
+	}
+	for _, node := range remaining {
+		if !seen[node] {
+			return fmt.Errorf("republish stopped after stack removal; Agent placement label remains on unselected node %s; retry remove before publishing or deploying", node)
+		}
+	}
 	// stopLegacyAnalysisServices verified these task exits before remove;
 	// remember their endpoints only after the owned stack removal succeeds.
 	for _, worker := range s.legacyAnalysisServices() {

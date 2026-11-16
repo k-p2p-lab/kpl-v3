@@ -18,18 +18,20 @@ import (
 )
 
 type peerCreationIntent struct {
-	Version        int       `json:"version"`
-	AgentID        string    `json:"agentId"`
-	RunID          string    `json:"runId"`
-	NodeID         string    `json:"nodeId"`
-	Generation     uint64    `json:"generation"`
-	Epoch          string    `json:"epoch"`
-	AttemptName    string    `json:"attemptName"`
-	ContainerID    string    `json:"containerId,omitempty"`
-	StartedAt      time.Time `json:"startedAt"`
-	AdmissionUntil time.Time `json:"admissionUntil"`
-	TerminationID  string    `json:"terminationId"`
-	TerminatedAt   time.Time `json:"terminatedAt,omitempty"`
+	Version          int       `json:"version"`
+	AgentID          string    `json:"agentId"`
+	RunID            string    `json:"runId"`
+	NodeID           string    `json:"nodeId"`
+	Generation       uint64    `json:"generation"`
+	Epoch            string    `json:"epoch"`
+	AttemptName      string    `json:"attemptName"`
+	ContainerID      string    `json:"containerId,omitempty"`
+	CreateAttempted  bool      `json:"createAttempted,omitempty"`
+	CleanupConfirmed bool      `json:"cleanupConfirmed,omitempty"`
+	StartedAt        time.Time `json:"startedAt"`
+	AdmissionUntil   time.Time `json:"admissionUntil"`
+	TerminationID    string    `json:"terminationId"`
+	TerminatedAt     time.Time `json:"terminatedAt,omitempty"`
 }
 
 func (s *Server) beginPeerIntent(proc *process, node model.Node) (model.Node, error) {
@@ -49,7 +51,7 @@ func (s *Server) beginPeerIntent(proc *process, node model.Node) (model.Node, er
 	s.mu.RLock()
 	epoch := proc.workerEpoch
 	s.mu.RUnlock()
-	intent := peerCreationIntent{Version: 1, AgentID: s.config.ID, RunID: node.RunID, NodeID: node.ID, Generation: node.Generation, Epoch: epoch, AttemptName: name, StartedAt: node.StartedAt, AdmissionUntil: time.Now().Add(dockerAdmissionTimeout), TerminationID: rand.Text()}
+	intent := peerCreationIntent{Version: 2, AgentID: s.config.ID, RunID: node.RunID, NodeID: node.ID, Generation: node.Generation, Epoch: epoch, AttemptName: name, StartedAt: node.StartedAt, AdmissionUntil: time.Now().Add(dockerAdmissionTimeout), TerminationID: rand.Text()}
 	data, err := json.Marshal(intent)
 	if err == nil {
 		err = writeTelemetryFile(path, data)
@@ -67,7 +69,26 @@ func (s *Server) beginPeerIntent(proc *process, node model.Node) (model.Node, er
 	return node, nil
 }
 
+func (s *Server) markPeerIntentAttempted(proc *process) error {
+	s.mu.RLock()
+	path := proc.intentPath
+	s.mu.RUnlock()
+	intent, err := s.readPeerIntent(path)
+	if err != nil {
+		return err
+	}
+	intent.Version, intent.CreateAttempted, intent.CleanupConfirmed = 2, true, false
+	data, err := json.Marshal(intent)
+	if err == nil {
+		err = writeTelemetryFile(path, data)
+	}
+	return err
+}
+
 func (s *Server) commitPeerIntent(proc *process, id string) error {
+	if !dockerContainerID.MatchString(id) {
+		return errors.New("invalid admitted Peer container identity")
+	}
 	s.mu.RLock()
 	path := proc.intentPath
 	s.mu.RUnlock()
@@ -78,10 +99,18 @@ func (s *Server) commitPeerIntent(proc *process, id string) error {
 	if err != nil {
 		return err
 	}
-	intent.ContainerID = id
+	intent.Version, intent.CreateAttempted, intent.ContainerID = 2, true, id
+	intent.CleanupConfirmed = false
 	data, err := json.Marshal(intent)
 	if err == nil {
 		err = writeTelemetryFile(path, data)
+	}
+	if err == nil {
+		s.mu.Lock()
+		if proc.intentPath == path {
+			proc.containerID = id
+		}
+		s.mu.Unlock()
 	}
 	return err
 }
@@ -152,6 +181,7 @@ func (s *Server) completePeerIntent(proc *process, event model.TraceEvent, state
 	if intent.TerminatedAt.IsZero() {
 		intent.TerminatedAt = event.Timestamp
 	}
+	intent.Version, intent.CleanupConfirmed = 2, true
 	data, err := json.Marshal(intent)
 	if err == nil {
 		err = writeTelemetryFile(path, data)
@@ -179,8 +209,8 @@ func (s *Server) completePeerIntent(proc *process, event model.TraceEvent, state
 }
 
 // A supervisor restart owns old intents independently of the lost Run process.
-// Await an interrupted create's bounded admission window before reconciling its
-// unique name, and retain evidence until Docker cleanup and local writes succeed.
+// A deadline does not prove that an interrupted daemon create has ended. Keep
+// unknown attempts until their exact identity is observed and removal confirmed.
 func (s *Server) recoverPeerIntents(ctx context.Context) error {
 	directory := filepath.Join(s.config.DataDir, "runtime-peer-intents")
 	dir, err := os.Open(directory)
@@ -191,86 +221,104 @@ func (s *Server) recoverPeerIntents(ctx context.Context) error {
 		return err
 	}
 	defer dir.Close()
+	var failures []error
 	for {
 		entries, readErr := dir.ReadDir(128)
 		for _, entry := range entries {
 			if filepath.Ext(entry.Name()) != ".json" {
 				continue
 			}
-			path := filepath.Join(directory, entry.Name())
-			intent, err := s.readPeerIntent(path)
-			if err != nil {
-				return err
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(failures, err)...)
 			}
-			if intent.ContainerID == "" {
-				if remaining := time.Until(intent.AdmissionUntil); remaining > 0 {
-					if remaining > dockerAdmissionTimeout+time.Second {
-						return errors.New("saved Peer admission deadline is invalid")
-					}
-					timer := time.NewTimer(remaining)
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						return ctx.Err()
-					case <-timer.C:
-					}
-				}
-			}
-			target := intent.ContainerID
-			if target == "" {
-				target = intent.AttemptName
-			}
-			if err := s.docker.remove(ctx, target); err != nil {
-				return err
-			}
-			s.history.mu.Lock()
-			node, found, err := s.history.storedNode(intent.NodeID)
-			if err == nil && found && (node.AgentID != intent.AgentID || node.RunID != intent.RunID || node.Generation != intent.Generation || node.StartedAt.IsZero() || intent.StartedAt.IsZero() || !node.StartedAt.Equal(intent.StartedAt)) {
-				err = errors.New("saved Peer creation intent does not match its terminal history instance")
-			}
-			if err == nil {
-				err = s.history.saveFence(intent.RunID, ^uint64(0))
-			}
-			// An unlink whose directory sync was interrupted may reappear.
-			// Do not rewrite its already confirmed outcome and timestamps:
-			// reclaiming the same container again is not a new Peer failure.
-			if err == nil && (!found || node.Metadata["cleanupComplete"] != "true") {
-				err = s.history.saveNodes([]model.Node{{ID: intent.NodeID, AgentID: intent.AgentID, RunID: intent.RunID, Generation: intent.Generation, State: model.NodeFailed, StartedAt: intent.StartedAt, LastSeen: time.Now().UTC(), Error: "Agent supervisor restarted before Peer finalization", Metadata: map[string]string{"runtime": "docker", "cleanupComplete": "true"}}})
-			}
-			s.history.mu.Unlock()
-			if err != nil {
-				return err
-			}
-			if intent.TerminationID == "" {
-				intent.TerminationID = rand.Text()
-			}
-			if intent.TerminatedAt.IsZero() {
-				intent.TerminatedAt = time.Now().UTC()
-			}
-			data, err := json.Marshal(intent)
-			if err == nil {
-				err = writeTelemetryFile(path, data)
-			}
-			if err != nil {
-				return err
-			}
-			if err := s.queueTermination(model.TraceEvent{EventID: intent.TerminationID, AgentID: intent.AgentID, RunID: intent.RunID, NodeID: intent.NodeID, Type: "measurement_terminated", Timestamp: intent.TerminatedAt}); err != nil {
-				return err
-			}
-			if err := os.Remove(path); err != nil {
-				return err
-			}
-			if err := syncTelemetryDirectory(directory); err != nil {
-				return err
+			if err := s.recoverPeerIntent(ctx, filepath.Join(directory, entry.Name())); err != nil {
+				failures = append(failures, fmt.Errorf("recover saved Peer attempt %s: %w", entry.Name(), err))
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
-			return nil
+			return errors.Join(failures...)
 		}
 		if readErr != nil {
-			return readErr
+			return errors.Join(append(failures, readErr)...)
 		}
 	}
+}
+
+func (s *Server) recoverPeerIntent(ctx context.Context, path string) error {
+	intent, err := s.readPeerIntent(path)
+	if err != nil {
+		return err
+	}
+	// Only v2 distinguishes a prepared-but-unsent create or already
+	// confirmed cleanup. A legacy timestamp could have followed a 404
+	// while an interrupted create was still running on the daemon.
+	confirmed := intent.Version == 2 && (intent.CleanupConfirmed || !intent.CreateAttempted)
+	if !confirmed {
+		if intent.ContainerID != "" {
+			if err := s.docker.remove(ctx, intent.ContainerID); err != nil {
+				return err
+			}
+		} else {
+			node := model.Node{ID: intent.NodeID, AgentID: intent.AgentID, RunID: intent.RunID, Generation: intent.Generation}
+			_, err := s.docker.removeUncertainCreate(ctx, intent.AttemptName, node, func(id string) error {
+				intent.Version, intent.CreateAttempted, intent.ContainerID = 2, true, id
+				intent.CleanupConfirmed = false
+				data, err := json.Marshal(intent)
+				if err == nil {
+					err = writeTelemetryFile(path, data)
+				}
+				return err
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	s.history.mu.Lock()
+	node, found, err := s.history.storedNode(intent.NodeID)
+	if err == nil && found && (node.AgentID != intent.AgentID || node.RunID != intent.RunID || node.Generation != intent.Generation || node.StartedAt.IsZero() || intent.StartedAt.IsZero() || !node.StartedAt.Equal(intent.StartedAt)) {
+		err = errors.New("saved Peer creation intent does not match its terminal history instance")
+	}
+	if err == nil {
+		err = s.history.saveFence(intent.RunID, ^uint64(0))
+	}
+	// An unlink whose directory sync was interrupted may reappear.
+	// Do not rewrite its already confirmed outcome and timestamps:
+	// reclaiming the same container again is not a new Peer failure.
+	if err == nil && (!found || node.Metadata["cleanupComplete"] != "true") {
+		err = s.history.saveNodes([]model.Node{{ID: intent.NodeID, AgentID: intent.AgentID, RunID: intent.RunID, Generation: intent.Generation, State: model.NodeFailed, StartedAt: intent.StartedAt, LastSeen: time.Now().UTC(), Error: "Agent supervisor restarted before Peer finalization", Metadata: map[string]string{"runtime": "docker", "cleanupComplete": "true"}}})
+	}
+	s.history.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if intent.TerminationID == "" {
+		intent.TerminationID = rand.Text()
+	}
+	if intent.TerminatedAt.IsZero() {
+		intent.TerminatedAt = time.Now().UTC()
+	}
+	intent.Version, intent.CleanupConfirmed = 2, true
+	if intent.ContainerID != "" {
+		intent.CreateAttempted = true
+	}
+	data, err := json.Marshal(intent)
+	if err == nil {
+		err = writeTelemetryFile(path, data)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.queueTermination(model.TraceEvent{EventID: intent.TerminationID, AgentID: intent.AgentID, RunID: intent.RunID, NodeID: intent.NodeID, Type: "measurement_terminated", Timestamp: intent.TerminatedAt}); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if err := syncTelemetryDirectory(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) readPeerIntent(path string) (peerCreationIntent, error) {
@@ -292,7 +340,7 @@ func (s *Server) readPeerIntent(path string) (peerCreationIntent, error) {
 		return intent, err
 	}
 	var trailing any
-	if decoder.Decode(&trailing) != io.EOF || intent.Version != 1 || intent.AgentID != s.config.ID || intent.NodeID == "" || intent.RunID == "" || !dockerPeerName.MatchString(intent.AttemptName) || intent.ContainerID != "" && !dockerContainerID.MatchString(intent.ContainerID) {
+	if decoder.Decode(&trailing) != io.EOF || intent.Version != 1 && intent.Version != 2 || intent.AgentID != s.config.ID || intent.NodeID == "" || intent.RunID == "" || !dockerPeerName.MatchString(intent.AttemptName) || intent.ContainerID != "" && !dockerContainerID.MatchString(intent.ContainerID) || intent.Version == 2 && intent.ContainerID != "" && !intent.CreateAttempted {
 		return intent, errors.New("invalid saved Peer creation intent; retaining evidence")
 	}
 	return intent, nil

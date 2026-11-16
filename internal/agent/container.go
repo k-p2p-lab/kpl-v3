@@ -32,11 +32,14 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 			return
 		}
 	}
-	id, apiURL, err := s.docker.createWithAdmission(ctx, node, config, func() {
+	var hooks []dockerAdmissionHooks
+	if s.config.RunWorkerFactory != nil {
+		hooks = append(hooks, dockerAdmissionHooks{before: func() error { return s.markPeerIntentAttempted(proc) }, created: func(id string) error { return s.commitPeerIntent(proc, id) }})
+	}
+	id, apiURL, err := s.docker.createWithAdmission(ctx, node, config, func(createdAt time.Time) {
 		// Match v2's ServiceCreate admission boundary. Docker CLI/daemon create
 		// latency must not consume a peer's lifetime before it exists. Copy,
 		// startup and bootstrap still consume lifetime, as scheduling did in v2.
-		createdAt := time.Now()
 		s.mu.Lock()
 		setProcessMetadata(proc, "containerCreatedAt", createdAt.UTC().Format(time.RFC3339Nano))
 		s.mu.Unlock()
@@ -53,26 +56,18 @@ func (s *Server) runDockerProcess(ctx context.Context, proc *process, config []b
 		} else {
 			scheduleLifetimeStop(ctx, lifetime, createdAt, func() { _ = s.stopNode(node.ID) })
 		}
-	})
+	}, hooks...)
 	if err != nil {
 		var cleanupErr error
 		if errors.Is(err, errDockerCleanup) {
 			cleanupErr = err
 			s.mu.Lock()
 			proc.containerID = id
+			proc.createUncertain = errors.Is(err, errDockerCreateUncertain)
 			s.mu.Unlock()
 		}
 		s.finishProcess(node.ID, proc, fmt.Errorf("create peer container: %w", err), cleanupErr)
 		return
-	}
-	if s.config.RunWorkerFactory != nil {
-		if err := s.commitPeerIntent(proc, id); err != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), containerCleanupTimeout)
-			cleanupErr := s.docker.remove(cleanupCtx, id)
-			cancel()
-			s.finishProcess(node.ID, proc, err, cleanupErr)
-			return
-		}
 	}
 	s.mu.Lock()
 	proc.containerID = id
@@ -131,11 +126,26 @@ func (s *Server) retryContainerCleanupLocked(proc *process) {
 	proc.exited = false
 	proc.node.State = model.NodeStopping
 	proc.done = make(chan struct{})
-	id, nodeID := proc.containerID, proc.node.ID
+	id, nodeID, uncertain, node := proc.containerID, proc.node.ID, proc.createUncertain, proc.node
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), containerCleanupTimeout)
 		defer cancel()
-		err := s.docker.remove(ctx, id)
+		var err error
+		if uncertain {
+			var record func(string) error
+			if s.config.RunWorkerFactory != nil {
+				record = func(id string) error { return s.commitPeerIntent(proc, id) }
+			}
+			var observed string
+			observed, err = s.docker.removeUncertainCreate(ctx, id, node, record)
+			if observed != "" {
+				s.mu.Lock()
+				proc.containerID, proc.createUncertain = observed, false
+				s.mu.Unlock()
+			}
+		} else {
+			err = s.docker.remove(ctx, id)
+		}
 		s.finishProcess(nodeID, proc, nil, err)
 	}()
 }

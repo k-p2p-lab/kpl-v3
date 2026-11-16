@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
@@ -552,8 +553,8 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			stage = "final Agent telemetry and worker drain"
 			err = s.drainRunTelemetry(drainCtx, runID)
 		}
-		drainCancel()
 		if err != nil {
+			drainCancel()
 			// A later Run can own the Agent's remaining network binding. Its
 			// drain must run even when this earlier reset is still pending.
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, err))
@@ -563,10 +564,15 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 		// earlier scientific failure; terminal Peer evidence is checked below.
 		if s.config.RunWorkers {
 			stage = "cleanup delivery ACK persistence"
-			s.state.persistMu.Lock()
+			if err := contextlock.Lock(drainCtx, &s.state.persistMu); err != nil {
+				drainCancel()
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, err))
+				continue
+			}
 			deleted, fenceErr := s.state.resultWriteFencedLocked(runID)
 			s.state.persistMu.Unlock()
 			if fenceErr != nil {
+				drainCancel()
 				cleanupErrors = append(cleanupErrors, fmt.Errorf("cleanup previous run %s: %w", runID, fenceErr))
 				continue
 			}
@@ -578,9 +584,12 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 				}
 				s.state.mu.Unlock()
 			} else {
-				s.updateExperiment(runID, func(run *model.Experiment) { run.TelemetryPending = false })
+				if err := s.updateExperimentContext(drainCtx, runID, func(run *model.Experiment) { run.TelemetryPending = false }); err != nil {
+					cleanupErrors = append(cleanupErrors, fmt.Errorf("persist cleanup delivery ACK for %s: %w", runID, err))
+				}
 			}
 		}
+		drainCancel()
 	}
 	if err := errors.Join(cleanupErrors...); err != nil {
 		return err
@@ -601,7 +610,9 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 			if err := s.waitRunTerminalEvidence(cleanupCtx, id); err != nil {
 				return err
 			}
-			s.state.persistMu.Lock()
+			if err := contextlock.Lock(cleanupCtx, &s.state.persistMu); err != nil {
+				return err
+			}
 			deleted, err := s.state.resultWriteFencedLocked(id)
 			s.state.persistMu.Unlock()
 			if err != nil {

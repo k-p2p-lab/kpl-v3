@@ -57,11 +57,15 @@ func (s *swarm) task(ctx context.Context, id string) (swarmTask, error) {
 }
 
 func (s *swarm) captureTasks(ctx context.Context, service, node string) ([]string, error) {
+	id, err := s.ownedServiceID(service)
+	if err != nil {
+		return nil, err
+	}
 	args := []string{"service", "ps", "--quiet", "--no-trunc"}
 	if node != "" {
 		args = append(args, "--filter", "node="+node)
 	}
-	args = append(args, service)
+	args = append(args, id)
 	out, err := s.output(ctx, args...)
 	if err != nil {
 		return nil, err
@@ -139,16 +143,24 @@ func (s *swarm) placementExclusions(ctx context.Context, action string, nodes []
 	if len(nodes) == 0 {
 		return nil
 	}
+	id, err := s.ownedServiceID(s.stack + "_agent")
+	if err != nil {
+		return err
+	}
 	args := []string{"service", "update", "--detach=true", "--no-resolve-image"}
 	for _, node := range nodes {
 		args = append(args, "--constraint-"+action, "node.id!="+node)
 	}
-	args = append(args, s.stack+"_agent")
+	args = append(args, id)
 	return s.run(ctx, args...)
 }
 
 func (s *swarm) pauseService(ctx context.Context, service string) error {
-	return s.run(ctx, "service", "update", "--detach=true", "--no-resolve-image", "--constraint-add", "node.role==manager", "--constraint-add", "node.role==worker", service)
+	id, err := s.ownedServiceID(service)
+	if err != nil {
+		return err
+	}
+	return s.run(ctx, "service", "update", "--detach=true", "--no-resolve-image", "--constraint-add", "node.role==manager", "--constraint-add", "node.role==worker", id)
 }
 
 func (s *swarm) validateAgentPlacement(ctx context.Context, nodes []string) error {
@@ -341,7 +353,7 @@ func (s *swarm) deploy(ctx context.Context) error {
 	if s.options.name == "deploy" {
 		// Tag resolution can outlast an external service replacement. Do not
 		// overwrite a new owner using the inventory captured before the pull.
-		if err := s.loadServices(ctx); err != nil {
+		if err := s.verifyServices(ctx, false); err != nil {
 			return err
 		}
 	}
@@ -388,7 +400,7 @@ func (s *swarm) deploy(ctx context.Context) error {
 	if s.options.name == "restart" {
 		// An image pull can take minutes. Confirm ownership again before any stop;
 		// a service with the same name may have been replaced in that interval.
-		if err := s.loadServices(ctx); err != nil {
+		if err := s.verifyServices(ctx, false); err != nil {
 			return err
 		}
 		tasks, err := s.prepareRestart(ctx, nodes)
@@ -429,6 +441,9 @@ func (s *swarm) deploy(ctx context.Context) error {
 		}
 	}
 	if err := s.a.Preflight(ctx, s.config, false); err != nil {
+		return err
+	}
+	if err := s.verifyServices(ctx, true); err != nil {
 		return err
 	}
 	s.withRetiredAnalysisProof()
@@ -526,10 +541,6 @@ func (s *swarm) removeNodes(ctx context.Context) error {
 }
 
 func (s *swarm) waitRemovedServices(ctx context.Context) error {
-	allowed := make(map[string]bool, len(s.serviceIDs))
-	for _, id := range s.serviceIDs {
-		allowed[id] = true
-	}
 	waitCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	for {
@@ -542,7 +553,16 @@ func (s *swarm) waitRemovedServices(ctx context.Context) error {
 			return err
 		}
 		for _, id := range ids {
-			if !allowed[id] {
+			known := false
+			for _, fullID := range s.serviceIDs {
+				// Service list IDs are abbreviated. A known prefix permits only
+				// continued waiting; cleanup proceeds solely after an empty list.
+				if strings.HasPrefix(fullID, id) {
+					known = true
+					break
+				}
+			}
+			if !known {
 				return fmt.Errorf("new stack service %s appeared during removal; inspect status before retrying", id)
 			}
 		}

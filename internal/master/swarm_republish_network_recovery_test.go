@@ -40,12 +40,15 @@ func TestSwarmRestartAndRepublishGatewayLifecycles(t *testing.T) {
 					return "controller agent monitor resource grafana networkmanager", nil
 				}
 				if slices.Equal(a[:min(len(a), 2)], []string{"service", "inspect"}) {
+					if a[3] == "{{.ID}}" {
+						return last, nil
+					}
 					if component := map[string]string{"networkmanager": "network-manager", "resource": "resource-monitor", "grafana": "grafana"}[last]; component != "" {
 						return "kpl_" + component + "|" + swarmApplication, nil
 					}
 				}
 				if slices.Equal(a[:min(len(a), 2)], []string{"service", "ps"}) {
-					return strings.NewReplacer("_", "", "-", "").Replace(last) + "task", nil
+					return strings.NewReplacer("_", "", "-", "").Replace(swarmFixtureServiceName(last)) + "task", nil
 				}
 				if a[0] == "inspect" && slices.Contains(a, "task") {
 					blockedTask, blockedService := "kplcontrollertask", "kpl_controller"
@@ -68,7 +71,7 @@ func TestSwarmRestartAndRepublishGatewayLifecycles(t *testing.T) {
 					}
 					return record, err
 				}
-				if slices.Equal(a[:min(len(a), 2)], []string{"service", "update"}) && last == "kpl_agent" && !model.base.paused["kpl_controller"] {
+				if slices.Equal(a[:min(len(a), 2)], []string{"service", "update"}) && swarmFixtureServiceName(last) == "kpl_agent" && !model.base.paused["kpl_controller"] {
 					agentStoppedBeforeController = true
 				}
 				if a[0] == "ps" {

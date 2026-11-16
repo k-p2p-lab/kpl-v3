@@ -464,7 +464,11 @@ func readResumeFile(root *os.Root, name string, limit int) ([]byte, error) {
 	return io.ReadAll(io.NewSectionReader(file.file, 0, file.size))
 }
 
-func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec scenario.Scenario) (cleanupErr error) {
+func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec scenario.Scenario) error {
+	return s.cleanupBeforeResumeWithCleanup(ctx, runIDs, spec, true)
+}
+
+func (s *Server) cleanupBeforeResumeWithCleanup(ctx context.Context, runIDs []string, spec scenario.Scenario, releaseCleanup bool) (cleanupErr error) {
 	started := time.Now()
 	stage, stageRun := "Controller worker exit", ""
 	defer func() {
@@ -625,7 +629,7 @@ func (s *Server) cleanupBeforeResume(ctx context.Context, runIDs []string, spec 
 				}
 			}
 			stage = "runtime retirement"
-			if err := s.retireRunRuntime(cleanupCtx, id); err != nil {
+			if err := s.retireRunRuntimeWithCleanup(cleanupCtx, id, releaseCleanup); err != nil {
 				return err
 			}
 		}

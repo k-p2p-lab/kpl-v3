@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -257,5 +258,58 @@ func TestQueueCleanupEntryHonorsCanceledAdmissionLock(t *testing.T) {
 			s.cancelMu.Unlock()
 			held = false
 		})
+	}
+}
+
+func TestWorkerQueueCleanupRetainsBarrierUntilFinalMetadata(t *testing.T) {
+	s, id, _ := summaryFreshnessFixture(t, time.Time{})
+	s.config.RunWorkers = true
+	s.state.mu.Lock()
+	run := s.state.experiments[id]
+	run.CleanupState = "retained"
+	s.state.experiments[id] = run
+	s.state.mu.Unlock()
+	if err := s.persistExperiment(run); err != nil {
+		t.Fatal(err)
+	}
+	s.queueCleanup = []string{id}
+	if err := s.writePendingWorkCleanup(id); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(s.config.DataDir, currentRunsDirectory, id, "experiment.json")
+	var once sync.Once
+	var injected error
+	s.logger = slog.New(summaryBoundaryLogHandler{handle: func(record slog.Record) error {
+		if record.Message == "experiment runtime reset verified" {
+			once.Do(func() {
+				injected = os.Rename(manifestPath, manifestPath+".saved")
+				if injected == nil {
+					injected = os.Mkdir(manifestPath, 0700)
+				}
+			})
+		}
+		return nil
+	}})
+	err := s.waitQueueCleanup(t.Context(), "", scenario.Scenario{JobShutdownTimeout: "1s"})
+	if injected != nil {
+		t.Fatalf("could not inject post-retirement metadata failure: %v", injected)
+	}
+	if err == nil {
+		t.Fatal("worker cleanup reported success after its final metadata write failed")
+	}
+	if _, err := os.Stat(filepath.Join(s.config.DataDir, pendingWorkCleanupDirectory, id)); err != nil || !slices.Contains(s.queueCleanup, id) {
+		t.Fatalf("worker retirement released cleanup before final metadata committed: marker=%v queue=%v", err, s.queueCleanup)
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(manifestPath+".saved", manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.waitQueueCleanup(t.Context(), "", scenario.Scenario{JobShutdownTimeout: "1s"}); err != nil {
+		t.Fatalf("worker cleanup could not recover after storage repair: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.config.DataDir, pendingWorkCleanupDirectory, id)); !errors.Is(err, os.ErrNotExist) || len(s.queueCleanup) != 0 {
+		t.Fatalf("successful worker cleanup retry retained its obligation: marker=%v queue=%v", err, s.queueCleanup)
 	}
 }

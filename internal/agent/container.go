@@ -126,12 +126,15 @@ func (s *Server) retryContainerCleanupLocked(proc *process) {
 	proc.exited = false
 	proc.node.State = model.NodeStopping
 	proc.done = make(chan struct{})
-	id, nodeID, uncertain, node := proc.containerID, proc.node.ID, proc.createUncertain, proc.node
+	id, nodeID, uncertain, unsent, node := proc.containerID, proc.node.ID, proc.createUncertain, proc.intentUnsent, proc.node
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), containerCleanupTimeout)
 		defer cancel()
 		var err error
-		if uncertain {
+		if unsent {
+			// No Docker request followed the failed initial intent write.
+			// Retry only its local finalization and durability obligation.
+		} else if uncertain {
 			var record func(string) error
 			if s.config.RunWorkerFactory != nil {
 				record = func(id string) error { return s.commitPeerIntent(proc, id) }

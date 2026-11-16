@@ -30,6 +30,12 @@ type retiredRunRuntime struct {
 // and a quiescent OS worker. Persistent records are never used as a substitute
 // for those acknowledgements by the live supervisor.
 func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*model.Experiment) error {
+	return s.retireRunRuntimeWithCleanup(ctx, id, true, final...)
+}
+
+// Queue recovery still has a final metadata transaction after runtime cleanup.
+// Its caller retains the cleanup marker until that transaction commits.
+func (s *Server) retireRunRuntimeWithCleanup(ctx context.Context, id string, releaseCleanup bool, final ...*model.Experiment) error {
 	if err := s.waitControllerWorkers(ctx, []string{id}); err != nil {
 		return err
 	}
@@ -195,7 +201,7 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 			return err
 		}
 		if len(final) > 0 && final[0] != nil {
-			s.updateExperiment(id, func(current *model.Experiment) {
+			return s.updateExperimentContext(ctx, id, func(current *model.Experiment) {
 				mergeWorkerExperiment(current, *final[0])
 				current.FinishedAt = time.Now().UTC()
 			})
@@ -207,8 +213,10 @@ func (s *Server) retireRunRuntime(ctx context.Context, id string, final ...*mode
 	if err := s.verifyRetiredRuntime(id); err != nil {
 		return err
 	}
-	if err := s.completeQueueCleanupContext(ctx, []string{id}); err != nil {
-		return fmt.Errorf("retire confirmed Run cleanup marker: %w", err)
+	if releaseCleanup {
+		if err := s.completeQueueCleanupContext(ctx, []string{id}); err != nil {
+			return fmt.Errorf("retire confirmed Run cleanup marker: %w", err)
+		}
 	}
 	s.state.clearRetiredAdmissionHints(id)
 	s.state.notify()

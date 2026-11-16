@@ -53,16 +53,21 @@ func (s *Server) beginPeerIntent(proc *process, node model.Node) (model.Node, er
 	s.mu.RUnlock()
 	intent := peerCreationIntent{Version: 2, AgentID: s.config.ID, RunID: node.RunID, NodeID: node.ID, Generation: node.Generation, Epoch: epoch, AttemptName: name, StartedAt: node.StartedAt, AdmissionUntil: time.Now().Add(dockerAdmissionTimeout), TerminationID: rand.Text()}
 	data, err := json.Marshal(intent)
+	var published bool
 	if err == nil {
-		err = writeTelemetryFile(path, data)
+		published, err = writeTelemetryFileWithPublication(path, data)
+	}
+	if published {
+		// A late directory-sync failure can leave the prepared file visible.
+		// Keep its live owner even though Docker admission will not be entered.
+		s.mu.Lock()
+		proc.intentPath, proc.containerID = path, name
+		proc.intentSyncPending, proc.intentUnsent = false, err != nil
+		s.mu.Unlock()
 	}
 	if err != nil {
 		return node, fmt.Errorf("persist Peer creation intent before Docker admission: %w", err)
 	}
-	s.mu.Lock()
-	proc.intentPath, proc.containerID = path, name
-	proc.intentSyncPending = false
-	s.mu.Unlock()
 	node.Metadata = maps.Clone(node.Metadata)
 	node.Metadata["supervisorAttemptName"] = name
 	node.Metadata["supervisorAdmissionUntil"] = intent.AdmissionUntil.UTC().Format(time.RFC3339Nano)
@@ -151,6 +156,7 @@ func (s *Server) clearPeerIntent(proc *process, path string) error {
 	if proc.intentPath == path {
 		proc.intentPath = ""
 		proc.intentSyncPending = false
+		proc.intentUnsent = false
 	} else if proc.intentPath != "" {
 		s.mu.Unlock()
 		return errors.New("Peer creation intent changed during directory sync")

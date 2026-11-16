@@ -62,6 +62,7 @@ type process struct {
 	workerEpoch           string
 	intentPath            string
 	intentSyncPending     bool
+	intentUnsent          bool // mu; the initial intent write failed before Docker admission.
 	admissionDone         chan struct{}
 	gatewayURL            string
 	node                  model.Node

@@ -76,7 +76,9 @@ func (s *Server) waitQueueCleanup(ctx context.Context, waitingID string, spec sc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := s.cleanupBeforeResume(ctx, ids, spec)
+		// Runtime retirement must retain these markers until the final cleanup
+		// metadata below is durable. The ordinary resume path owns its own exit.
+		err := s.cleanupBeforeResumeWithCleanup(ctx, ids, spec, false)
 		if err == nil {
 			for _, id := range ids {
 				if err := ctx.Err(); err != nil {

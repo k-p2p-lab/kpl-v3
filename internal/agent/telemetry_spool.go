@@ -52,9 +52,17 @@ func syncTelemetryDirectory(path string) error {
 	return errors.Join(f.Sync(), f.Close())
 }
 func writeTelemetryFile(path string, data []byte) error {
+	_, err := writeTelemetryFileWithPublication(path, data)
+	return err
+}
+
+// Published means the final name was installed, even if its directory sync
+// failed. It is not a durable-success acknowledgement. An owner can retain
+// that partially published file and retry rather than orphaning local debt.
+func writeTelemetryFileWithPublication(path string, data []byte) (published bool, err error) {
 	f, e := os.CreateTemp(filepath.Dir(path), ".spool-*")
 	if e != nil {
-		return e
+		return false, e
 	}
 	defer os.Remove(f.Name())
 	if _, e = f.Write(data); e == nil {
@@ -62,12 +70,12 @@ func writeTelemetryFile(path string, data []byte) error {
 	}
 	e = errors.Join(e, f.Close())
 	if e != nil {
-		return e
+		return false, e
 	}
 	if e = os.Rename(f.Name(), path); e != nil {
-		return e
+		return false, e
 	}
-	return syncTelemetryDirectory(filepath.Dir(path))
+	return true, syncTelemetryDirectory(filepath.Dir(path))
 }
 func readTelemetrySpool(dataDir string) (*telemetrySpool, error) {
 	directory := filepath.Join(dataDir, "telemetry-spool")

@@ -322,7 +322,7 @@ func TestWorkerFinalSnapshotUsesRemainingCollectionBudget(t *testing.T) {
 func testWorkerFinalSnapshotBudget(t *testing.T, budget, drainDelay, guard time.Duration) {
 	t.Helper()
 	server := New(ServerConfig{DataDir: t.TempDir(), RunWorkers: true}, nil)
-	raw := []byte(fmt.Sprintf("version: 4\nname: final-snapshot-deadline\njobShutdownTimeout: %s\nphases: [{action: wait, duration: 1ms}]\n", budget))
+	raw := fmt.Appendf(nil, "version: 4\nname: final-snapshot-deadline\njobShutdownTimeout: %s\nphases: [{action: wait, duration: 1ms}]\n", budget)
 	run := model.Experiment{ID: "final-snapshot-deadline", ExecutionID: "execution", State: "running", StartedAt: time.Now().UTC(), ScenarioYAML: string(raw)}
 	server.state.experiments[run.ID] = run
 	if err := server.persistManifest(run, raw); err != nil {

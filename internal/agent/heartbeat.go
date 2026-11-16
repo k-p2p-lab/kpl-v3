@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/contextlock"
@@ -41,17 +44,21 @@ func (s *Server) registerLocked(ctx context.Context) error {
 }
 
 func (s *Server) heartbeat(ctx context.Context) error {
-	finishView := s.acquireRunView()
+	finishView := sync.OnceFunc(s.acquireRunView())
 	defer finishView()
-	if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	defer s.heartbeatMu.Unlock()
 	stopLease := func() {}
 	if s.config.RunWorkerFactory != nil {
 		// Lease renewal does not wait behind a large experiment snapshot. The
 		// following full partial reports still carry every observed Node.
-		if err := s.postJSON(ctx, "/api/v1/agents/heartbeat", model.AgentHeartbeat{Agent: s.snapshotAgent(), Partial: true}, nil); err != nil {
+		if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+			return err
+		}
+		err := s.postJSON(ctx, "/api/v1/agents/heartbeat", model.AgentHeartbeat{Agent: s.snapshotAgent(), Partial: true}, nil)
+		s.heartbeatMu.Unlock()
+		if err != nil {
 			return err
 		}
 		leaseCtx, cancelLease := context.WithCancel(context.WithValue(ctx, heartbeatLeaseContextKey{}, true))
@@ -81,6 +88,11 @@ func (s *Server) heartbeat(ctx context.Context) error {
 	// A later lease must not make the complete observation look stale to the
 	// Controller. Stop/join it and refresh compact states and the capture clock.
 	stopLease()
+	// Preparing a large snapshot must not delay a compact terminal ACK for a
+	// different recovered Run. Registration and actual sends remain serialized.
+	if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+		return err
+	}
 	if s.config.RunWorkerFactory != nil {
 		s.mu.RLock()
 		for i, node := range h.Nodes {
@@ -100,7 +112,44 @@ func (s *Server) heartbeat(ctx context.Context) error {
 		s.mu.RUnlock()
 	}
 	h.Partial = true
-	err = sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
+	err = s.sendHeartbeatInventoryLocked(ctx, h)
+	s.heartbeatMu.Unlock()
+	if err != nil {
+		return err
+	}
+	// The full snapshot has been consumed. Backfill needs only Agent identity,
+	// and must not retain a Run view or its temporary topology while waiting.
+	h.Nodes = nil
+	finishView()
+	return s.replayRetiredHistory(ctx, h.Agent)
+}
+
+// Reset needs confirmed terminal inventory, not worker topology or older cold
+// history pages. Include every unacknowledged terminal Run because the later
+// reclaim proof also checks global retained configs and record counts.
+func (s *Server) heartbeatTerminalInventory(ctx context.Context) error {
+	if err := contextlock.Lock(ctx, &s.heartbeatMu); err != nil {
+		return err
+	}
+	defer s.heartbeatMu.Unlock()
+	hostname, _ := os.Hostname()
+	h := model.AgentHeartbeat{Partial: true}
+	s.mu.RLock()
+	h.Agent = s.agentStatusLocked(hostname)
+	for _, proc := range s.processes {
+		if !proc.heartbeatAcknowledged && processCleanupComplete(proc) {
+			h.Nodes = append(h.Nodes, heartbeatNodeStatus(proc))
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(h.Nodes, func(i, j int) bool { return h.Nodes[i].ID < h.Nodes[j].ID })
+	return s.sendHeartbeatInventoryLocked(ctx, h)
+}
+
+// Caller holds heartbeatMu, so registration cannot invalidate acknowledgments
+// between capture/send and their conditional application.
+func (s *Server) sendHeartbeatInventoryLocked(ctx context.Context, h model.AgentHeartbeat) error {
+	return sendHeartbeatBatches(h, heartbeatBodyLimit, func(data []byte, nodes []model.Node) error {
 		if err := s.postData(ctx, "/api/v1/agents/heartbeat", data, nil); err != nil {
 			return err
 		}
@@ -113,10 +162,6 @@ func (s *Server) heartbeat(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-	return s.replayRetiredHistory(ctx, h.Agent)
 }
 
 func processCleanupComplete(proc *process) bool {

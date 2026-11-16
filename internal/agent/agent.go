@@ -99,6 +99,7 @@ type Server struct {
 	networkRequest          model.ExperimentNetworkRequest // mu; admission remains closed until activation
 	experimentNetwork       *model.ExperimentNetwork       // mu
 	historyReplay           *historyReplay
+	historyReplaySendMu     sync.Mutex // one background history page sender
 	history                 *agentHistory
 	historyRevision         uint64
 	historyMapPeak          int

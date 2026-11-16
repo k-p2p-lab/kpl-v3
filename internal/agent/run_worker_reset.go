@@ -186,7 +186,7 @@ func (s *Server) prepareRunReset(ctx context.Context, id string) error {
 		case <-timer.C:
 		}
 	}
-	if err := s.heartbeat(ctx); err != nil {
+	if err := s.heartbeatTerminalInventory(ctx); err != nil {
 		return &runWorkerPendingError{fmt.Errorf("acknowledge terminal Peer inventory: %w", err)}
 	}
 	for {
@@ -219,7 +219,7 @@ func (s *Server) prepareRunReset(ctx context.Context, id string) error {
 			return &runWorkerPendingError{ctx.Err()}
 		case <-timer.C:
 		}
-		if err := s.heartbeat(ctx); err != nil {
+		if err := s.heartbeatTerminalInventory(ctx); err != nil {
 			return &runWorkerPendingError{err}
 		}
 	}

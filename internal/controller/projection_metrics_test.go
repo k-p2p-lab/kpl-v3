@@ -248,8 +248,8 @@ func BenchmarkHistoricalProjectionScrape(b *testing.B) {
 	s, total := projectionDiskFixture(b, 32, 1024)
 	b.ReportAllocs()
 	b.ReportMetric(float64(total), "source-bytes")
-	b.ResetTimer()
-	for range b.N {
+
+	for b.Loop() {
 		if _, err := s.state.metrics.registry.Gather(); err != nil {
 			b.Fatal(err)
 		}

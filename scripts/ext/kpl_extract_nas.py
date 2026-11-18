@@ -25,11 +25,12 @@ from typing import BinaryIO
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--manifest', type=Path, default=Path(__file__).with_name('kpl_extract_50_manifest.csv'))
+    p.add_argument('--manifest', type=Path, default=Path(__file__).with_name('kpl_extract_manifest.csv'))
     p.add_argument('--extractor', type=Path, default=Path(__file__).with_name('kpl_path_extract.py'))
     p.add_argument('--nas-root', type=Path, default=Path('/mnt/nas/kpl/runs'))
     p.add_argument('--out', type=Path, default=Path('./kpl-path-analysis-runs'))
     p.add_argument('--work-dir', type=Path, default=None, help='Optional local SSD directory for temporary SQLite')
+    p.add_argument('--write-lock', type=Path, help='Shared local result-generation lock (default: OUT/.kpl-write.lock; POSIX only)')
     p.add_argument('--jobs', type=int, default=0, help='Concurrent Runs (0=auto, up to 4; 1=sequential)')
     p.add_argument('--workers', type=int, default=0, help='Extraction workers per Run (0=auto, up to 4; 1=serial)')
     p.add_argument('--local-current-root', type=Path, default=None, help='Optional Controller current-run root for not-yet-archived tails')
@@ -107,6 +108,9 @@ def command(args, row, extractor, src, dst, work_root, workers):
         cmd += ['--work-dir', str(work_root)]
     if args.list_sources:
         cmd += ['--list-sources']
+    else:
+        lock = args.write_lock or args.out.expanduser().resolve() / '.kpl-write.lock'
+        cmd += ['--write-lock', str(lock.expanduser().absolute())]
     return cmd
 
 
@@ -200,6 +204,10 @@ def main(argv=None):
         ):
             raise ValueError(f'Unsafe or overlapping output directory: {dst}')
         destinations.add(dst)
+    if not args.list_sources:
+        lock = (args.write_lock or out_root / '.kpl-write.lock').expanduser().resolve()
+        if any(lock == dst or lock in dst.parents or dst in lock.parents for dst in destinations):
+            raise ValueError(f'Write lock must be outside per-Run output directories: {lock}')
     jobs, workers = concurrency(args.jobs, args.workers, len(entries))
     print(f'Concurrent Runs={jobs}, extraction workers/Run={workers or "auto (up to 4)"}', flush=True)
     if not args.dry_run:

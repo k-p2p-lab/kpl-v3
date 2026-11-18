@@ -24,13 +24,14 @@ import math
 import os
 import re
 import sqlite3
+import stat
 import sys
 import tempfile
 import threading
 import time
 import zipfile
 from collections import Counter, OrderedDict, defaultdict, deque
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -1019,6 +1020,56 @@ def csv_writer(path: Path, headers: list[str]):
     return handle,writer
 
 
+@contextmanager
+def output_write_lock(args):
+    """Serialize result generation across cooperating Run parents on local POSIX storage."""
+    if args.write_lock is None:
+        yield
+        return
+    if os.name != 'posix':
+        raise ValueError('--write-lock requires POSIX file locking')
+    import fcntl
+
+    path = args.write_lock.expanduser().absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError(f'Write lock must not be a symlink: {path}')
+    # A read-only descriptor lets sudo and ordinary users share an existing
+    # readable lock file on local storage without changing its ownership.
+    flags = os.O_RDONLY | os.O_CREAT | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(path, flags, 0o644)
+    acquired = False
+    started = last_report = time.monotonic()
+    waiting = False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError(f'Write lock must be a regular file: {path}')
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                now = time.monotonic()
+                if not args.quiet and (not waiting or now - last_report >= 5):
+                    print(f'[write lock] waiting: {path} ({now-started:.1f}s)', file=sys.stderr, flush=True)
+                    last_report = now
+                waiting = True
+                time.sleep(0.1)
+        if not args.quiet:
+            print(f'[write lock] acquired: {path} (waited {time.monotonic()-started:.1f}s)', file=sys.stderr, flush=True)
+        yield
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            # Keep the inode: removing it could give new arrivals a second lock.
+            os.close(fd)
+        if acquired and not args.quiet:
+            print(f'[write lock] released: {path}', file=sys.stderr, flush=True)
+
+
 DETAIL_COLUMNS = [
     "topic","mid","node","grp","payload","wire","encoding","parent","hop","hop_status","identity_safe",
     "latency","latency_basis","latency_raw","parent_delta_raw","parent_delta","parent_clock",
@@ -1458,6 +1509,8 @@ def summarize(ex: Extractor, out: Path):
     sf,sw=csv_writer(out/"session_quality.csv",["run_id","node_id","session_id","min_sequence","max_sequence","unique_sequences",
         "missing_prefix_slots","gap_slots_between_observed","start_seen","checkpoint_seen","stop_seen","terminated_seen"])
     try:
+        ex.progress("session quality", True)
+        session_count = 0
         for row in db.execute("SELECT node,session,MIN(seq),MAX(seq),COUNT(*) FROM seen_seq GROUP BY node,session ORDER BY node,session"):
             node,session,lo,hi,n=row
             life={r[0]:r[1] for r in db.execute("SELECT kind,COUNT(*) FROM life WHERE node=? AND session=? GROUP BY kind",(node,session))}
@@ -1465,6 +1518,9 @@ def summarize(ex: Extractor, out: Path):
                 "unique_sequences":n,"missing_prefix_slots":lo-1,"gap_slots_between_observed":hi-lo+1-n,
                 "start_seen":life.get("measurement_start",0),"checkpoint_seen":life.get("measurement_checkpoint",0),
                 "stop_seen":life.get("measurement_stop",0),"terminated_seen":life.get("measurement_terminated",0)})
+            session_count += 1
+            ex.progress(f"session quality: {session_count:,} sessions")
+        ex.progress(f"session quality complete: {session_count:,} sessions", True)
     finally:
         sf.close()
     cf,cw=csv_writer(out/"control_summary.csv",["run_id","event_type","rpc_records","entries","id_references","truncated_records","omitted_ids"])
@@ -1529,6 +1585,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--max-snapshot-age",type=float,default=10.0,help="Maximum age in seconds of the snapshot preceding publication (default: 10)")
     p.add_argument("--no-rpc",action="store_true",help="Skip detailed RPC timing indexing")
     p.add_argument("--work-dir",type=Path,help="Directory for temporary SQLite storage; a local SSD is recommended (default: output directory)")
+    p.add_argument("--write-lock",type=Path,help="Shared local lock file to serialize result generation across Runs (POSIX only)")
     p.add_argument("--keep-db",action="store_true",help="Keep the working SQLite database after completion")
     p.add_argument("--skip-bad-lines",action="store_true",help="Count and skip malformed JSON lines only; exit with an error by default")
     p.add_argument("--max-line-mib",type=int,default=64,help="JSONL line safety limit in MiB")
@@ -1552,6 +1609,7 @@ def main(argv: list[str] | None=None) -> int:
     ex=None
     db_path=None
     success=False
+    writer_guard=ExitStack()
     try:
         events,observations,metadata=locate_inputs(args)
         if args.list_sources:
@@ -1578,8 +1636,12 @@ def main(argv: list[str] | None=None) -> int:
             ex.run_id=metadata["id"]
         ex.ingest_events(events)
         ex.ingest_observations(observations)
+        writer_guard.enter_context(output_write_lock(args))
+        ex.progress("path analysis and result files", True)
         analyze(ex,out)
+        ex.progress("summary files", True)
         summarize(ex,out)
+        ex.progress("finalizing database", True)
         ex.db.commit()
         ex.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         success=True
@@ -1597,11 +1659,14 @@ def main(argv: list[str] | None=None) -> int:
             print(f"Working database for diagnostics: {db_path}",file=sys.stderr)
         return 1
     finally:
-        if ex is not None:
-            ex.db.close()
-        if success and db_path and not args.keep_db:
-            for suffix in ("","-wal","-shm"):
-                Path(str(db_path)+suffix).unlink(missing_ok=True)
+        try:
+            if ex is not None:
+                ex.db.close()
+            if success and db_path and not args.keep_db:
+                for suffix in ("","-wal","-shm"):
+                    Path(str(db_path)+suffix).unlink(missing_ok=True)
+        finally:
+            writer_guard.close()
 
 
 if __name__=="__main__":

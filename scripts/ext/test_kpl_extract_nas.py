@@ -20,7 +20,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().with_name("kpl_extract_50_nas.py")
+SCRIPT = Path(__file__).resolve().with_name("kpl_extract_nas.py")
 EXTRACTOR = SCRIPT.with_name("kpl_path_extract.py")
 REQUIRED_OUTPUTS = ("hop_quality.csv", "hop_timing.csv", "message_summary.csv")
 
@@ -134,6 +134,9 @@ def load_script():
 
 
 class ConcurrencyBudgetTests(unittest.TestCase):
+    def test_default_manifest_name_matches_renamed_extractor(self):
+        self.assertEqual(load_script().parser().parse_args([]).manifest.name, "kpl_extract_manifest.csv")
+
     def test_cpu_affinity_precedes_host_count_and_fallback_never_returns_zero(self):
         module = load_script()
         with mock.patch.object(module.os, "sched_getaffinity", return_value={2, 7}, create=True), \
@@ -307,6 +310,8 @@ class BatchExtractorCLITests(unittest.TestCase):
                 self.assertEqual(event["output"], str(self.destination(event["run"])))
                 self.assertIn("--no-rpc", event["arguments"])
                 self.assertIn(str(self.work), event["arguments"])
+                self.assertEqual(event["arguments"][event["arguments"].index("--write-lock") + 1],
+                                 str(self.output / ".kpl-write.lock"))
             elif event["kind"] == "finish":
                 active -= 1
         self.assertEqual((active, peak), (0, 2))
@@ -481,6 +486,36 @@ class BatchExtractorCLITests(unittest.TestCase):
                 launched += 1
                 self.assertGreaterEqual(validated, launched)
 
+    def test_explicit_write_lock_is_forwarded_to_every_run(self):
+        self.cases(3)
+        lock = self.root / "shared locks" / "disk.lock"
+        result = self.run_batch("--jobs", "2", "--write-lock", str(lock))
+        self.assert_success(result)
+        starts = [event for event in self.events() if event["kind"] == "start"]
+        self.assertEqual(len(starts), 3)
+        for event in starts:
+            args = event["arguments"]
+            self.assertEqual(args[args.index("--write-lock") + 1], str(lock))
+
+    def test_list_sources_does_not_forward_an_output_write_lock(self):
+        self.cases(2)
+        lock = self.root / "missing lock parent" / "write.lock"
+        result = self.run_batch("--jobs", "2", "--list-sources", "--write-lock", str(lock))
+        self.assert_success(result)
+        for event in self.events():
+            if event["kind"] == "start":
+                self.assertNotIn("--write-lock", event["arguments"])
+        self.assertFalse(lock.parent.exists())
+
+    def test_write_lock_cannot_be_nested_inside_or_replace_a_run_output(self):
+        runs = self.cases(1)
+        for lock in (self.destination(runs[0]) / "write.lock", self.destination(runs[0]), self.output):
+            with self.subTest(lock=lock):
+                result = self.run_batch("--write-lock", str(lock))
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(self.events(), [])
+                self.assertFalse(self.output.exists())
+
     def test_dry_run_quotes_commands_and_does_not_create_paths_or_invoke_sudo(self):
         runs = self.cases(2, missing=("run-test-1", "run-test-2"))
         self.install_fake_sudo()
@@ -522,6 +557,8 @@ class BatchExtractorCLITests(unittest.TestCase):
                     if line.startswith("  ") and "fake extractor.py" in line]
         self.assertEqual(len(commands), 2)
         self.assertEqual([command[command.index("--workers") + 1] for command in commands], ["4", "4"])
+        self.assertEqual([command[command.index("--write-lock") + 1] for command in commands],
+                         [str(self.output / ".kpl-write.lock")] * 2)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.work.exists())
 

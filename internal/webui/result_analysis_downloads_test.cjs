@@ -200,11 +200,11 @@ test('batch attempt conflicts and insufficient completed members stop the export
     const f=fixture(async(path,options)=>{
       calls.push({path,options});
       assert.ok(path.startsWith('/api/v1/batch-analysis-jobs/batch'));
-      if(options.method==='POST')throw Object.assign(Error(conflict?'attempt changed':'at least two completed runs are required'),
+      if(options.method==='POST')throw Object.assign(Error(conflict?'attempt changed':'batch mean requires at least one completed run'),
         {status:conflict?409:422,...(conflict?{code:'analysis-attempt-changed'}:{})});
       return {batchId:'batch',state:'idle'};
-    },[{id:'only-success',batchId:'batch',repetitions:3}]);
-    await assert.rejects(f.download('results',['batch:batch']),conflict?/outcome unknown/:/at least two completed/);
+    },[{id:'failed-run',batchId:'batch',repetitions:3,state:'failed'}]);
+    await assert.rejects(f.download('results',['batch:batch']),conflict?/outcome unknown/:/at least one completed/);
     assert.equal(calls.length,2);
     assert.equal(f.downloads.length,0);
   }

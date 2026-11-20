@@ -4,7 +4,7 @@
   const R = typeof module !== "undefined" && module.exports ? require("./research-charts.js") : root.KPLResearch;
   const finite = value => typeof value === "number" && Number.isFinite(value);
   function validate(data, id) {
-    if (data?.version !== 1 || data.aggregation !== "equal-run-mean-v1" || data.batchId !== id || !Array.isArray(data.runs) || data.runs.length < 2 || data.runs.length > 100 || (data.excluded != null && !Array.isArray(data.excluded)) || !data.summary)
+    if (data?.version !== 1 || data.aggregation !== "equal-run-mean-v1" || data.batchId !== id || !Array.isArray(data.runs) || data.runs.length === 0 || data.runs.length > 100 || (data.excluded != null && !Array.isArray(data.excluded)) || !data.summary)
       throw new Error("Invalid batch analysis response.");
     const ids = new Set();
     for (const run of data.runs) {

@@ -221,9 +221,18 @@ test('discrete averaging retains probability mass beyond the line preview limit'
   approx(averaged.reduce((s, p) => s + p.y, 0), 1);
 });
 
-test('batch validation rejects unrelated, duplicate, partial, and single-run inputs', () => {
+test('one completed run produces a mean chart with one contributor and undefined sample SD', () => {
+  const a = run('a', '2026-09-10T00:00:00Z', 10);
+  a.result.repetitions = 1;
+  const charts = batch.build(data([a]), images.buildCharts);
+  const points = charts.find(chart => chart.id === 'latency-cdf').series[0].points;
+  const individual = images.buildCharts(a).find(chart => chart.id === 'latency-cdf').series[0].points;
+  assert.deepEqual(points.map(p => [p.x, p.y, p.n, p.error]), individual.map(p => [p.x, p.y, 1, null]));
+});
+
+test('batch validation rejects unrelated, duplicate, partial, and empty inputs', () => {
   const a = run('a', '2026-09-10T00:00:00Z', 10), b = run('b', '2026-09-10T01:00:00Z', 20);
-  assert.throws(() => batch.validate(data([a]), 'batch'));
+  assert.throws(() => batch.validate(data([]), 'batch'));
   assert.throws(() => batch.validate(data([a, a]), 'batch'));
   assert.throws(() => batch.validate(data([a, { ...b, result: { ...b.result, batchId: 'other' } }]), 'batch'));
   assert.throws(() => batch.validate(data([a, { ...b, result: { ...b.result, state: 'running' } }]), 'batch'));

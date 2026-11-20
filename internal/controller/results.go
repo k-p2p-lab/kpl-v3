@@ -721,7 +721,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	batchStatuses := map[string]*batchAnalysisStatus{}
 	for i := range results {
 		id := results[i].BatchID
-		if id == "" || results[i].Repetitions < 2 {
+		if id == "" {
 			continue
 		}
 		status, exists := batchStatuses[id]

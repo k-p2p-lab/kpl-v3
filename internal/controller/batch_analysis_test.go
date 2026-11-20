@@ -175,6 +175,72 @@ func TestBatchAnalysisPersistsMeansAndKeepsIndividualAnalysis(t *testing.T) {
 		t.Fatal("old job ID returned a new artifact")
 	}
 }
+func TestBatchAnalysisWithOneCompletedRun(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		expected int
+		legacy   bool
+	}{
+		{name: "single", expected: 1},
+		{name: "legacy-single", expected: 1, legacy: true},
+		{name: "one-success-and-one-failure", expected: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := isolatedAnalysisServer(t)
+			batchID := "only-run"
+			if tc.legacy {
+				batchFixture(t, s, "", batchID, "completed", 0, 0, 3)
+			} else {
+				batchFixture(t, s, batchID, batchID, "completed", 1, tc.expected, 3)
+			}
+			if tc.expected == 2 {
+				batchFixture(t, s, batchID, "failed-run", "failed", 2, 2, 9)
+			}
+			start := resultRequest(s, http.MethodPost, "/api/v1/batch-analysis-jobs/"+batchID)
+			if start.Code != http.StatusAccepted {
+				t.Fatalf("start: %d %s", start.Code, start.Body)
+			}
+			job := awaitBatch(t, s, batchID)
+			s.analysisWorkers.Wait()
+			if job.State != "completed" || job.CompletedRuns != 1 || job.TotalRuns != 1 {
+				t.Fatalf("job: %+v", job)
+			}
+			restarted := New(s.config, nil)
+			resp := resultRequest(restarted, http.MethodGet, job.ResultURL)
+			var result batchAnalysisResult
+			if resp.Code != http.StatusOK || json.Unmarshal(resp.Body.Bytes(), &result) != nil {
+				t.Fatalf("saved artifact: %d %s", resp.Code, resp.Body)
+			}
+			if len(result.Runs) != 1 || result.Runs[0].Result.ID != batchID || result.ExpectedRuns != tc.expected || len(result.Excluded) != tc.expected-1 || result.MissingRuns != 0 {
+				t.Fatalf("unexpected membership: %+v", result)
+			}
+			stat := result.Summary["metrics.published"]
+			if stat.Count != 1 || stat.Average == nil || *stat.Average != 3 || stat.Deviation != nil {
+				t.Fatalf("single-run statistics: %+v", stat)
+			}
+			list := resultRequest(restarted, http.MethodGet, "/api/v1/results")
+			var rows []savedResult
+			if list.Code != http.StatusOK || json.Unmarshal(list.Body.Bytes(), &rows) != nil || len(rows) != tc.expected {
+				t.Fatalf("listed results: %d %s", list.Code, list.Body)
+			}
+			for _, row := range rows {
+				if row.BatchAnalysis == nil || row.BatchAnalysis.State != "completed" || row.BatchAnalysis.ID != job.ID {
+					t.Fatalf("missing completed batch from saved results: %+v", row)
+				}
+			}
+		})
+	}
+}
+
+func TestBatchAnalysisRequiresOneCompletedRun(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	batchFixture(t, s, "batch", "failed", "failed", 1, 1, 0)
+	resp := resultRequest(s, http.MethodPost, "/api/v1/batch-analysis-jobs/batch")
+	if resp.Code != http.StatusUnprocessableEntity || !strings.Contains(resp.Body.String(), errNoCompletedBatchRuns.Error()) {
+		t.Fatalf("empty batch analysis: %d %s", resp.Code, resp.Body)
+	}
+}
+
 func TestBatchAnalysisRequestCancellationAndDuplicateAdmission(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	batchFixture(t, s, "batch", "one", "completed", 1, 2, 1)

@@ -113,7 +113,7 @@ test('Saved results groups only one repetition batch and preserves individual ac
   runs[2].state = 'completed';
   api.renderSavedResults();
   assert.doesNotMatch(element('#savedResultsRows').innerHTML, /data-batch-images="one"[^>]+disabled/);
-  assert.match(element('#savedResultsRows').innerHTML, /data-batch-images="two"[^>]+disabled/);
+  assert.doesNotMatch(element('#savedResultsRows').innerHTML, /data-batch-images="two"[^>]+disabled/);
 });
 
 
@@ -163,7 +163,8 @@ test('one completed Run uses a selectable group with Add runs and preserves its 
   assert.deepEqual(selections,[{key:'batch:run-one',label:'Single <trial>'}]);
   assert.equal((html.match(/data-append-batch="run-one"/g)||[]).length,1);
   assert.doesNotMatch(html,/data-append-batch="run-one"[^>]*disabled/);
-  assert.match(html,/data-batch-images="run-one"[^>]*disabled/);
+  assert.match(html,/data-batch-images="run-one"[^>]*>Analyze batch mean</);
+  assert.doesNotMatch(html,/data-batch-images="run-one"[^>]*disabled/);
   for(const action of ['images','download']) assert.equal((html.match(new RegExp(`data-result-${action}="run-one"`,'g'))||[]).length,1);
   assert.match(html,/Run note/);assert.match(html,/Group note/);
 });
@@ -187,7 +188,7 @@ test('series retain incomplete metadata members and remain grouped until their l
   html = element('#savedResultsRows').innerHTML;
   assert.match(html, /<details/);
   assert.match(html, /1 run · 1 \/ 3 completed/);
-  assert.match(html, /data-batch-images="batch&quot;&lt;&amp;"[^>]+disabled/);
+  assert.doesNotMatch(html, /data-batch-images="batch&quot;&lt;&amp;"[^>]+disabled/);
   state.savedResults = runs.slice(2);
   api.renderSavedResults();
   html = element('#savedResultsRows').innerHTML;

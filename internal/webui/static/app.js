@@ -1633,14 +1633,14 @@ function savedResultTable(runs, key, label = "Saved experiment results") {
 
 function savedResultBatch(batch) {
   const job = batch.job;
-  const savedOnly = batch.completed < 2 && !batch.active && Boolean(job?.savedAnalysisId || (job?.state === "completed" || job?.state === "idle" && job?.stale) && job?.id);
+  const savedOnly = batch.completed === 0 && !batch.active && Boolean(job?.savedAnalysisId || (job?.state === "completed" || job?.state === "idle" && job?.stale) && job?.id);
   const label = savedOnly ? "Batch mean · Saved" : ["queued", "running"].includes(job?.state) ? `Batch mean · ${job.state === "queued" ? "Queued" : job.phase?.includes("checking-sources") ? "Checking" : `${Math.floor(job.progress || 0)}%`}`
     : job?.stale ? "Batch mean · Check" : job?.state === "completed" ? "Batch mean · Ready" : ["failed", "interrupted"].includes(job?.state) ? "Batch mean · Retry" : "Analyze batch mean";
   const missing = batch.runs.filter(run => run.missing || run.state === "missing").length + Math.max(0, batch.expected - batch.runs.length);
   const available = batch.runs.filter(run => !run.missing && run.state !== "missing").length;
   const excluded = available - batch.completed;
-  const canAnalyze = savedOnly || batch.completed >= 2 || batch.active && batch.expected >= 2;
-  const hint = savedOnly ? "View the last completed batch analysis. Missing result data is not reanalyzed." : batch.active ? "Queue analysis after all runs in this batch stop." : batch.completed < 2 ? "At least two completed runs are required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
+  const canAnalyze = savedOnly || batch.completed > 0 || batch.active;
+  const hint = savedOnly ? "View the last completed batch analysis. Missing result data is not reanalyzed." : batch.active ? "Queue analysis after all runs in this batch stop." : batch.completed === 0 ? "At least one completed run is required." : "Analyze completed runs with equal weight; expand this series for individual Images.";
   const resuming = state.pendingResumes?.has(batch.id);
   const remaining = remainingBatchRuns(batch);
   const analyzing = ["queued", "running"].includes(job?.state) || [...batch.runs, ...(batch.previousRuns || [])].some(run => ["queued", "running"].includes(run.analysis?.state));

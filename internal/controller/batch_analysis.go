@@ -22,6 +22,8 @@ const batchAnalysisVersion = 1
 const batchJobFile = "job.json"
 const batchResultFile = "result.json"
 
+var errNoCompletedBatchRuns = errors.New("batch mean requires at least one completed run")
+
 type batchAnalysisStatus struct {
 	analysisJobStatus
 	BatchID       string   `json:"batchId"`
@@ -244,7 +246,7 @@ func selectBatchAnalysisMembers(members []savedResult) (selected, excluded []sav
 	selected, excluded = []savedResult{}, []savedResult{}
 	iterations := map[int]bool{}
 	for _, member := range currentBatchMembers(members) {
-		if member.Repetitions < 2 || member.Repetitions > maxScenarioRepetitions || member.Iteration < 1 || member.Iteration > member.Repetitions || iterations[member.Iteration] || expected != 0 && expected != member.Repetitions {
+		if member.Repetitions < 1 || member.Repetitions > maxScenarioRepetitions || member.Iteration < 1 || member.Iteration > member.Repetitions || iterations[member.Iteration] || expected != 0 && expected != member.Repetitions {
 			return nil, nil, 0, false, errors.New("inconsistent repeated-run metadata")
 		}
 		expected = member.Repetitions
@@ -278,8 +280,8 @@ func (s *Server) startBatchAnalysisExpected(ctx context.Context, id string, refr
 	if err != nil {
 		return batchAnalysisStatus{}, err
 	}
-	if len(selected) < 2 && !pending {
-		return batchAnalysisStatus{}, errors.New("batch mean requires at least two completed runs")
+	if len(selected) == 0 && !pending {
+		return batchAnalysisStatus{}, errNoCompletedBatchRuns
 	}
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()
@@ -353,8 +355,8 @@ func (s *Server) prepareBatchAnalysisJob(ctx context.Context, job *batchAnalysis
 	if pending {
 		return nil, nil, 0, errResultBusy
 	}
-	if len(selected) < 2 {
-		return nil, nil, 0, errors.New("batch mean requires at least two completed runs")
+	if len(selected) == 0 {
+		return nil, nil, 0, errNoCompletedBatchRuns
 	}
 	s.analysisJobMu.Lock()
 	defer s.analysisJobMu.Unlock()

@@ -62,7 +62,8 @@ def read_cases(file: Path):
         seen.add(rid)
         if row['label'] in ('.', '..') or not re.fullmatch(r'[a-zA-Z0-9_.-]+', row['label']):
             raise ValueError(f'Unsafe label: {row["label"]}')
-        if not row['degree'].isdigit() or not row['payload_bytes'].isdigit():
+        if any(value is None or not re.fullmatch(r'[0-9]*', value)
+               for value in (row['degree'], row['payload_bytes'])):
             raise ValueError('Bad degree/payload values')
     return rows
 
@@ -95,9 +96,13 @@ def concurrency(jobs, workers, total):
 
 def command(args, row, extractor, src, dst, work_root, workers):
     cmd = (['sudo', '-n', 'python3'] if args.sudo else [args.python]) + [
-        str(extractor), str(src), '--degree', row['degree'], '--payload-bytes', row['payload_bytes'],
+        str(extractor), str(src),
         '--label', row['label'], '--out', str(dst), '--workers', str(workers),
     ]
+    if row['degree']:
+        cmd += ['--degree', row['degree']]
+    if row['payload_bytes']:
+        cmd += ['--payload-bytes', row['payload_bytes']]
     if args.local_current_root:
         cmd += ['--local-current-root', str(args.local_current_root.expanduser().resolve())]
     if args.verify_archive_sha256:

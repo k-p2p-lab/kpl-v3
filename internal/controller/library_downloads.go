@@ -46,7 +46,7 @@ func (s *Server) handleLibraryDownloadRequest(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid download selection")
 		return
 	}
-	if (request.Kind != "scenarios" && request.Kind != "results") || len(request.IDs) == 0 || len(request.IDs) > libraryDownloadLimit {
+	if (request.Kind != "scenarios" && request.Kind != "results" && request.Kind != "extract-manifest") || len(request.IDs) == 0 || len(request.IDs) > libraryDownloadLimit {
 		writeError(w, http.StatusBadRequest, "select 1–2,000 scenarios or runs per download")
 		return
 	}
@@ -56,6 +56,8 @@ func (s *Server) handleLibraryDownloadRequest(w http.ResponseWriter, r *http.Req
 		valid, prefix := validResultID(id), "run:"
 		if request.Kind == "scenarios" {
 			valid, prefix = validScenarioID(id), "scenario:"
+		} else if request.Kind == "extract-manifest" {
+			valid = valid && extractRunID.MatchString(id)
 		}
 		if !valid {
 			writeError(w, http.StatusBadRequest, "invalid download item ID")
@@ -65,6 +67,10 @@ func (s *Server) handleLibraryDownloadRequest(w http.ResponseWriter, r *http.Req
 			ids, keys = append(ids, id), append(keys, prefix+id)
 			seen[id] = true
 		}
+	}
+	if request.Kind == "extract-manifest" {
+		s.writeExtractManifest(w, r, ids)
+		return
 	}
 	if err := s.checkLibraryDownloadItems(r.Context(), request.Kind, ids, keys); err != nil {
 		status := http.StatusInternalServerError

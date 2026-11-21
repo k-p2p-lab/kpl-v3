@@ -46,3 +46,21 @@ test('invalid server links and preparation failures do not initiate downloads', 
  await assert.rejects(download('scenarios',['scenario:one']),/unreadable selection/);
  assert.equal(created,0);
 });
+
+test('extract manifest downloads CSV for the exact saved runs of the selection',async()=>{
+ const request=[],blobs=[],links=[];
+ const csv='payload_bytes,degree,seed,run_id,label\r\n1000,6,9007199254740993,run-first,case\r\n';
+ const download=createDownloads({manifest:true,getResults:()=>[{id:'run-first',batchId:'b'},
+   {id:'missing',state:'missing',batchId:'b'},{id:'run-first',batchId:'b'},{id:'run-other'}],
+   api:async(path,options)=>{request.push({path,options});return csv},
+   url:{createObjectURL(blob){blobs.push(blob);return 'blob:manifest'},revokeObjectURL(){}},
+   document:{createElement(){return {click(){links.push(this)},remove(){}}},body:{appendChild(){}}}});
+ await assert.rejects(download('scenarios',['scenario:first']),/saved results only/);
+ await download('results',['batch:b']);
+ assert.equal(request.length,1);
+ assert.equal(request[0].path,'/api/v1/downloads');
+ assert.equal(request[0].options.responseType,'text');
+ assert.deepEqual(JSON.parse(request[0].options.body),{kind:'extract-manifest',ids:['run-first']});
+ assert.equal(links[0].download,'kpl_extract_manifest.csv');
+ assert.equal(await blobs[0].text(),csv);
+});

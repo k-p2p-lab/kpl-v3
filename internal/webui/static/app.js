@@ -3164,6 +3164,8 @@ globalThis.KPLLibraryGroups?.init({ api, getItems: libraryGroupItems, getVisible
   onSelectionChanged: renderScenarioRunControl,
   download: globalThis.KPLLibraryDownloads?.createDownloads({api,
     getScenarios: () => state.savedScenarios || [], getResults: () => state.savedResults || []}),
+  downloadManifest: globalThis.KPLLibraryDownloads?.createDownloads({api, manifest:true,
+    getResults: () => state.savedResults || []}),
   downloadCSV: globalThis.KPLResultAnalysisDownloads?.createDownloads({api,
     getResults: () => state.savedResults || []}),
   downloadJSON: globalThis.KPLResultAnalysisDownloads?.createDownloads({api, format:"json",

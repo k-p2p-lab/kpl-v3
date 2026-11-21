@@ -297,7 +297,7 @@
           : needsRefresh ? "Refresh groups to confirm their current state." : locked() ? "Wait for the current library operation to finish."
           : "Retry failed, canceled, interrupted or missing runs using saved inputs; available completed results are kept.";
         const moveControls = '<label class="visually-hidden" for="libraryMove-' + scope + '">Move selected items to group</label><select id="libraryMove-' + scope + '" data-library-move-target' + disabled + '>' + groupOptions(selecting ? targetGroup : importGroup()) + '</select><button class="secondary-button" type="button" data-library-action="move"' + disabled + '>Move</button>';
-        const downloadControls = (scope === "scenarios" || options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected || options?.onDeleteFailedSelected))
+        const downloadControls = (scope === "scenarios" || options?.download || options?.onDeleteSelected || scope === "results" && (options?.downloadManifest || options?.downloadCSV || options?.downloadJSON || options?.onAnalyzeSelected || options?.onRetrySelected || options?.onDeleteFailedSelected))
           ? '<div class="library-selection-downloads"><span class="action-menu" data-action-menu="library-download:' + scope + '">'
             + '<button class="secondary-button" type="button" data-action-menu-toggle="library-download:' + scope + '" aria-expanded="false"' + (canDownload ? "" : " disabled") + '>Actions<span class="visually-hidden"> for selected ' + scope + '</span></button><span class="action-menu-items">'
             + (scope === "scenarios" ? '<span class="library-move-menu">' + moveControls + '</span>' : "")
@@ -305,8 +305,9 @@
             + (scope === "results" && options?.onRetrySelected ? '<button type="button" data-library-action="retry-selected" title="' + escape(retryHint) + '"' + (canDownload ? "" : " disabled") + '>Retry unfinished runs</button>' : "")
             + (scope === "results" && options?.onDeleteFailedSelected ? '<button type="button" data-library-action="delete-failed-selected"' + (canDownload ? "" : " disabled") + '>Delete failed runs…</button>' : "")
             + (options?.download ? '<button type="button" data-library-action="download" title="Download selected ' + scope + ' in one ZIP"' + (canDownload ? "" : " disabled") + '>' + (scope === "results" ? "Results ZIP" : "Scenarios ZIP") + '</button>' : "")
-            + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download batch mean CSVs for repetition batches and per-Run CSVs in one ZIP, without images"' + (canDownload ? "" : " disabled") + '>CSV ZIP</button>' : "")
-            + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download batch mean JSON for repetition batches and per-Run analysis JSON in one ZIP"' + (canDownload ? "" : " disabled") + '>Analysis JSON ZIP</button>' : "")
+            + (scope === "results" && options?.downloadManifest ? '<button type="button" data-library-action="download-manifest" title="Download the selected Runs as a manifest for kpl_extract_nas.py"' + disabled + '>Extract manifest CSV</button>' : "")
+            + (scope === "results" && options?.downloadCSV ? '<button type="button" data-library-action="download-csv" title="Download batch mean and per-Run CSVs. Large selections download in multiple ZIP files."' + disabled + '>CSV ZIP</button>' : "")
+            + (scope === "results" && options?.downloadJSON ? '<button type="button" data-library-action="download-json" title="Download batch mean and per-Run analysis JSON. Large selections download in multiple ZIP files."' + disabled + '>Analysis JSON ZIP</button>' : "")
             + (options?.onDeleteSelected ? '<button class="library-delete-action" type="button" data-library-action="delete-selected"' + (canDownload ? "" : " disabled") + '>Delete selected…</button>' : "")
             + '</span></span>'
             + (scope === "results" && analysisDownloadController ? '<button class="secondary-button" type="button" data-library-action="cancel-download">Cancel</button>' : "") + '</div>' : "";
@@ -433,7 +434,7 @@
           analysisDownloadController?.abort();
           return;
         }
-        if (locked() && ["clear", "download", "download-csv", "download-json", "delete-selected", "delete-failed-selected", "analyze-selected", "retry-selected", "move"].includes(action)) return;
+        if (locked() && ["clear", "download", "download-manifest", "download-csv", "download-json", "delete-selected", "delete-failed-selected", "analyze-selected", "retry-selected", "move"].includes(action)) return;
         if (action === "manage") {
           ensureDialog();
           if (!dialog) return;
@@ -478,11 +479,12 @@
             refreshUI();
             document?.querySelector("#resultGroupTools")?.querySelector('[data-action-menu-toggle="library-download:results"]')?.focus({preventScroll:true});
           }
-        } else if (action === "download" || action === "download-csv" || action === "download-json") {
+        } else if (["download", "download-manifest", "download-csv", "download-json"].includes(action)) {
           const csv = action === "download-csv";
           const json = action === "download-json", analysis = csv || json;
-          const download = json ? options?.downloadJSON : csv ? options?.downloadCSV : options?.download;
-          if (!selected.size || !ready() || !download || analysis && selectionScope !== "results") return;
+          const manifest = action === "download-manifest";
+          const download = manifest ? options?.downloadManifest : json ? options?.downloadJSON : csv ? options?.downloadCSV : options?.download;
+          if (!selected.size || !ready() || !download || (analysis || manifest) && selectionScope !== "results") return;
           const keys = [...selected], scope = selectionScope;
           if (analysis) analysisDownloadController = new AbortController();
           busy = true;
@@ -493,13 +495,14 @@
           if (analysis) document?.querySelector("#resultGroupTools")
             ?.querySelector('[data-library-action="cancel-download"]')?.focus({preventScroll:true});
           try {
-            await download(scope, keys, analysis ? {signal:analysisDownloadController.signal, onProgress:message => {
+            const result = await download(scope, keys, analysis ? {signal:analysisDownloadController.signal, onProgress:message => {
               noticeText = message;
               renderBars(items());
             }} : undefined);
-            noticeText = "Download requested. Check your browser's downloads.";
+            noticeText = analysis && result?.parts > 1 ? `${result.parts} ZIP downloads requested. Allow multiple downloads for this site if prompted.` : "Download requested. Check your browser's downloads.";
+            if (result?.fragmented) noticeText += " Extract all ZIPs into one folder, then join the numbered pieces in each fragments subfolder in order.";
           } catch (error) {
-            if (analysis && error.name === "AbortError") noticeText = `${json ? "JSON" : "CSV"} download canceled. Accepted analysis continues on the server.`;
+            if (analysis && error.name === "AbortError") noticeText = `${json ? "JSON" : "CSV"} download canceled. Accepted analysis continues on the server.${error.partsRequested ? ` Already requested ${error.partsRequested} ZIP download(s).` : ""}`;
             else throw error;
           } finally {
             analysisDownloadController = null;

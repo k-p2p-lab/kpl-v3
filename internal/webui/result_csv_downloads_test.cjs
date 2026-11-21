@@ -258,7 +258,7 @@ test('cancellation wins over a crossed request error and malformed jobs never tr
 test('size, selection and path limits reject exports before a completed download exists',async()=>{
   let requests=0;
   const f=fixture(async path=>{requests++;return path.includes('/result?')?artifact('one'):{runId:'one',id:'saved-one',state:'completed'}},undefined,{byteLimit:128});
-  await assert.rejects(f.download('results',['run:one']),/128 MiB.*fewer/);
+  await assert.rejects(f.download('results',['run:one']),/part size is too small/);
   assert.equal(f.links.length,0);
   await assert.rejects(f.download('scenarios',['scenario:one']),/saved results only/);
   await assert.rejects(f.download('results',['run:gone']),/no longer listed/);
@@ -266,6 +266,41 @@ test('size, selection and path limits reject exports before a completed download
   const before=requests;
   await assert.rejects(invalid.download('results',['run:../escape']),/Invalid result identity/);
   assert.equal(requests,before);
+});
+
+test('CSV ZIPs roll over between results and expose complete chart CSVs when one result exceeds the limit',async()=>{
+  const api=async path=>{
+    const id=path.split('/')[4];
+    return path.includes('/result?')?artifact(id):{runId:id,id:'saved-'+id,state:'completed'};
+  };
+  const single=fixture(api);
+  await single.download('results',['run:one']);
+  const [inside]=entries(await single.downloads[0].arrayBuffer()), charts=entries(inside.data);
+  const limit=single.downloads[0].size, expected=charts.map(entry=>[entry.name,entry.data]);
+  const f=fixture(api,[{id:'one'},{id:'two'},{id:'end'}],{byteLimit:limit});
+  assert.deepEqual(await f.download('results',['run:one','run:two','run:end']),{parts:3,fragmented:false});
+  for(const [i,blob] of f.downloads.entries()) {
+    assert.ok(blob.size<=limit);
+    assert.match(f.links[i].download,new RegExp('-part-00'+(i+1)+'\\.zip$'));
+    const part=entries(await blob.arrayBuffer());
+    assert.equal(part.length,1);
+    assert.match(part[0].name,/-csv\.zip$/);
+    assert.equal(entries(part[0].data).length,charts.length);
+  }
+  const flat=fixture(api,undefined,{byteLimit:Math.floor(limit/2)});
+  const {parts,fragmented}=await flat.download('results',['run:one']);
+  assert.ok(parts>1);
+  assert.equal(fragmented,false);
+  const actual=[];
+  for(const blob of flat.downloads) {
+    assert.ok(blob.size<=Math.floor(limit/2));
+    for(const file of entries(await blob.arrayBuffer())) {
+      const [folder,name]=file.name.split('/');
+      assert.equal(folder,inside.name.slice(0,-4));
+      actual.push([name,file.data]);
+    }
+  }
+  assert.deepEqual(actual,expected);
 });
 
 test('CSV export module is embedded before the app and selection UI connects it separately',()=>{

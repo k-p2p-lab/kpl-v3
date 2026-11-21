@@ -628,6 +628,20 @@ test('CSV ZIP is limited to Saved Results selection and reports progress without
   assert.doesNotMatch(h.groups.selectionMarkup('batch:one','One'),/ disabled/);
 });
 
+test('extract manifest is a Saved Results action and receives the selected keys',async()=>{
+  const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
+  const calls=[];
+  const h=harness(async()=>initial(),{bars,downloadManifest:async(scope,keys)=>calls.push([scope,keys])});
+  await h.initialized;
+  h.check('scenario:one',true);
+  assert.doesNotMatch(bars['#scenarioGroupTools'].innerHTML,/download-manifest/);
+  await h.action('download-manifest','scenarios');
+  h.check('batch:one',true);
+  assert.match(bars['#resultGroupTools'].innerHTML,/Extract manifest CSV/);
+  await h.action('download-manifest','results');
+  assert.deepEqual(calls,[['results',['batch:one']]]);
+});
+
 test('canceling CSV ZIP unlocks selection and leaves accepted server analysis running',async()=>{
   let signal;
   const bar={innerHTML:'',contains:()=>false,querySelector:()=>null};

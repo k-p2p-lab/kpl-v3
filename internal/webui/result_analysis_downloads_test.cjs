@@ -232,7 +232,7 @@ test('invalid, replaced or unrelated batch snapshots prevent a partial selection
   }
 });
 
-test('batch JSON cancellation and UTF-8 ZIP size bounds retain the existing all-or-nothing export contract',async()=>{
+test('batch JSON cancellation and UTF-8 ZIP size boundaries',async()=>{
   const controller=new AbortController();let requests=0;
   const canceled=fixture(async()=>{requests++;return {batchId:'batch',id:'pending',state:'queued'}},
     [{id:'member',batchId:'batch',repetitions:2}]);
@@ -242,8 +242,9 @@ test('batch JSON cancellation and UTF-8 ZIP size bounds retain the existing all-
   const exact=22+76+2*Buffer.byteLength(name)+Buffer.byteLength(batchArtifact('batch'));
   for(const accepted of [true,false]){
     const f=fixture(completed,[{id:'member',batchId:'batch',repetitions:2}],{byteLimit:accepted?exact:exact-1});
-    if(accepted){await f.download('results',['batch:batch']);assert.equal(f.downloads[0].size,exact);}
-    else {await assert.rejects(f.download('results',['batch:batch']),/128 MiB/);assert.equal(f.downloads.length,0);}
+    await f.download('results',['batch:batch']);
+    if(accepted){assert.equal(f.downloads.length,1);assert.equal(f.downloads[0].size,exact);}
+    else {assert.equal(f.downloads.length,2);assert.ok(f.downloads.every(blob=>blob.size<=exact-1));}
   }
 });
 
@@ -320,13 +321,51 @@ test('JSON ZIP counts UTF-8 and ZIP overhead and rejects stale selection before 
   const accepted=fixture(completed,undefined,{byteLimit:exact});
   await accepted.download('results',['run:one']);
   assert.equal(accepted.downloads[0].size,exact);
-  const tooLarge=fixture(completed,undefined,{byteLimit:exact-1});
-  await assert.rejects(tooLarge.download('results',['run:one']),/128 MiB.*fewer/);
-  assert.equal(tooLarge.links.length,0);
+  const split=fixture(completed,undefined,{byteLimit:exact-1});
+  assert.deepEqual(await split.download('results',['run:one']),{parts:2,fragmented:true});
+  const fragments=[];
+  for (const [i,blob] of split.downloads.entries()) {
+    assert.ok(blob.size<=exact-1);
+    const [file]=entries(await blob.arrayBuffer());
+    assert.equal(file.name,'fragments/'+name+'/part-00000'+(i+1)+'-of-000002');
+    fragments.push(file.data);
+  }
+  assert.deepEqual(Buffer.concat(fragments),Buffer.from(artifact(id)));
   const noCalls=fixture(()=>{throw new Error('must not request')},[{id:'../escape'}]);
   await assert.rejects(noCalls.download('scenarios',['scenario:one']),/saved results only/);
   await assert.rejects(noCalls.download('results',['run:gone']),/no longer listed/);
   await assert.rejects(noCalls.download('results',['run:../escape']),/Invalid result identity/);
+});
+
+test('multi-selection rolls over between whole JSON snapshots and reports parts already requested on failure or cancel',async()=>{
+  const ids=['one','two','end','bad'], results=ids.map(id=>({id}));
+  const name='[한글 _ Analysis]-one-analysis.json';
+  const limit=22+76+2*Buffer.byteLength(name)+Buffer.byteLength(artifact('one'));
+  for(const outcome of ['success','error','cancel']) {
+    const controller=new AbortController(), fetched=[];
+    const f=fixture(async(path,opts)=>{
+      if(path.includes('/result?')) fetched.push(path.split('/')[4]);
+      if(path.endsWith('/bad')&&outcome==='error') throw new Error('storage unavailable');
+      return completed(path,opts);
+    },results,{byteLimit:limit});
+    const keys=ids.map(id=>'run:'+id);
+    const run=f.download('results',keys,{signal:controller.signal,onProgress(message){
+      if(outcome==='cancel' && message.includes('3/4')) controller.abort();
+    }});
+    if(outcome==='success') assert.deepEqual(await run,{parts:4,fragmented:false});
+    if(outcome==='error') await assert.rejects(run,/bad: storage unavailable.*Already requested 2 ZIP/);
+    if(outcome==='cancel') await assert.rejects(run,{name:'AbortError',partsRequested:1});
+    const count={success:4,error:2,cancel:1}[outcome];
+    assert.equal(f.links.length,count);
+    assert.equal(new Set(fetched).size,fetched.length);
+    for(const [i,blob] of f.downloads.entries()) {
+      assert.ok(blob.size<=limit);
+      assert.match(f.links[i].download,new RegExp('-part-00'+(i+1)+'\\.zip$'));
+      const archive=entries(await blob.arrayBuffer());
+      assert.equal(archive.length,1);
+      assert.deepEqual(archive[0].data,Buffer.from(artifact(ids[i])));
+    }
+  }
 });
 
 test('the shared export module is embedded and wired independently for CSV and JSON',()=>{

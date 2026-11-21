@@ -5,8 +5,12 @@
   const batch = node ? require("./batch-analysis.js") : root.KPLBatchAnalysis;
   const research = node ? require("./research-charts.js") : root.KPLResearch;
   const files = node ? require("./research-files.js") : root.KPLResearchFiles;
+  const downloads = node ? require("./library-downloads.js") : root.KPLLibraryDownloads;
   const maxArchiveBytes = 128 * 1024 * 1024;
-  const archiveTooLarge = label => new Error(`${label} export exceeds 128 MiB. Select fewer results and download again.`);
+  // Stored ZIP: local header + central header, two copies of the UTF-8
+  // filename, and one end-of-central-directory record per archive.
+  const encoder = new TextEncoder(), zipEnd = 22;
+  const entryHeader = name => 76 + 2 * encoder.encode(name).length;
   const checkAbort = signal => { if (signal?.aborted) throw new DOMException("Analysis export canceled.", "AbortError"); };
 
   function batchSnapshotCSV(data) {
@@ -38,7 +42,6 @@
     requestTimeout = 30000, byteLimit = maxArchiveBytes, format = "csv"}) {
     if (!["csv", "json"].includes(format)) throw new Error("Unknown analysis export format.");
     const label = format === "json" ? "JSON" : "CSV";
-    const tooLarge = () => archiveTooLarge(label);
     async function request(path, options, signal) {
       checkAbort(signal);
       const controller = new AbortController();
@@ -130,46 +133,52 @@
       return {data, source};
     }
 
-    async function analysisArchive(target, signal, progress, availableBytes) {
+    async function* analysisFiles(target, signal, progress) {
       const {id, isBatch} = target;
       const {data, source} = await loadAnalysis(target, signal, progress);
       if (format === "json") {
         checkAbort(signal);
         progress("Preparing analysis JSON");
-        if (source.length > availableBytes) throw tooLarge();
         // Preserve the original JSON text, including integers beyond JS precision.
-        const bytes = new TextEncoder().encode(source);
-        if (bytes.length > availableBytes) throw tooLarge();
         const name = images.imageZIPFilename(isBatch ? data.name : data.result.name, id)
           .replace(/-images\.zip$/, isBatch ? "-batch-analysis.json" : "-analysis.json");
         await pause(signal, 0);
-        return {name, data:bytes};
+        yield {name, blob:new Blob([source])};
+        return;
       }
       const charts = (isBatch ? batch.build(data, images.buildCharts) : images.buildCharts(data)).map(research.formatChart);
-      const bundle = [], encoder = new TextEncoder(), artifactID = isBatch ? `${id}-batch-mean` : id;
-      if (charts.length + (isBatch ? 2 : 0) > 65535) throw new Error("This result has too many charts for one CSV ZIP.");
-      let size = 22;
-      const addCSV = (name, source) => {
-        const bytes = encoder.encode(source);
-        size += 76 + 2 * encoder.encode(name).length + bytes.length;
-        if (size > availableBytes) throw tooLarge();
-        bundle.push({name, data:bytes});
-      };
-      if (isBatch) {
-        addCSV(`${artifactID}-summary.csv`, batch.summaryCSV(data.summary));
-        addCSV(`${artifactID}-snapshot.csv`, batchSnapshotCSV(data));
+      const artifactID = isBatch ? `${id}-batch-mean` : id;
+      const name = images.imageZIPFilename(isBatch ? data.name : data.result.name, artifactID).replace(/-images\.zip$/, "-csv.zip");
+      function* rows() {
+        if (isBatch) {
+          yield ["summary", batch.summaryCSV(data.summary)];
+          yield ["snapshot", batchSnapshotCSV(data)];
+        }
+        for (const [index, chart] of charts.entries()) {
+          progress(`Preparing CSV ${index + 1}/${charts.length}`);
+          checkAbort(signal);
+          yield [chart.id, files.chartCSV(chart)];
+        }
       }
-      for (const [index, chart] of charts.entries()) {
+      const bundle = [];
+      let nested = true, size = zipEnd + entryHeader(name) + zipEnd;
+      for (const [suffix, text] of rows()) {
         checkAbort(signal);
-        progress(`Preparing CSV ${index + 1}/${charts.length}`);
-        addCSV(`${artifactID}-${chart.id}.csv`, files.chartCSV(chart));
-        // Yield between charts so cancel and progress remain responsive.
+        const entry = {name:`${artifactID}-${suffix}.csv`, data:encoder.encode(text)};
+        size += entryHeader(entry.name) + entry.data.length;
+        if (nested && (size > byteLimit || bundle.length === 65535)) {
+          // Large CSV results remain usable chart by chart. The directory
+          // keeps files associated with the same Run or batch in every part.
+          nested = false;
+          for (const item of bundle) yield {name:name.slice(0, -4) + "/" + item.name, blob:new Blob([item.data])};
+          bundle.length = 0;
+        }
+        if (nested) bundle.push(entry);
+        else yield {name:name.slice(0, -4) + "/" + entry.name, blob:new Blob([entry.data])};
         await pause(signal, 0);
       }
-      const archive = files.zip(bundle);
       checkAbort(signal);
-      const name = images.imageZIPFilename(isBatch ? data.name : data.result.name, artifactID).replace(/-images\.zip$/, "-csv.zip");
-      return {name, data:new Uint8Array(await archive.arrayBuffer())};
+      if (nested) yield {name, blob:files.zip(bundle)};
     }
 
     return async (scope, keys, {signal, onProgress = () => {}} = {}) => {
@@ -177,44 +186,72 @@
       const targets = selectedAnalyses(keys, getResults());
       // IDs are also filename components. The server accepts this same alphabet.
       if (targets.some(({id}) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id))) throw new Error("Invalid result identity. Refresh the list and select again.");
-      const bundle = [], encoder = new TextEncoder();
-      let size = 22;
+      const bundle = [];
+      let size = zipEnd, parts = 0, fragmented = false;
+      const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+      const base = `results-${format === "json" ? "analysis" : "csv"}-${stamp}`;
       const controller = new AbortController(), abort = () => controller.abort();
       signal?.addEventListener("abort", abort, {once:true});
       root.addEventListener?.("pagehide", abort);
       if (signal?.aborted) controller.abort();
-      let objectURL;
+      function sendPart(numbered) {
+        onProgress(`Preparing selected ${format === "json" ? "analysis JSON files" : "CSV bundles"}${numbered ? " · ZIP " + (parts + 1) + " · Allow multiple downloads if prompted" : ""}…`);
+        checkAbort(controller.signal);
+        const suffix = numbered ? "-part-" + String(parts + 1).padStart(3, "0") : "";
+        downloads.saveBlob(files.zip(bundle), base + suffix + ".zip", document, url);
+        parts++;
+        bundle.length = 0;
+        size = zipEnd;
+      }
+      async function add(name, blob) {
+        checkAbort(controller.signal);
+        const bytes = entryHeader(name) + blob.size;
+        if (bundle.length && (size + bytes > byteLimit || bundle.length === 65535)) sendPart(true);
+        const data = new Uint8Array(await blob.arrayBuffer());
+        checkAbort(controller.signal);
+        bundle.push({name, data});
+        size += bytes;
+      }
+      async function addFile({name, blob}) {
+        if (zipEnd + entryHeader(name) + blob.size <= byteLimit) {
+          await add(name, blob);
+          return;
+        }
+        // Only a single oversized file requires byte reconstruction. Include
+        // the expected count so an interrupted download is detectable.
+        const number = n => String(n).padStart(6, "0");
+        const fragment = (i, n) => `fragments/${name}/part-${number(i)}-of-${number(n)}`;
+        const capacity = byteLimit - zipEnd - entryHeader(fragment(1, 1));
+        const count = Math.ceil(blob.size / capacity);
+        if (capacity < 1 || count > 999999) throw new Error("ZIP part size is too small for this filename.");
+        fragmented = true;
+        for (let i = 0; i < count; i++) {
+          await add(fragment(i + 1, count), blob.slice(i * capacity, (i + 1) * capacity));
+          await pause(controller.signal, 0);
+        }
+      }
       try {
         for (const [index, target] of targets.entries()) {
           checkAbort(controller.signal);
           const identity = target.isBatch ? `Batch ${target.id}` : target.id;
           const progress = message => onProgress(`${label} ZIP ${index + 1}/${targets.length} · ${identity} · ${message}`);
           try {
-            const archive = await analysisArchive(target, controller.signal, progress, byteLimit - size);
-            size += 76 + 2 * encoder.encode(archive.name).length + archive.data.length;
-            if (size > byteLimit) throw tooLarge();
-            bundle.push(archive);
+            for await (const file of analysisFiles(target, controller.signal, progress)) await addFile(file);
           } catch (error) {
             if (error.name === "AbortError") throw error;
             throw new Error(`${identity}: ${error.message}`);
           }
         }
         checkAbort(controller.signal);
-        onProgress(format === "json" ? "Preparing selected analysis JSON files…" : "Preparing selected CSV bundles…");
-        objectURL = url.createObjectURL(files.zip(bundle));
-        checkAbort(controller.signal);
-        const link = document.createElement("a");
-        link.href = objectURL;
-        link.download = `results-${format === "json" ? "analysis" : "csv"}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.zip`;
-        link.hidden = true;
-        document.body.appendChild(link);
-        try { link.click(); } finally { link.remove(); }
-        // Keep the URL alive until the browser has started reading its Blob.
-        const completedURL = objectURL;
-        setTimeout(() => url.revokeObjectURL(completedURL), 60000).unref?.();
-        objectURL = null;
+        sendPart(parts > 0);
+        return {parts, fragmented};
+      } catch (error) {
+        if (parts) {
+          if (error.name !== "AbortError") throw new Error(`${error.message} Already requested ${parts} ZIP download(s). Export stopped before completion.`);
+          error.partsRequested = parts;
+        }
+        throw error;
       } finally {
-        if (objectURL) url.revokeObjectURL(objectURL);
         signal?.removeEventListener("abort", abort);
         root.removeEventListener?.("pagehide", abort);
       }

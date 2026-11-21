@@ -26,19 +26,40 @@
     return unique;
   }
 
-  function createDownloads({api, getScenarios, getResults, document = root.document}) {
+  function saveBlob(blob, name, document, url) {
+    const link = document.createElement("a"), href = url.createObjectURL(blob);
+    try {
+      link.href = href;
+      link.download = name;
+      link.hidden = true;
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); }
+    } catch (error) {
+      url.revokeObjectURL(href);
+      throw error;
+    }
+    setTimeout(() => url.revokeObjectURL(href), 60000).unref?.();
+  }
+
+  function createDownloads({api, getScenarios = () => [], getResults, document = root.document, url = root.URL, manifest = false}) {
     return async (scope, keys) => {
+      if (manifest && scope !== "results") throw new Error("Extract manifests are available for saved results only.");
       const ids = selectedIDs(scope, keys, getScenarios(), getResults());
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30000);
       let download;
       try {
         download = await api("/api/v1/downloads", {method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({kind: scope, ids}), signal: controller.signal});
+          body: JSON.stringify({kind: manifest ? "extract-manifest" : scope, ids}), signal: controller.signal,
+          ...(manifest ? {responseType:"text"} : {})});
       } catch (error) {
         if (error.name === "AbortError") throw new Error("Preparing the download timed out. Try again.");
         throw error;
       } finally { clearTimeout(timer); }
+      if (manifest) {
+        saveBlob(new Blob([download], {type:"text/csv;charset=utf-8"}), "kpl_extract_manifest.csv", document, url);
+        return;
+      }
       if (!/^\/api\/v1\/downloads\/[A-Za-z0-9_-]+$/.test(download?.url || "")) throw new Error("The download response was invalid. Try again.");
       // Let the browser stream large archives to disk instead of collecting
       // every result in a JavaScript Blob or opening one tab per Run.
@@ -53,7 +74,7 @@
     };
   }
 
-  const exported = {selectedIDs, createDownloads};
+  const exported = {selectedIDs, createDownloads, saveBlob};
   if (typeof module !== "undefined" && module.exports) module.exports = exported;
   else root.KPLLibraryDownloads = exported;
 })(globalThis);

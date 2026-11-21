@@ -4,17 +4,66 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 )
+
+func TestLibraryExtractManifestUsesSavedInputs(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	const spec = "version: 3\nname: archived\nphases:\n" +
+		"- {action: join, group: boots, role: boot, count: 1}\n" +
+		"- {action: join, group: peers, count: 2}\n" +
+		"- {action: publish, group: peers, count: 1, payloadSize: 1000}\n"
+	for _, id := range []string{"run-a", "run-b", "run-legacy"} {
+		run, _ := resultFixture(t, s, id, "completed", time.Now())
+		run.Name, run.Seed = "mesh / test", 9007199254740993
+		raw := spec
+		if id == "run-b" {
+			raw += "- {action: publish, group: peers, count: 1}\n" +
+				"- {action: join, group: more, count: 1, node: {gossipsub: {params: {d: 7}}}}\n"
+		}
+		if id == "run-legacy" {
+			run.Name = "이전"
+		}
+		if err := s.persistManifest(run, []byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(s.config.DataDir, currentRunsDirectory, "run-legacy", "scenario.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	post := func(ids ...string) *httptest.ResponseRecorder {
+		return scenarioAPIRequest(t, s, http.MethodPost, "/api/v1/downloads", libraryDownload{Kind: "extract-manifest", IDs: ids}, true)
+	}
+	response := post("run-a", "run-b", "run-a", "run-legacy")
+	if response.Code != 200 || response.Header().Get("Content-Disposition") != `attachment; filename="kpl_extract_manifest.csv"` {
+		t.Fatalf("manifest status=%d body=%s", response.Code, response.Body)
+	}
+	rows, err := csv.NewReader(response.Body).ReadAll()
+	want := [][]string{{"payload_bytes", "degree", "seed", "run_id", "label"},
+		{"1000", "6", "9007199254740993", "run-a", "mesh-test"},
+		{"", "", "9007199254740993", "run-b", "mesh-test"},
+		{"", "", "9007199254740993", "run-legacy", "run-legacy"}}
+	if err != nil || !reflect.DeepEqual(rows, want) {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if bad := post("run-a", "run-missing"); bad.Code != 404 || strings.Contains(bad.Body.String(), "payload_bytes") {
+		t.Fatalf("partial manifest: %d %s", bad.Code, bad.Body)
+	}
+	if bad := post("invalid_id"); bad.Code != 400 {
+		t.Fatalf("invalid extractor ID accepted: %d", bad.Code)
+	}
+}
 
 func libraryTicket(t *testing.T, s *Server, kind string, ids ...string) string {
 	t.Helper()

@@ -214,6 +214,19 @@ class BatchExtractorCLITests(unittest.TestCase):
         return subprocess.run(self.command(*options, extractor=extractor), cwd=self.root,
                               env=self.environment, capture_output=True, text=True, timeout=35)
 
+    def test_exported_manifest_allows_independently_unknown_numeric_labels(self):
+        self.manifest.write_text("payload_bytes,degree,seed,run_id,label\n"
+                                 ",6,9007199254740993,run-one,case\n"
+                                 "1000,,,run-two,case\n", encoding="utf-8")
+        result = self.run_batch("--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [line for line in result.stdout.splitlines() if "--label" in line]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("--degree 6", commands[0])
+        self.assertNotIn("--payload-bytes", commands[0])
+        self.assertIn("--payload-bytes 1000", commands[1])
+        self.assertNotIn("--degree", commands[1])
+
     def start_batch(self, *options, extractor=None):
         stream = self.parent_log.open("w", encoding="utf-8")
         self.addCleanup(stream.close)

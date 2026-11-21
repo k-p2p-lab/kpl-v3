@@ -36,7 +36,7 @@ func TestSingleAgentActualWorkerSkipsLegacyFleet(t *testing.T) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
-			raw := []byte(fmt.Sprintf("version: 4\nname: single-agent-os\nseed: %d\nphases:\n  - {action: join, group: workers, type: full, count: 1, placement: single-agent}\n", seed))
+			raw := fmt.Appendf(nil, "version: 4\nname: single-agent-os\nseed: %d\nphases:\n  - {action: join, group: workers, type: full, count: 1, placement: single-agent}\n", seed)
 			accepted, err := f.server.StartScenario(ctx, raw)
 			if err != nil {
 				t.Fatal(err)

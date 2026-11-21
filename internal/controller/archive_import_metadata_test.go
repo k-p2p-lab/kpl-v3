@@ -94,7 +94,7 @@ func TestArchiveImportPreservesIntermediateMetadataAndLocalAuthority(t *testing.
 		for _, state := range []string{"queued", "running", "completed", "interrupted", "cleanup-pending"} {
 			t.Run(fmt.Sprintf("legacy=%t/state=%s", legacy, state), func(t *testing.T) {
 				s, _, write := archiveImportMetadataFixture(t, legacy)
-				valid := []byte(fmt.Sprintf(`{"id":"import-identity","state":%q,"futureField":{"preserved":true}}`, state))
+				valid := fmt.Appendf(nil, `{"id":"import-identity","state":%q,"futureField":{"preserved":true}}`, state)
 				write(valid)
 				if err := s.importArchivedRuns(t.Context()); err != nil {
 					t.Fatal(err)

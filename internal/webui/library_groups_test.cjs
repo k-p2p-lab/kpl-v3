@@ -160,13 +160,16 @@ test('visible item checkboxes start selection immediately and the final uncheck 
 
 test('selection tools stay present and inactive scopes never inherit another list selection',async()=>{
   const bars=Object.fromEntries(['#scenarioGroupTools','#resultGroupTools'].map(id=>[id,{innerHTML:'',contains:()=>false,querySelector:()=>null}]));
-  const h=harness(async()=>initial(),{bars,download:async()=>{}});await h.initialized;
+  const h=harness(async()=>initial(),{bars});await h.initialized;
   const disabled = scope => {
     const html=bars[scope==='scenarios'?'#scenarioGroupTools':'#resultGroupTools'].innerHTML;
     assert.match(html,/class="library-group-selection"/);
     assert.match(html,/>0 selected<\/span>/);
-    for(const action of ['clear','move']) assert.match(html,new RegExp('data-library-action="'+action+'" disabled'));
-    assert.match(html,/data-library-move-target disabled/);
+    assert.match(html,/data-library-action="clear" disabled/);
+    const moveRow=html.match(/class="action-menu-items"><span class="library-move-menu">(.*?)<\/span>/)?.[1] || '';
+    assert.match(moveRow,/data-library-move-target disabled/);
+    assert.match(moveRow,/data-library-action="move" disabled/);
+    assert.equal((html.match(/data-library-action="move"/g)||[]).length,1);
     assert.match(html,new RegExp('data-action-menu-toggle="library-download:'+scope+'"[^>]* disabled'));
   };
   disabled('scenarios');disabled('results');

@@ -25,6 +25,25 @@ type HopwaveAdaptivePolicy struct {
 	PayloadRanges   []HopwavePayloadRange
 	RetentionWindow time.Duration // 0 disables observation; 60s enables it
 	PayloadSize     func(data []byte) int
+	// ObserveDecision runs synchronously on the router event loop after a
+	// Trough recipient selection. The callback must return promptly.
+	ObserveDecision func(HopwaveDecision)
+}
+
+// HopwaveDecision is the local forwarding decision before RPCs are queued.
+// MessageID is the raw (possibly binary) PubSub ID. PayloadBytes is -1 when
+// the policy did not measure payload size. Retention is meaningful only when
+// RetentionValid is true.
+type HopwaveDecision struct {
+	Topic, MessageID             string
+	HopCount                     int32
+	PayloadBytes                 int
+	RangeMatched, RetentionValid bool
+	Retention                    float64
+	ConfiguredFactor             float64 // current HopwaveFactor before applying a size range
+	BaseFactor                   float64 // after applying a size range
+	EffectiveFactor              float64 // used by the existing recipient selector
+	EligiblePeers, SelectedPeers int
 }
 
 // WithAdaptiveHopwave configures a policy for WithHopwavePublish(true).
@@ -108,20 +127,25 @@ func (gs *GossipSubRouter) observeHopwaveMesh(now time.Time) {
 	}
 }
 
-func (gs *GossipSubRouter) hopwaveTroughFactor(topic string, data []byte) float64 {
-	base := gs.params.HopwaveFactor
+func (gs *GossipSubRouter) hopwaveTroughDecision(topic string, data []byte) HopwaveDecision {
+	d := HopwaveDecision{Topic: topic, PayloadBytes: -1, ConfiguredFactor: gs.params.HopwaveFactor, BaseFactor: gs.params.HopwaveFactor}
 	if ranges := gs.hopwavePolicy.PayloadRanges; len(ranges) != 0 {
 		size := len(data)
 		if measure := gs.hopwavePolicy.PayloadSize; measure != nil {
 			size = measure(data)
 		}
+		d.PayloadBytes = size
 		i := sort.Search(len(ranges), func(i int) bool { return ranges[i].MinBytes > size }) - 1
 		if i >= 0 && (ranges[i].MaxBytes == nil || size < *ranges[i].MaxBytes) {
-			base = ranges[i].Factor
+			d.RangeMatched = true
+			d.BaseFactor = ranges[i].Factor
 		}
 	}
+	d.EffectiveFactor = d.BaseFactor
 	if window := gs.hopwaveWindows[topic]; window.valid {
-		return math.Min(0.9, base+(1-base)*(1-window.retention))
+		d.RetentionValid = true
+		d.Retention = window.retention
+		d.EffectiveFactor = math.Min(0.9, d.BaseFactor+(1-d.BaseFactor)*(1-window.retention))
 	}
-	return base
+	return d
 }

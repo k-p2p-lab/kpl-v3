@@ -33,7 +33,8 @@ type telemetry struct {
 	measurementStarted bool
 	measurementStopped bool
 	measurementDone    chan struct{}
-	finalAttackStats   bool // mu; reserve before normal traffic can fill the queue.
+	hopwaveAdaptive    *hopwaveAdaptiveSnapshot // mu; present only for an adaptive Peer.
+	finalAttackStats   bool                     // mu; reserve before normal traffic can fill the queue.
 	sealed             bool
 	shutdownTimeout    time.Duration
 	retryInterval      time.Duration
@@ -220,16 +221,18 @@ func (t *telemetry) enqueueLocked(event model.TraceEvent, priority bool) {
 	t.enqueueLockedWithClock(event, priority, t.clockReading())
 }
 
-func (t *telemetry) enqueueLockedWithClock(event model.TraceEvent, priority bool, reading controllerClockReading) {
+func (t *telemetry) enqueueLockedWithClock(event model.TraceEvent, priority bool, reading controllerClockReading) bool {
 	event = t.identifyLockedWithClock(event, reading)
 	if t.sealed || (cap(t.events) > 0 && len(t.events) >= t.queueLimit(priority)) {
 		t.dropped.Add(1)
-		return
+		return false
 	}
 	select {
 	case t.events <- event:
+		return true
 	default:
 		t.dropped.Add(1)
+		return false
 	}
 }
 
@@ -298,8 +301,7 @@ func (t *telemetry) checkpoint() {
 	defer t.mu.Unlock()
 	if t.measurementStarted && !t.measurementStopped {
 		t.reportDropsLocked(false)
-		reading := t.observationClockLocked()
-		t.enqueueLockedWithClock(model.TraceEvent{Type: "measurement_checkpoint", Timestamp: reading.timestamp}, false, reading)
+		t.enqueueMeasurementBoundaryLocked("measurement_checkpoint", false)
 	}
 }
 
@@ -312,9 +314,21 @@ func (t *telemetry) stopMeasurement() {
 	t.measurementStopped = true
 	if t.measurementStarted {
 		t.reportDropsLocked(true)
-		reading := t.observationClockLocked()
-		t.enqueueLockedWithClock(model.TraceEvent{Type: "measurement_stop", Timestamp: reading.timestamp}, true, reading)
+		t.enqueueMeasurementBoundaryLocked("measurement_stop", true)
 		close(t.measurementDone)
+	}
+}
+
+func (t *telemetry) enqueueMeasurementBoundaryLocked(kind string, priority bool) {
+	reading := t.observationClockLocked()
+	event := model.TraceEvent{Type: kind, Timestamp: reading.timestamp}
+	stats := t.hopwaveAdaptive
+	if stats != nil {
+		event.Fields = map[string]any{"hopwaveAdaptive": *stats}
+	}
+	if t.enqueueLockedWithClock(event, priority, reading) && stats != nil {
+		// The queued snapshot owns its slice, including during transport retries.
+		stats.Records = nil
 	}
 }
 

@@ -320,7 +320,7 @@ func (s *Server) startPubSub(ctx context.Context) error {
 	s.topology.lifetime = ctx
 	config := s.config.NodeConfig.GossipSub
 	tracer := &gossipTracer{telemetry: s.telemetry, peerID: s.host.ID().String(), publishing: &s.publishing}
-	options, err := gossipSubOptions(config, tracer)
+	options, err := gossipSubOptions(config, tracer, s.telemetry)
 	if err != nil {
 		return err
 	}

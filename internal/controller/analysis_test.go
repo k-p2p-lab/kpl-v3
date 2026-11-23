@@ -106,6 +106,68 @@ func TestResultAnalysisUsesSnapshotBoundaryAndSessionWindows(t *testing.T) {
 	}
 }
 
+func TestResultAnalysisPreservesMetricsWithHopwaveAdaptiveCheckpoints(t *testing.T) {
+	checkpoint := windowEvent("receiver", "session", 3, "measurement_checkpoint", 22)
+	stop := windowEvent("receiver", "session", 4, "measurement_stop", 24)
+	events := windowEvents(windowStart("receiver", "session", 0, "topic"),
+		windowDeliveredEvent("receiver", "session", 2, 12), checkpoint, stop, stop)
+	for _, event := range events {
+		if event.MessageID == "message" {
+			event.Fields["pubsubMessageId"] = "aabb"
+		}
+	}
+	analyze := func() resultAnalysis {
+		t.Helper()
+		var data bytes.Buffer
+		encoder := json.NewEncoder(&data)
+		for _, event := range events {
+			if err := encoder.Encode(event); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshot := &resultSnapshot{
+			result:     savedResult{ID: "window-run", StartedAt: windowTestEpoch},
+			exportedAt: windowTestEpoch.Add(30 * time.Second),
+			files:      []resultFile{{name: "events.jsonl", size: int64(data.Len()), readAt: bytes.NewReader(data.Bytes())}},
+		}
+		got, err := analyzeResult(t.Context(), snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	legacy := analyze()
+	if legacy.EventCount != len(events)-1 || legacy.Metrics.EligibleDeliveries != 1 || legacy.Research == nil ||
+		len(legacy.Research.Messages) != 1 || legacy.Research.Messages[0].ID != "message" {
+		t.Fatalf("unexpected fixture counts or message attribution: %+v", legacy)
+	}
+	for i := range events {
+		event := &events[i]
+		if event.NodeID != "receiver" || (event.Type != "measurement_checkpoint" && event.Type != "measurement_stop") {
+			continue
+		}
+		summary := map[string]any{
+			"troughDecisions": 3, "adjustments": 2, "payloadAdjustments": 2, "retentionAdjustments": 1, "omittedRecords": 1,
+		}
+		if event.Type == "measurement_checkpoint" {
+			summary["records"] = []map[string]any{{
+				"adjustment": 2, "at": event.Timestamp, "topic": "topic", "pubsubMessageId": "aabb",
+				"hopCount": 1, "configuredFactor": 0.6, "baseFactor": 0.5, "effectiveFactor": 0.75,
+				"rangeMatched": true, "payloadBytes": 1024, "retention": 0.5, "eligiblePeers": 4, "selectedPeers": 3,
+			}}
+		}
+		event.Fields = map[string]any{"hopwaveAdaptive": summary}
+	}
+	enriched := analyze()
+	if enriched.EventBytes <= legacy.EventBytes {
+		t.Fatal("expected a larger archived event stream with the diagnostics")
+	}
+	enriched.EventBytes = legacy.EventBytes
+	if !reflect.DeepEqual(enriched, legacy) {
+		t.Fatalf("diagnostics changed the analysis: got %+v, want %+v", enriched, legacy)
+	}
+}
+
 func TestResultAnalysisBoundsChartSizeAndKeepsLatestObservation(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	resultFixture(t, server, "run", "completed", time.Unix(1, 0))

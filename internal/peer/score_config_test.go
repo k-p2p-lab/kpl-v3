@@ -123,7 +123,7 @@ func TestScoreIsDisabledWithoutExplicitOptIn(t *testing.T) {
 		if err := config.Validate(); err != nil {
 			t.Fatalf("inactive score configuration rejected: %v", err)
 		}
-		options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+		options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

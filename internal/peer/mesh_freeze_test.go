@@ -20,7 +20,7 @@ func newMeshFreezeTestServer(t *testing.T, enabled bool) *Server {
 		NodeConfig: model.NodeConfig{GossipSub: model.GossipSubConfig{MeshFreeze: &enabled}},
 	})
 	ctx, cancel := context.WithCancel(t.Context())
-	options, err := gossipSubOptions(s.config.NodeConfig.GossipSub, discardEventTracer{})
+	options, err := gossipSubOptions(s.config.NodeConfig.GossipSub, discardEventTracer{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

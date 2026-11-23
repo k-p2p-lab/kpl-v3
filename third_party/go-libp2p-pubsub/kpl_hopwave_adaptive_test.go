@@ -39,8 +39,13 @@ func TestKPLAdaptiveHopwavePayloadRanges(t *testing.T) {
 			size int
 			want float64
 		}{{0, 0.24}, {1023, 0.24}, {1024, 0.5}, {10239, 0.5}, {10240, 0.7}, {10241, 0.7}} {
-			if got := gs.hopwaveTroughFactor("topic", make([]byte, test.size+framing)); got != test.want {
+			d := gs.hopwaveTroughDecision("topic", make([]byte, test.size+framing))
+			if got := d.EffectiveFactor; got != test.want {
 				t.Errorf("size=%d factor=%v, want %v", test.size, got, test.want)
+			}
+			if d.PayloadBytes != test.size || d.ConfiguredFactor != 0.24 || d.BaseFactor != test.want ||
+				d.RangeMatched != (test.size >= 1024) || d.RetentionValid {
+				t.Fatalf("unexpected size-only decision for %d bytes: %+v", test.size, d)
 			}
 		}
 		if gs.hopwaveWindows != nil {
@@ -86,8 +91,12 @@ func TestKPLAdaptiveHopwaveRetentionWindows(t *testing.T) {
 	}
 	check := func(topic string, want float64) {
 		t.Helper()
-		if got := gs.hopwaveTroughFactor(topic, nil); math.Abs(got-want) > 1e-12 {
+		d := gs.hopwaveTroughDecision(topic, nil)
+		if got := d.EffectiveFactor; math.Abs(got-want) > 1e-12 {
 			t.Fatalf("%s F=%v, want %v", topic, got, want)
+		}
+		if d.PayloadBytes != -1 || d.RangeMatched || d.BaseFactor != gs.params.HopwaveFactor {
+			t.Fatalf("unexpected retention-only decision: %+v", d)
 		}
 	}
 	gs.params.HopwaveFactor = 0.95
@@ -133,10 +142,12 @@ func TestKPLAdaptiveHopwavePublishUsesHeartbeatAndPayloadOnlyAtTrough(t *testing
 	params.HeartbeatInitialDelay = time.Hour
 	params.HopwaveInterval, params.HopwaveFactor = 2, 0.3
 	sizeCalls := 0
+	var decisions []HopwaveDecision
 	p := getGossipsub(ctx, newHopwaveHosts(t, 1)[0], WithGossipSubParams(params), WithHopwavePublish(true),
 		WithAdaptiveHopwave(HopwaveAdaptivePolicy{RetentionWindow: time.Minute,
-			PayloadRanges: []HopwavePayloadRange{{MinBytes: 1024, Factor: 0.5}},
-			PayloadSize:   func(data []byte) int { sizeCalls++; return len(data) },
+			PayloadRanges:   []HopwavePayloadRange{{MinBytes: 1024, Factor: 0.5}},
+			PayloadSize:     func(data []byte) int { sizeCalls++; return len(data) },
+			ObserveDecision: func(d HopwaveDecision) { decisions = append(decisions, d) },
 		}))
 	gs := p.rt.(*GossipSubRouter)
 	done := make(chan struct{})
@@ -189,6 +200,25 @@ func TestKPLAdaptiveHopwavePublishUsesHeartbeatAndPayloadOnlyAtTrough(t *testing
 			}
 			if count != test.want {
 				t.Errorf("case %d forwarded to %d peers, want %d", i, count, test.want)
+			}
+			if i < 2 {
+				if len(decisions) != i+1 {
+					t.Errorf("case %d recorded %d decisions", i, len(decisions))
+					return
+				}
+				d := decisions[i]
+				base := params.HopwaveFactor
+				if i == 0 {
+					base = 0.5
+				}
+				if d.Topic != topic || d.MessageID != msg.ID || d.MessageID == "" || d.HopCount != 1 ||
+					d.EligiblePeers != 10 || d.SelectedPeers != count || d.PayloadBytes != test.size || d.RangeMatched != (i == 0) ||
+					!d.RetentionValid || d.Retention != 0.5 || d.ConfiguredFactor != params.HopwaveFactor ||
+					d.BaseFactor != base || d.EffectiveFactor != base+(1-base)*(1-d.Retention) {
+					t.Errorf("case %d unexpected decision: %+v", i, d)
+				}
+			} else if len(decisions) != 2 {
+				t.Errorf("case %d emitted a decision for a non-Trough publication", i)
 			}
 		}
 		if sizeCalls != 2 {

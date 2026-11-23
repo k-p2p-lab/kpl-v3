@@ -8,7 +8,7 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
-func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) ([]pubsub.Option, error) {
+func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer, sink *telemetry) ([]pubsub.Option, error) {
 	options, err := gossipExtendedOptions(config)
 	if err != nil {
 		return nil, err
@@ -33,6 +33,10 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) (
 			policy.PayloadRanges = append(policy.PayloadRanges, pubsub.HopwavePayloadRange{
 				MinBytes: r.MinBytes, MaxBytes: r.MaxBytes, Factor: *r.Factor,
 			})
+		}
+		if sink != nil {
+			sink.enableAdaptiveHopwave()
+			policy.ObserveDecision = sink.observeAdaptiveHopwave
 		}
 		options = append(options, pubsub.WithAdaptiveHopwave(policy))
 	}

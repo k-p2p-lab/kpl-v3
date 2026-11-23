@@ -3,6 +3,7 @@ package peer
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"sync/atomic"
@@ -37,10 +38,16 @@ func TestAdaptiveHopwavePayloadSize(t *testing.T) {
 	}
 }
 
-type hopwaveSendCount struct{ messages atomic.Int32 }
+type hopwaveSendCount struct {
+	messages   atomic.Int32
+	publishing *publicationBridge
+}
 
 func (c *hopwaveSendCount) Trace(e *pb.TraceEvent) {
 	c.messages.Add(int32(len(e.GetSendRPC().GetMeta().GetMessages())))
+	if m := e.GetPublishMessage(); m != nil {
+		c.publishing.record(m.GetTopic(), m.GetMessageID())
+	}
 }
 
 // At the first (Trough) hop a 1023-byte envelope has a larger wire size than
@@ -69,16 +76,18 @@ phases:
 		t.Fatal(err)
 	}
 	config := spec.Phases[0].Node
-	var sent hopwaveSendCount
-	options, err := gossipSubOptions(config.GossipSub, &sent)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := &Server{config: model.PeerProcessConfig{Node: model.Node{ID: "source", RunID: "run"}, NodeConfig: config}}
+	sent := &hopwaveSendCount{publishing: &server.publishing}
+	sourceTelemetry := newTelemetry(server.config.Node, "", "", nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	publisher, receiver := newConfigTestHost(t), newListeningKademliaHost(t)
-	join := func(h host.Host) *pubsub.Topic {
+	join := func(h host.Host, tracer pubsub.EventTracer, sink *telemetry) *pubsub.Topic {
 		t.Helper()
+		options, err := gossipSubOptions(config.GossipSub, tracer, sink)
+		if err != nil {
+			t.Fatal(err)
+		}
 		ps, err := pubsub.NewGossipSub(ctx, h, options...)
 		if err != nil {
 			t.Fatal(err)
@@ -89,7 +98,9 @@ phases:
 		}
 		return topic
 	}
-	source, target := join(publisher), join(receiver)
+	source := join(publisher, sent, sourceTelemetry)
+	target := join(receiver, discardEventTracer{}, nil)
+	server.topics = map[string]*pubsub.Topic{"adaptive": source}
 	sub, err := target.Subscribe()
 	if err != nil {
 		t.Fatal(err)
@@ -104,16 +115,18 @@ phases:
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	server := &Server{config: model.PeerProcessConfig{Node: model.Node{ID: "source", RunID: "run"}}}
+	sourceTelemetry.startMeasurement([]string{"adaptive"})
 	small, err := server.preparePublication(model.PublishRequest{PayloadSize: 1023}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	boundary := make([]byte, 1024)
-	if err := source.Publish(ctx, small.wire); err != nil {
+	small, err = server.publishMessage(ctx, "adaptive", small)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := source.Publish(ctx, boundary); err != nil {
+	raw, err := server.publishMessage(ctx, "adaptive", publication{wire: boundary, encoding: "raw"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := sub.Next(ctx)
@@ -123,18 +136,44 @@ phases:
 	if got.GetHopCount() != 1 || !bytes.Equal(got.Data, boundary) {
 		t.Fatalf("unexpected first delivery: hop %d, size %d", got.GetHopCount(), len(got.Data))
 	}
+	if id := hex.EncodeToString([]byte(got.ID)); id != raw.pubsubID {
+		t.Fatalf("delivery ID %q differs from the raw publication ID %q", id, raw.pubsubID)
+	}
 	// ListPeers synchronizes with the publisher event loop after the accepted
 	// message went on the wire. A reordered remote delivery cannot mask a send.
 	source.ListPeers()
 	if count := sent.messages.Load(); count != 1 {
 		t.Fatalf("sent %d messages, want only the 1024-byte publication", count)
 	}
+	sourceTelemetry.checkpoint()
+	if len(sourceTelemetry.events) != 2 {
+		t.Fatalf("expected only measurement start and checkpoint, got %d events", len(sourceTelemetry.events))
+	}
+	if start := <-sourceTelemetry.events; start.Type != "measurement_start" {
+		t.Fatalf("unexpected first event: %+v", start)
+	}
+	event := <-sourceTelemetry.events
+	snapshot, ok := event.Fields["hopwaveAdaptive"].(hopwaveAdaptiveSnapshot)
+	if event.Type != "measurement_checkpoint" || event.NodeID != "source" || !ok {
+		t.Fatalf("missing adaptive checkpoint from source: %+v", event)
+	}
+	if snapshot.TroughDecisions != 2 || snapshot.Adjustments != 1 || snapshot.PayloadAdjustments != 1 ||
+		snapshot.RetentionAdjustments != 0 || snapshot.OmittedRecords != 0 || len(snapshot.Records) != 1 {
+		t.Fatalf("unexpected adaptive counts: %+v", snapshot)
+	}
+	record := snapshot.Records[0]
+	if record.Adjustment != 1 || record.At.IsZero() || record.PubsubMessageID != small.pubsubID || record.PubsubMessageID == raw.pubsubID ||
+		record.Topic != "adaptive" || record.HopCount != 1 || record.PayloadBytes == nil || *record.PayloadBytes != 1023 ||
+		!record.RangeMatched || record.ConfiguredFactor != 1 || record.BaseFactor != 0 || record.EffectiveFactor != 0 ||
+		record.Retention != nil || record.EligiblePeers != 1 || record.SelectedPeers != 0 {
+		t.Fatalf("unexpected record for the suppressed publication: %+v", record)
+	}
 }
 
 func TestHopwaveOptionReachesPeerPubSub(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		config := model.NodeConfig{GossipSub: model.GossipSubConfig{Hopwave: &enabled}}.WithDefaults()
-		options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+		options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

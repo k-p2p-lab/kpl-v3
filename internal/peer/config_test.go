@@ -105,7 +105,7 @@ func TestGossipSubOptionsPreserveResolvedDefaultsAndZeros(t *testing.T) {
 			Params: model.GossipSubParamsConfig{DOut: &zero},
 		},
 	}).WithDefaults()
-	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 	if err != nil {
 		t.Fatalf("build gossipsub options: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestPubSubRouterOptionsConstructRequestedRouter(t *testing.T) {
 			if !ok {
 				t.Fatalf("built-in profile %q is missing", test.kind)
 			}
-			options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+			options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 			if err != nil {
 				t.Fatalf("build %s options: %v", config.GossipSub.Router, err)
 			}
@@ -354,7 +354,7 @@ func TestPeerScoreConfigurationPassesModelAndRouterValidation(t *testing.T) {
 	if err := config.Validate(); err != nil {
 		t.Fatalf("model rejected valid peer score: %v", err)
 	}
-	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestPubSubOptionsPreserveSupportedZeroLimits(t *testing.T) {
 	if err := config.Validate(); err != nil {
 		t.Fatalf("model rejected supported zero limits: %v", err)
 	}
-	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{})
+	options, err := gossipSubOptions(config.GossipSub, discardEventTracer{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

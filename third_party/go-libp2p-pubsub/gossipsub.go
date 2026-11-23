@@ -1354,7 +1354,15 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 	delete(tosend, from)
 	delete(tosend, peer.ID(msg.GetFrom()))
 	if gs.hopwavePublish && message.HopCount != nil && *message.HopCount != 0 {
-		tosend = selectHopwavePeers(tosend, gs.hopwaveTroughFactor(topic, message.GetData()))
+		decision := gs.hopwaveTroughDecision(topic, message.GetData())
+		decision.EligiblePeers = len(tosend)
+		tosend = selectHopwavePeers(tosend, decision.EffectiveFactor)
+		if observe := gs.hopwavePolicy.ObserveDecision; observe != nil {
+			decision.MessageID = msg.ID // already resolved when cached
+			decision.HopCount = *message.HopCount
+			decision.SelectedPeers = len(tosend)
+			observe(decision)
+		}
 	}
 	out := rpcWithMessages(message)
 	for pid := range tosend {

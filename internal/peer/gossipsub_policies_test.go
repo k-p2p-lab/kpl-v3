@@ -27,7 +27,7 @@ func policyPubSub(t *testing.T, config model.GossipSubConfig, extra ...pubsub.Op
 	h := newConfigTestHost(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	options, err := gossipSubOptions(config, discardEventTracer{})
+	options, err := gossipSubOptions(config, discardEventTracer{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

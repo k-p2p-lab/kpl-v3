@@ -79,4 +79,6 @@ type GossipSubParamsConfig struct {
 	IDontWantMessageTTL       *int     `json:"iDontWantMessageTTL,omitempty" yaml:"iDontWantMessageTTL,omitempty"`
 	HopwaveFactor             *float64 `json:"hopwaveFactor,omitempty" yaml:"hopwaveFactor,omitempty"`
 	HopwaveInterval           *int     `json:"hopwaveInterval,omitempty" yaml:"hopwaveInterval,omitempty"`
+
+	HopwaveAdaptive *HopwaveAdaptiveConfig `json:"hopwaveAdaptive,omitempty" yaml:"hopwaveAdaptive,omitempty"`
 }

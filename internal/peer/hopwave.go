@@ -2,6 +2,14 @@ package peer
 
 import pubsubpb "github.com/libp2p/go-libp2p-pubsub/pb"
 
+// Use the same application byte count as delivery telemetry at every hop.
+func hopwavePayloadSize(data []byte) int {
+	if payload, ok := decodeEnvelope(data); ok {
+		return len(payload.Payload)
+	}
+	return len(data)
+}
+
 // These are unauthenticated wire reports, separate from Controller estimates
 // based on IHAVE/IWANT/mesh evidence. Preserve absence instead of inventing zero.
 func addHopwaveFields(fields map[string]any, message *pubsubpb.Message) {

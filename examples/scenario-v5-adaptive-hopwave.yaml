@@ -1,0 +1,36 @@
+# Compare the same two payload sizes before and after a mesh member changes.
+version: 5
+name: adaptive-hopwave-size-and-retention
+seed: 1001
+profiles:
+  participant:
+    type: full
+    gossipsub:
+      topics: [kpl/adaptive-hopwave]
+      hopwave: true
+      params:
+        hopwaveInterval: 3
+        hopwaveFactor: 0.4
+        hopwaveAdaptive:
+          retentionWindow: 60s
+          payloadRanges:
+            - {minBytes: 1024, maxBytes: 10240, factor: 0.5}
+            - {minBytes: 10240, factor: 0.7}
+phases:
+  - {action: join, group: boot, role: boot, profile: participant, count: 1}
+  - {action: wait-ready, group: boot, readyRatio: 1, timeout: 1m}
+  - {action: join, group: workers, profile: participant, count: 4}
+  - {action: wait-ready, group: workers, readyRatio: 1, timeout: 2m}
+  - {action: wait, duration: 5s}
+  - {action: publish, group: boot, topic: kpl/adaptive-hopwave, count: 1, payloadSize: 1024, payloadEncoding: raw}
+  - {action: publish, group: boot, topic: kpl/adaptive-hopwave, count: 1, payloadSize: 10240, payloadEncoding: raw}
+  # Give established participants a window boundary with a populated mesh.
+  - {action: wait, duration: 65s}
+  - {action: leave, group: workers, count: 1}
+  - {action: join, group: replacement, profile: participant, count: 1}
+  - {action: wait-ready, group: replacement, readyRatio: 1, timeout: 1m}
+  - {action: wait, duration: 65s}
+  - {action: publish, group: boot, topic: kpl/adaptive-hopwave, count: 1, payloadSize: 1024, payloadEncoding: raw}
+  - {action: publish, group: boot, topic: kpl/adaptive-hopwave, count: 1, payloadSize: 10240, payloadEncoding: raw}
+  - {action: wait, duration: 10s}
+  - {action: stop-all}

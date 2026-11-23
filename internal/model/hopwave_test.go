@@ -50,3 +50,47 @@ func TestHopwaveRejectsUnsafeParametersAndPreservesZeroFactor(t *testing.T) {
 		}
 	}
 }
+
+func TestHopwaveAdaptiveRangesAndWindow(t *testing.T) {
+	factor := .7
+	band := func(low int, high *int) HopwavePayloadRange {
+		return HopwavePayloadRange{MinBytes: low, MaxBytes: high, Factor: &factor}
+	}
+	for _, tc := range []struct {
+		name   string
+		ranges []HopwavePayloadRange
+		window string
+		ok     bool
+	}{
+		{"size only", []HopwavePayloadRange{band(10240, nil), band(1024, intPointer(10240))}, "0s", true},
+		{"retention only", nil, "60s", true},
+		{"empty policy", nil, "", true},
+		{"overlap", []HopwavePayloadRange{band(1024, nil), band(0, intPointer(1025))}, "", false},
+		{"open overlaps next", []HopwavePayloadRange{band(0, nil), band(30, intPointer(40))}, "", false},
+		{"empty range", []HopwavePayloadRange{band(10, intPointer(10))}, "", false},
+		{"negative bytes", []HopwavePayloadRange{band(-1, intPointer(10))}, "", false},
+		{"missing factor", []HopwavePayloadRange{{}}, "", false},
+		{"malformed window", nil, "minute", false},
+		{"other duration", nil, "10s", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := HopwaveAdaptiveConfig{PayloadRanges: tc.ranges, RetentionWindow: tc.window}
+			var first int
+			if len(tc.ranges) > 0 {
+				first = tc.ranges[0].MinBytes
+			}
+			if err := c.Validate(); (err == nil) != tc.ok {
+				t.Fatalf("Validate() = %v", err)
+			}
+			if len(tc.ranges) > 0 && tc.ranges[0].MinBytes != first {
+				t.Fatal("validation reordered the profile's ranges")
+			}
+		})
+	}
+	for _, factor := range []float64{-.1, 1.1, math.NaN(), math.Inf(1)} {
+		config := HopwaveAdaptiveConfig{PayloadRanges: []HopwavePayloadRange{{Factor: &factor}}}
+		if err := config.Validate(); err == nil {
+			t.Fatalf("accepted invalid factor %v", factor)
+		}
+	}
+}

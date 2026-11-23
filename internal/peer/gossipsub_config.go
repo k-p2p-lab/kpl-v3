@@ -2,9 +2,10 @@ package peer
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"time"
 )
 
 func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) ([]pubsub.Option, error) {
@@ -18,6 +19,22 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer) (
 	}
 	if config.Hopwave != nil && *config.Hopwave {
 		options = append(options, pubsub.WithHopwavePublish(true))
+	}
+	if adaptive := config.Params.HopwaveAdaptive; adaptive != nil {
+		window, err := adaptive.WindowDuration()
+		if err != nil {
+			return nil, err
+		}
+		policy := pubsub.HopwaveAdaptivePolicy{RetentionWindow: window, PayloadSize: hopwavePayloadSize}
+		for _, r := range adaptive.PayloadRanges {
+			if r.Factor == nil {
+				return nil, fmt.Errorf("adaptive HopWave payload range is missing its factor")
+			}
+			policy.PayloadRanges = append(policy.PayloadRanges, pubsub.HopwavePayloadRange{
+				MinBytes: r.MinBytes, MaxBytes: r.MaxBytes, Factor: *r.Factor,
+			})
+		}
+		options = append(options, pubsub.WithAdaptiveHopwave(policy))
 	}
 	if config.PeerOutboundQueueSize != nil {
 		options = append(options, pubsub.WithPeerOutboundQueueSize(*config.PeerOutboundQueueSize))

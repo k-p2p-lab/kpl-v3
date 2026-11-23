@@ -1,17 +1,135 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
+	"github.com/libp2p/go-libp2p/core/host"
 	corepeer "github.com/libp2p/go-libp2p/core/peer"
 )
+
+func TestAdaptiveHopwavePayloadSize(t *testing.T) {
+	server := &Server{config: model.PeerProcessConfig{Node: model.Node{ID: "publisher", RunID: "run"}}}
+	for _, encoding := range []string{"raw", "envelope"} {
+		for _, size := range []int{1023, 1024, 10239, 10240} {
+			message, err := server.preparePublication(model.PublishRequest{PayloadEncoding: encoding, PayloadSize: size}, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := hopwavePayloadSize(message.wire); got != size {
+				t.Fatalf("%s: %d application bytes, %d wire bytes, measured %d", encoding, size, len(message.wire), got)
+			}
+		}
+	}
+	for _, raw := range [][]byte{nil, []byte(`{"payload":"aGk="}`), []byte(`{"id":"x","publisher":"p","sentAt":1,"runId":"r","payload":"???"}`)} {
+		if got := hopwavePayloadSize(raw); got != len(raw) {
+			t.Fatalf("raw fallback: got %d, want %d", got, len(raw))
+		}
+	}
+}
+
+type hopwaveSendCount struct{ messages atomic.Int32 }
+
+func (c *hopwaveSendCount) Trace(e *pb.TraceEvent) {
+	c.messages.Add(int32(len(e.GetSendRPC().GetMeta().GetMessages())))
+}
+
+// At the first (Trough) hop a 1023-byte envelope has a larger wire size than
+// the 1024-byte raw message. Only the latter should reach the remote Peer.
+func TestAdaptiveHopwaveScenarioReachesPeerForwarding(t *testing.T) {
+	const yaml = `version: 5
+name: first-trough
+phases:
+  - action: join
+    group: workers
+    count: 2
+    node:
+      gossipsub:
+        hopwave: true
+        floodPublish: true
+        params:
+          hopwaveInterval: 3
+          hopwaveFactor: 1
+          heartbeatInitialDelay: 1h
+          hopwaveAdaptive:
+            retentionWindow: 0s
+            payloadRanges: [{minBytes: 0, maxBytes: 1024, factor: 0}]
+`
+	spec, err := scenario.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := spec.Phases[0].Node
+	var sent hopwaveSendCount
+	options, err := gossipSubOptions(config.GossipSub, &sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	publisher, receiver := newConfigTestHost(t), newListeningKademliaHost(t)
+	join := func(h host.Host) *pubsub.Topic {
+		t.Helper()
+		ps, err := pubsub.NewGossipSub(ctx, h, options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		topic, err := ps.Join("adaptive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return topic
+	}
+	source, target := join(publisher), join(receiver)
+	sub, err := target.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Connect(ctx, corepeer.AddrInfo{ID: receiver.ID(), Addrs: receiver.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+	for len(source.ListPeers()) == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("subscriber did not join")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	server := &Server{config: model.PeerProcessConfig{Node: model.Node{ID: "source", RunID: "run"}}}
+	small, err := server.preparePublication(model.PublishRequest{PayloadSize: 1023}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := make([]byte, 1024)
+	if err := source.Publish(ctx, small.wire); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Publish(ctx, boundary); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sub.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetHopCount() != 1 || !bytes.Equal(got.Data, boundary) {
+		t.Fatalf("unexpected first delivery: hop %d, size %d", got.GetHopCount(), len(got.Data))
+	}
+	// ListPeers synchronizes with the publisher event loop after the accepted
+	// message went on the wire. A reordered remote delivery cannot mask a send.
+	source.ListPeers()
+	if count := sent.messages.Load(); count != 1 {
+		t.Fatalf("sent %d messages, want only the 1024-byte publication", count)
+	}
+}
 
 func TestHopwaveOptionReachesPeerPubSub(t *testing.T) {
 	for _, enabled := range []bool{false, true} {

@@ -94,7 +94,7 @@ func (s *Scenario) Validate() error {
 	if s.Version == 0 {
 		s.Version = 1
 	}
-	if s.Version != 1 && s.Version != 2 && s.Version != 3 && s.Version != 4 {
+	if s.Version < 1 || s.Version > 5 {
 		return fmt.Errorf("unsupported scenario version %d", s.Version)
 	}
 	if strings.TrimSpace(s.Name) == "" {
@@ -122,6 +122,16 @@ func (s *Scenario) Validate() error {
 	if err := s.validateAttackVersion(); err != nil {
 		return err
 	}
+	for name, profile := range s.Profiles {
+		if policy := profile.GossipSub.Params.HopwaveAdaptive; policy != nil {
+			if s.Version < 5 {
+				return fmt.Errorf("profile %q: hopwaveAdaptive requires version 5", name)
+			}
+			if err := policy.Validate(); err != nil {
+				return fmt.Errorf("profile %q: %w", name, err)
+			}
+		}
+	}
 	backgroundJoins := make(map[string]map[string]struct{})
 	knownJobs := make(map[string]struct{})
 	joinedGroups := make(map[string][]*Phase)
@@ -135,6 +145,14 @@ func (s *Scenario) Validate() error {
 		}
 		if p.Name == "" {
 			p.Name = fmt.Sprintf("%s-%d", p.Action, i+1)
+		}
+		if p.Node.GossipSub.Params.HopwaveAdaptive != nil {
+			if s.Version < 5 {
+				return fmt.Errorf("phase %q: hopwaveAdaptive requires version 5", p.Name)
+			}
+			if p.Action != "join" {
+				return fmt.Errorf("phase %q: hopwaveAdaptive is only supported for join", p.Name)
+			}
 		}
 		if p.NodeType != "" {
 			if preset, ok := model.BuiltInNodeConfig(p.NodeType); ok {

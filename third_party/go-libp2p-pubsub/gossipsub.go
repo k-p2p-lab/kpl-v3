@@ -546,6 +546,8 @@ type GossipSubRouter struct {
 
 	// Whether to apply periodic full/fractional forwarding to publications.
 	hopwavePublish bool
+	hopwavePolicy  HopwaveAdaptivePolicy
+	hopwaveWindows map[string]hopwaveRetentionWindow
 
 	meshFreezeEnabled    bool
 	meshFrozen           bool
@@ -1352,7 +1354,7 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 	delete(tosend, from)
 	delete(tosend, peer.ID(msg.GetFrom()))
 	if gs.hopwavePublish && message.HopCount != nil && *message.HopCount != 0 {
-		tosend = selectHopwavePeers(tosend, gs.params.HopwaveFactor)
+		tosend = selectHopwavePeers(tosend, gs.hopwaveTroughFactor(topic, message.GetData()))
 	}
 	out := rpcWithMessages(message)
 	for pid := range tosend {
@@ -1431,6 +1433,7 @@ func (gs *GossipSubRouter) Join(topic string) {
 }
 
 func (gs *GossipSubRouter) Leave(topic string) {
+	delete(gs.hopwaveWindows, topic)
 	if gs.meshFrozen {
 		gs.tracer.Leave(topic)
 		for pid := range gs.mesh[topic] {
@@ -1944,6 +1947,10 @@ func (gs *GossipSubRouter) heartbeat() {
 
 	if gs.meshFrozen {
 		gs.emitGossipForUnpinnedTopics()
+	}
+
+	if gs.hopwavePublish && gs.hopwaveWindows != nil {
+		gs.observeHopwaveMesh(time.Now())
 	}
 
 	// expire fanout for topics we haven't published to in a while

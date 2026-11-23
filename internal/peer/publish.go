@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -50,6 +51,17 @@ type publication struct {
 	encoding string
 	sentAt   time.Time
 	clock    controllerClockReading
+}
+
+func decodeEnvelope(data []byte) (envelope, bool) {
+	// Raw publications can be large and normally require no JSON decoding.
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	var value envelope
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return value, false
+	}
+	ok := json.Unmarshal(trimmed, &value) == nil && value.ID != "" && value.RunID != "" && value.Publisher != "" && value.SentAt > 0
+	return value, ok
 }
 
 func (s *Server) publishTopics(requested string) ([]string, error) {
@@ -206,8 +218,7 @@ func (s *Server) deliveryEventWithClock(message *pubsub.Message, topic string, r
 	data := message.Data
 	wireID, local := s.messageIdentity(message)
 	event := model.TraceEvent{PeerID: s.host.ID().String(), Type: "deliver", Topic: topic, RemotePeerID: message.ReceivedFrom.String(), Timestamp: reading.timestamp}
-	var payload envelope
-	if json.Unmarshal(data, &payload) == nil && payload.ID != "" && payload.RunID != "" && payload.Publisher != "" && payload.SentAt > 0 {
+	if payload, ok := decodeEnvelope(data); ok {
 		if payload.RunID != s.config.Node.RunID {
 			return model.TraceEvent{}, false
 		}

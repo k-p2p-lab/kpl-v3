@@ -168,6 +168,18 @@ func (c NodeConfig) Merge(overlay NodeConfig) NodeConfig {
 	if overlay.Network.RateMbps != nil && overlay.Network.TBF == nil {
 		c.Network.TBF = nil
 	}
+	// Profiles may define size ranges and let a join choose its observation
+	// window. Arrays replace as a unit, including an explicit empty array.
+	if inherited := c.GossipSub.Params.HopwaveAdaptive; inherited != nil {
+		g := &overlay.GossipSub
+		if patch := g.Params.HopwaveAdaptive; patch != nil {
+			policy := *inherited
+			mergeNonZero(reflect.ValueOf(&policy).Elem(), reflect.ValueOf(*patch))
+			g.Params.HopwaveAdaptive = &policy
+		} else if g.Hopwave != nil && !*g.Hopwave || g.Enabled != nil && !*g.Enabled {
+			c.GossipSub.Params.HopwaveAdaptive = nil
+		}
+	}
 	base := reflect.ValueOf(&c).Elem()
 	mergeNonZero(base, reflect.ValueOf(overlay))
 	c.mergeAttacks(attackBase, overlay)
@@ -405,6 +417,14 @@ func (c NodeConfig) Validate() error {
 	}
 	if c.GossipSub.MeshFreeze != nil && *c.GossipSub.MeshFreeze && (c.GossipSub.Enabled == nil || !*c.GossipSub.Enabled) {
 		return fmt.Errorf("meshFreeze requires enabled GossipSub")
+	}
+	if policy := c.GossipSub.Params.HopwaveAdaptive; policy != nil {
+		if !*c.GossipSub.Enabled || c.GossipSub.Router != "gossipsub" || c.GossipSub.Hopwave == nil || !*c.GossipSub.Hopwave {
+			return fmt.Errorf("hopwaveAdaptive requires enabled GossipSub and hopwave")
+		}
+		if err := policy.Validate(); err != nil {
+			return err
+		}
 	}
 	if err := c.Network.Validate(); err != nil {
 		return fmt.Errorf("network: %w", err)

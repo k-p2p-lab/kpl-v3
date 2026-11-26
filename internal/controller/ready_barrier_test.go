@@ -15,6 +15,22 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 )
 
+func TestReadyBarrierHonorsFinishedContextOnReadyCohort(t *testing.T) {
+	s := newLifecycleTestController(t)
+	s.state.agents["agent"] = model.Agent{ID: "agent", State: model.AgentOnline}
+	s.state.nodes["ready"] = model.Node{ID: "ready", RunID: "run", Generation: 1, AgentID: "agent", State: model.NodeReady}
+	phase := scenario.Phase{ReadyRatio: 1}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer stop()
+	for _, ctx := range []context.Context{canceled, expired} {
+		if err := s.waitReadyUntil(ctx, "run", 1, phase); !errors.Is(err, ctx.Err()) {
+			t.Fatalf("ready barrier returned %v, want %v", err, ctx.Err())
+		}
+	}
+}
+
 func TestReadyBarrierDiagnosesUnavailableOwners(t *testing.T) {
 	for _, test := range []struct {
 		name, agentState, wantOwner string

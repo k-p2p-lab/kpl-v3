@@ -40,6 +40,16 @@ func TestControllerInventoryWorkerHelper(t *testing.T) {
 		server := &Server{state: &state{nodes: map[string]model.Node{"sentinel": {ID: "sentinel"}}, experiments: make(map[string]model.Experiment)}}
 		client := &runWorkerClient{peer: peer, runID: peer.RunID(), ctx: ctx, server: server}
 		return func(callCtx context.Context, method string, input json.RawMessage) (any, error) {
+			if method == "topology-owner" {
+				var target model.Node
+				if err := json.Unmarshal(input, &target); err != nil {
+					return nil, err
+				}
+				server.worker = client
+				server.state.agents = map[string]model.Agent{target.AgentID: {ID: target.AgentID, State: model.AgentOnline, LastSeen: time.Now().Add(-2 * agentStaleAfter)}}
+				server.state.nodes[target.ID] = target
+				return server.currentTopologyAgent(callCtx, peer.RunID(), target.Generation, target)
+			}
 			if method != "execute" {
 				return nil, fmt.Errorf("invalid test operation")
 			}
@@ -70,6 +80,43 @@ func TestControllerInventoryWorkerHelper(t *testing.T) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestWorkerTopologyConfirmsExpiredOwnerAgainstParentInventory(t *testing.T) {
+	s, _ := topologyFormationFixture(t, 1, nil)
+	s.state.experiments["run"] = model.Experiment{ID: "run", State: "running"}
+	target := s.state.nodes["node-0000"]
+	broker := &runWorkerBroker{server: s, runID: "run"}
+	t.Cleanup(func() { _ = broker.close() })
+	command := func(string) *exec.Cmd {
+		return exec.Command(os.Args[0], "-test.run=^TestControllerInventoryWorkerHelper$", "--", "inventory-helper")
+	}
+	process, err := workerproc.Start(t.Context(), "controller-inventory-test", struct{ RunID string }{"run"}, broker.handle, workerproc.Options{Command: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Close() })
+	var owner model.Agent
+	if err := process.Call(t.Context(), "topology-owner", target, &owner); err != nil || owner.URL != s.state.agents["agent"].URL {
+		t.Fatalf("parent has a live owner: %+v, %v", owner, err)
+	}
+	owner.State = model.AgentOffline
+	s.state.mu.Lock()
+	s.state.agents[owner.ID] = owner
+	s.state.mu.Unlock()
+	if err := process.Call(t.Context(), "topology-owner", target, nil); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("offline parent owner: %v", err)
+	}
+	owner.State = model.AgentOnline
+	s.state.mu.Lock()
+	s.state.agents[owner.ID] = owner
+	replacement := target
+	replacement.PeerID = "replacement-peer"
+	s.state.setNodeLocked(replacement)
+	s.state.mu.Unlock()
+	if err := process.Call(t.Context(), "topology-owner", target, nil); err == nil || !strings.Contains(err.Error(), "incarnation") {
+		t.Fatalf("changed target: %v", err)
+	}
 }
 func inventoryTestServer(t *testing.T, nodes int) *Server {
 	t.Helper()
@@ -230,6 +277,37 @@ func TestWorkerInventoryLeaseRejectsForeignCursorAndReleasesOnClose(t *testing.T
 	if _, err := broker.inventoryPage(t.Context(), workerInventoryRequest{Lease: first.Lease, Next: first.Next}); err == nil {
 		t.Fatal("late page reused a closed Run lease")
 	}
+}
+
+func TestWorkerInventoryLeaseExpiresOnlyItsIdleCursor(t *testing.T) {
+	s := inventoryTestServer(t, 12)
+	broker := &runWorkerBroker{server: s, runID: "dense-inventory"}
+	defer broker.close()
+	first, err := broker.inventoryPage(t.Context(), workerInventoryRequest{})
+	if err != nil || first.Done {
+		t.Fatalf("first page: done=%t err=%v", first.Done, err)
+	}
+	broker.mu.Lock()
+	lease := broker.inventoryLease
+	broker.mu.Unlock()
+	second, err := broker.inventoryPage(t.Context(), workerInventoryRequest{Lease: first.Lease, Next: first.Next})
+	if err != nil || second.Done || second.Next <= first.Next {
+		t.Fatalf("second page: next=%d done=%t err=%v", second.Next, second.Done, err)
+	}
+	// The previous timer can already be waiting for the broker mutex when
+	// the next page is produced. It must leave the new cursor intact.
+	broker.expireInventoryPage(lease, first.Next)
+	broker.mu.Lock()
+	preserved := broker.inventoryLease == lease
+	broker.mu.Unlock()
+	if !preserved {
+		t.Fatal("the previous cursor's expiry interrupted a progressing transfer")
+	}
+	broker.expireInventoryPage(lease, second.Next)
+	if _, err := broker.inventoryPage(t.Context(), workerInventoryRequest{Lease: second.Lease, Next: second.Next}); err == nil {
+		t.Fatal("the expired cursor was accepted")
+	}
+	lease.timer.Stop()
 }
 
 func TestWorkerInventoryAbandonedLeaseExpires(t *testing.T) {

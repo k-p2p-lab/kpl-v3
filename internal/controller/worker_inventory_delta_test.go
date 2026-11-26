@@ -153,7 +153,8 @@ func TestWorkerInventoryDeltaResynchronizesAfterDeletionAndUnindexedFixtureChang
 }
 
 func TestWorkerInventoryDeltaFailedPageKeepsStateAndCursorUntilRetry(t *testing.T) {
-	server := inventoryTestServer(t, 20)
+	const nodes = 20
+	server := inventoryTestServer(t, nodes)
 	var tamper atomic.Bool
 	poll, broker := inventoryDeltaProcess(t, server, func(page *workerInventoryPage) {
 		if tamper.Load() && page.Next > len(page.Items) {
@@ -177,17 +178,21 @@ func TestWorkerInventoryDeltaFailedPageKeepsStateAndCursorUntilRetry(t *testing.
 	}
 	tamper.Store(false)
 	proof, stats := poll()
-	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || proof.Revision <= first.Revision || stats.full || stats.nodes != 20 {
+	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || proof.Revision <= first.Revision || stats.full || stats.nodes != nodes {
 		t.Fatalf("failed delta did not retry completely: %+v %+v", proof, stats)
 	}
 }
 
 func TestWorkerInventoryDeltaKeepsFiniteCaptureDuringConcurrentChanges(t *testing.T) {
-	server := inventoryTestServer(t, 20)
+	const nodes = 20
+	server := inventoryTestServer(t, nodes)
 	var mutate atomic.Bool
 	poll, broker := inventoryDeltaProcess(t, server, func(page *workerInventoryPage) {
 		if len(page.Items) == 0 || !mutate.Swap(false) {
 			return
+		}
+		if page.Done {
+			t.Error("concurrent mutation needs a second inventory page")
 		}
 		server.state.mu.Lock()
 		defer server.state.mu.Unlock()
@@ -212,7 +217,7 @@ func TestWorkerInventoryDeltaKeepsFiniteCaptureDuringConcurrentChanges(t *testin
 		t.Fatalf("finite delta snapshot changed between pages: %+v", proof)
 	}
 	proof, stats := poll()
-	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || stats.nodes != 20 || stats.full {
+	if proof.Error != "" || proof.Digest != expectedInventoryDigest(broker) || stats.nodes != nodes || stats.full {
 		t.Fatalf("concurrent changes were lost after cursor advance: %+v %+v", proof, stats)
 	}
 }

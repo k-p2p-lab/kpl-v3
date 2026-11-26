@@ -43,6 +43,9 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener) error {
+	s.cancelMu.Lock()
+	s.serveDone = ctx.Done()
+	s.cancelMu.Unlock()
 	if s.config.RunWorkers {
 		if err := s.loadRetiredRuntimeFences(); err != nil {
 			listener.Close()
@@ -113,7 +116,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener) error {
 			s.recordAnalysisLoop(runCtx)
 		}
 	}()
-	s.logger.Info("controller listening", "address", s.config.Listen)
+	s.logger.Info("controller listening", "address", listener.Addr().String())
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	var err error
@@ -461,12 +464,37 @@ func (s *Server) handleNetwork(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Older Peers supplied only the Run ID. When a generation is supplied it must
+// be unambiguous, so a malformed query cannot broaden discovery after a reset.
+func parseRegistryQuery(raw string) (url.Values, uint64, error) {
+	query, err := url.ParseQuery(raw)
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid registry query: %w", err)
+	}
+	values, ok := query["generation"]
+	if !ok {
+		return query, 0, nil
+	}
+	if len(values) == 1 {
+		n, err := strconv.ParseUint(values[0], 10, 64)
+		if err == nil && n > 0 {
+			return query, n, nil
+		}
+	}
+	return nil, 0, errors.New("generation must be a single positive integer")
+}
+
 func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
 		return
 	}
-	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
+	query, generation, err := parseRegistryQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	runID := strings.TrimSpace(query.Get("runId"))
 	if runID == "" {
 		writeError(w, http.StatusBadRequest, "runId query parameter is required")
 		return
@@ -479,7 +507,8 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	var result []bootstrapNode
 	s.state.mu.RLock()
 	for node := range s.state.activeNodesLocked() {
-		if node.RunID == runID && node.Role == "boot" && node.State == model.NodeReady && node.PeerID != "" && len(node.Addresses) > 0 {
+		if node.RunID == runID && (generation == 0 || node.Generation == generation) &&
+			node.Role == "boot" && node.State == model.NodeReady && node.PeerID != "" && len(node.Addresses) > 0 {
 			result = append(result, bootstrapNode{NodeID: node.ID, PeerID: node.PeerID, Addresses: append([]string(nil), node.Addresses...)})
 		}
 	}
@@ -496,9 +525,14 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	runID := strings.TrimSpace(r.URL.Query().Get("runId"))
-	topic := strings.TrimSpace(r.URL.Query().Get("topic"))
-	requesterNodeID := strings.TrimSpace(r.URL.Query().Get("requesterNodeId"))
+	query, generation, err := parseRegistryQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	runID := strings.TrimSpace(query.Get("runId"))
+	topic := query.Get("topic")
+	requesterNodeID := strings.TrimSpace(query.Get("requesterNodeId"))
 	if runID == "" || topic == "" || requesterNodeID == "" {
 		writeError(w, http.StatusBadRequest, "runId, topic, and requesterNodeId query parameters are required")
 		return
@@ -513,7 +547,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	s.state.mu.RLock()
 	for node := range s.state.activeNodesLocked() {
-		if node.ID == requesterNodeID || node.RunID != runID || node.State != model.NodeReady ||
+		if node.ID == requesterNodeID || node.RunID != runID || generation != 0 && node.Generation != generation || node.State != model.NodeReady ||
 			node.PeerID == "" || len(node.Addresses) == 0 ||
 			!agentIsOnline(s.state.agents[node.AgentID], now) ||
 			!nodeFeatureEnabled(node, "pubsubEnabled", node.Type != "boot" && node.Type != "dht-only") ||

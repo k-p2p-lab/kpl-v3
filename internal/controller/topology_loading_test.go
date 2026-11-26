@@ -116,6 +116,19 @@ func TestDashboardTopologyStreamModes(t *testing.T) {
 	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	s.state = denseTopologyState(t)
 	for _, query := range []string{"&topology=0", "&topology=1", ""} {
+		// Each request represents a live cluster, even when decoding the
+		// preceding dense frame under the race detector takes a full lease.
+		s.state.mu.Lock()
+		now := time.Now().UTC()
+		agent := s.state.agents["agent"]
+		agent.LastSeen = now
+		s.state.agents[agent.ID] = agent
+		for id, node := range s.state.nodes {
+			node.LastSeen, node.OverlayObservedAt = now, now
+			s.state.nodes[id] = node
+			s.state.nodeReportTimes[id] = now
+		}
+		s.state.mu.Unlock()
 		ctx, cancel := context.WithCancel(t.Context())
 		response := &topologySnapshotWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
 		s.handleStream(response, httptest.NewRequest("GET", "/api/v1/stream?view=dashboard"+query, nil).WithContext(ctx))
@@ -139,7 +152,7 @@ func TestDashboardTopologyStreamModes(t *testing.T) {
 				t.Fatal("off stream retained graph data")
 			}
 		} else if !snapshot.Topology.Included || len(snapshot.Nodes) != 1000 || len(snapshot.Edges) != 75000 {
-			t.Fatal("on/default stream lost topology")
+			t.Fatalf("stream mode %q: included=%t nodes=%d edges=%d", query, snapshot.Topology.Included, len(snapshot.Nodes), len(snapshot.Edges))
 		}
 	}
 	for _, query := range []string{"?view=dashboard&topology=invalid", "?topology=0"} {

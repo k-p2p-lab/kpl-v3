@@ -31,6 +31,11 @@ func topologyFormationFixture(t *testing.T, n int, handler http.HandlerFunc) (*S
 	for i := 0; i < n; i++ {
 		id := fmt.Sprintf("node-%04d", i)
 		node := meshFreezeNode(id)
+		node.Metadata["topicsJSON"] = `["topic"]`
+		if i == 0 {
+			node.Type = "relay"
+			node.Metadata["topicMode"] = "relay"
+		}
 		hash, err := multihash.Sum([]byte(id), multihash.SHA2_256, -1)
 		if err != nil {
 			t.Fatal(err)
@@ -160,7 +165,7 @@ func TestTopologyFormationER500PreparesEntireDomainBeforeApplying(t *testing.T) 
 }
 
 func TestTopologyFormationPreflightAndPrepareFailuresDoNotApply(t *testing.T) {
-	for _, testCase := range []string{"count", "duplicate-peer", "address", "unready", "prepare-error", "bad-ack", "trailing-ack"} {
+	for _, testCase := range []string{"count", "duplicate-peer", "address", "isolated-wrong-destination", "isolated-no-transport", "isolated-address-limit", "unready", "wrong-topic", "publish-only", "prepare-error", "bad-ack", "trailing-ack"} {
 		t.Run(testCase, func(t *testing.T) {
 			var prepare, apply atomic.Int64
 			s, phase := topologyFormationFixture(t, 3, func(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +188,9 @@ func TestTopologyFormationPreflightAndPrepareFailuresDoNotApply(t *testing.T) {
 				}
 			})
 			node := s.state.nodes["node-0001"]
+			if strings.HasPrefix(testCase, "isolated-") {
+				*phase.Topology.P = 0
+			}
 			switch testCase {
 			case "count":
 				phase.Count = 4
@@ -190,8 +198,18 @@ func TestTopologyFormationPreflightAndPrepareFailuresDoNotApply(t *testing.T) {
 				node.PeerID = s.state.nodes["node-0000"].PeerID
 			case "address":
 				node.Addresses = []string{"invalid"}
+			case "isolated-wrong-destination":
+				node.Addresses[0] += "/p2p/" + s.state.nodes["node-0000"].PeerID
+			case "isolated-no-transport":
+				node.Addresses = []string{"/p2p/" + node.PeerID}
+			case "isolated-address-limit":
+				node.Addresses = slices.Repeat(node.Addresses, 33)
 			case "unready":
 				node.State = model.NodeStarting
+			case "wrong-topic":
+				node.Metadata["topicsJSON"] = `["other"]`
+			case "publish-only":
+				node.Metadata["topicMode"] = "publish"
 			}
 			s.state.nodes[node.ID] = node
 			err := s.runTopology(context.Background(), "run", 2, phase, 1001)
@@ -242,6 +260,19 @@ func TestTopologyFormationCancellationStopsPrepare(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancellation retained topology workers")
+	}
+}
+
+func TestTopologyPreflightDefersLegacyTopicMembershipToPeer(t *testing.T) {
+	s, phase := topologyFormationFixture(t, 1, nil)
+	node := s.state.nodes["node-0000"]
+	delete(node.Metadata, "topicsJSON")
+	delete(node.Metadata, "topicMode")
+	node.Metadata["topics"] = "other,a,b"
+	phase.Topic = "a,b"
+	targets, err := s.topologyTargets("run", 2, phase)
+	if err != nil || len(targets) != 1 || targets[0].ID != node.ID {
+		t.Fatalf("legacy target with ambiguous comma-separated topics: %+v, %v", targets, err)
 	}
 }
 

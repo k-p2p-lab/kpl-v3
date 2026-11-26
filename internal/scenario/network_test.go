@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -114,7 +115,32 @@ func TestNetworkScheduleExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Parse(data); err != nil {
+	spec, err := Parse(data)
+	if err != nil {
 		t.Fatalf("network schedule example: %v", err)
 	}
+	joined := make(map[string]int)
+	var trafficJob string
+	for _, phase := range spec.Phases {
+		switch phase.Action {
+		case "join":
+			joined[phase.Group] += phase.Count
+		case "publish":
+			samples := min(phase.Count, joined[phase.Group]) * phase.Repeat
+			if samples != 180 || phase.Count != 1 || !phase.Parallel || phase.Interval != (Distribution{Model: "fixed", Value: "5s"}) {
+				t.Fatalf("samples=%d count=%d parallel=%t interval=%+v", samples, phase.Count, phase.Parallel, phase.Interval)
+			}
+			if phase.ShouldAwait() || phase.Job == "" {
+				t.Fatal("observation window requires a named background publication job")
+			}
+			trafficJob = phase.Job
+		case "wait-jobs":
+			if trafficJob != "" && slices.Contains(phase.Jobs, trafficJob) {
+				return
+			}
+		case "stop-all":
+			t.Fatal("stop-all would cancel outstanding network samples")
+		}
+	}
+	t.Fatal("network schedule example must wait for the publication job")
 }

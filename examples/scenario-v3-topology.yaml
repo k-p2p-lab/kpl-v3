@@ -16,7 +16,15 @@ profiles:
       topics: [kpl/graph]
       discovery: {mode: none}
 phases:
-  - {action: join, group: boot, role: boot, count: 1}
+  # Workers need the boot link only for startup. Release older links while
+  # later workers are still inside their bootstrap timeout.
+  - action: join
+    group: boot
+    role: boot
+    count: 1
+    node:
+      libp2p:
+        connectionManager: {lowWater: 24, highWater: 48, gracePeriod: 2s}
   - {action: wait-ready, group: boot, timeout: 1m}
   - {action: join, group: domain-a, profile: graph-peer, count: 500, parallel: true, parallelism: 16}
   - {action: wait-ready, group: domain-a, minCount: 500, timeout: 10m}

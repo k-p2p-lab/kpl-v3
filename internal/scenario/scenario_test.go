@@ -331,12 +331,25 @@ func TestWaitReadyRequiresEveryRelevantBackgroundJoin(t *testing.T) {
 			barrier: "    jobs: [first, second]\n",
 			wantErr: true,
 		},
+		{
+			name:    "group and canonical type intersect",
+			barrier: "    group: workers\n    type: worker\n    jobs: [first]\n",
+		},
+		{
+			name:    "type across groups excludes other types",
+			barrier: "    type: light\n    jobs: [second]\n",
+		},
+		{
+			name:    "matching type still requires its producer",
+			barrier: "    group: workers\n    type: light\n    jobs: [first]\n",
+			wantErr: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			raw := "version: 2\nname: join-barrier\nphases:\n" +
 				"  - action: join\n    job: first\n    await: false\n    group: workers\n    count: 1\n" +
-				"  - action: join\n    job: second\n    await: false\n    group: workers\n    count: 1\n" +
+				"  - action: join\n    job: second\n    await: false\n    group: workers\n    type: light\n    count: 1\n" +
 				"  - action: join\n    job: third\n    await: false\n    group: observers\n    count: 1\n" +
 				"  - action: publish\n    job: other\n    await: false\n    group: workers\n    count: 1\n" +
 				"  - action: wait-ready\n" + test.barrier

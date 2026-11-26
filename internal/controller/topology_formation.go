@@ -15,7 +15,6 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/k-p2p-lab/kpl-v3/internal/topology"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/multiformats/go-multiaddr"
 )
 
 // Generate one undirected mesh for a snapshot of the selected domain. Complete
@@ -154,25 +153,38 @@ func (s *Server) topologyTargets(runID string, generation uint64, phase scenario
 		if err := validateMeshFreezeNode(current, s.state.agents[target.AgentID]); err != nil {
 			return nil, err
 		}
-		id, err := peer.Decode(target.PeerID)
-		if err != nil || seen[id] {
-			return nil, fmt.Errorf("topology node %q has an invalid or duplicate Peer ID", target.ID)
+		// Older inventories may omit topic metadata. The Peer's prepare
+		// still checks its actual subscription or relay in all cases.
+		if mode := current.Metadata["topicMode"]; mode != "" && mode != "subscribe" && mode != "relay" {
+			return nil, fmt.Errorf("topology node %q cannot join the mesh for topic %q in %q mode", target.ID, phase.Topic, mode)
 		}
-		seen[id] = true
-		if len(current.Addresses) == 0 {
-			return nil, fmt.Errorf("topology node %q has no connection addresses", target.ID)
+		if topics, known := nodeTopicsJSON(current); known && !slices.Contains(topics, phase.Topic) {
+			return nil, fmt.Errorf("topology node %q has no configured topic %q", target.ID, phase.Topic)
 		}
-		for _, raw := range current.Addresses {
-			if _, err := multiaddr.NewMultiaddr(raw); err != nil {
-				return nil, fmt.Errorf("topology node %q has an invalid connection address: %w", target.ID, err)
-			}
+		info, err := (model.TopologyPeer{PeerID: current.PeerID, Addresses: current.Addresses}).AddrInfo()
+		if err != nil {
+			return nil, fmt.Errorf("topology node %q: %w", target.ID, err)
 		}
+		if seen[info.ID] {
+			return nil, fmt.Errorf("topology node %q has a duplicate Peer ID", target.ID)
+		}
+		seen[info.ID] = true
 		targets[i].Addresses = slices.Clone(current.Addresses)
 	}
 	return targets, nil
 }
 
-func (s *Server) currentTopologyAgent(runID string, generation uint64, target model.Node) (model.Agent, error) {
+func (s *Server) currentTopologyAgent(ctx context.Context, runID string, generation uint64, target model.Node) (model.Agent, error) {
+	// The worker caches the parent's inventory. Slow prepare calls can queue
+	// its periodic inventory poll behind command RPCs even while the parent
+	// continues receiving Agent heartbeats. Confirm a stale lease at source.
+	if s.worker != nil {
+		if agent, ok := s.agent(target.AgentID); !ok || agent.State != model.AgentOnline {
+			if err := s.worker.syncInventory(ctx); err != nil {
+				return model.Agent{}, fmt.Errorf("refresh topology inventory for agent %q: %w", target.AgentID, err)
+			}
+		}
+	}
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
 	current, exists := s.state.nodes[target.ID]

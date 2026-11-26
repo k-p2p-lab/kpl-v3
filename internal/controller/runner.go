@@ -93,6 +93,7 @@ type Server struct {
 	logger                     *slog.Logger
 	cancelMu                   sync.Mutex
 	cancels                    map[string]context.CancelFunc
+	serveDone                  <-chan struct{} // cancelMu; nil for standalone use
 	shuttingDown               bool
 	runs                       sync.WaitGroup
 	nodeSeq                    atomic.Uint64
@@ -352,12 +353,16 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 				if err := s.runPhase(executionCtx, experiment.ID, phaseGeneration, phase, phaseRNG, jobs, shutdownTimeout); err != nil {
 					return err
 				}
+				if phase.Action == "stop-all" {
+					phaseGeneration++
+				}
 			}
 			return nil
 		}
 		s.logger.Info("scenario phase started", "run", experiment.ID, "phase", phase.Name, "job", phase.Job, "action", phase.Action, "parallel", phase.Parallel, "await", phase.ShouldAwait())
 		if phase.ShouldAwait() {
 			runErr = execute(ctx)
+			generation = phaseGeneration
 		} else {
 			jobID := phase.Job
 			s.updateExperiment(experiment.ID, func(current *model.Experiment) { current.ActiveJobs++ })
@@ -387,9 +392,6 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		}
 		if runErr != nil {
 			break
-		}
-		if phase.Action == "stop-all" {
-			generation++
 		}
 	}
 	if runErr == nil && spec.OnExit == "drain" {
@@ -445,7 +447,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 		runErr = backgroundErr
 	}
 
-	closedSingleRun := experiment.Repetitions <= 1 && generation > 1 && len(s.matchingNodes(experiment.ID, "", "", "")) == 0
+	closedSingleRun := experiment.Repetitions <= 1 && generation > 1 && len(s.matchingNodes(experiment.ID, 0, "", "", "")) == 0
 	// For a single run, natural onExit only governs background jobs. Repeated,
 	// canceled, or failed runs also fence and remove Peers after producers stop,
 	// so no in-flight creation can escape cleanup or overlap the next iteration.
@@ -466,8 +468,7 @@ func (s *Server) runScenario(parentCtx context.Context, experiment model.Experim
 			cleanupErr = errors.Join(cleanupErr, err)
 			s.logger.Error("scenario peer cleanup failed", "run", experiment.ID, "generation", generation, "error", err)
 		}
-	}
-	if runErr == nil && cleanupErr == nil && closedSingleRun {
+	} else if closedSingleRun {
 		drainCtx := beginFinalization()
 		dataErr = s.drainRunTelemetry(drainCtx, experiment.ID)
 		dataErr = errors.Join(finalizationErr, dataErr)
@@ -570,7 +571,7 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 		timeout, _ := time.ParseDuration(phase.Timeout)
 		return jobs.wait(ctx, phase.Jobs, timeout)
 	case "publish":
-		return s.runPublish(ctx, runID, phase, rng)
+		return s.runPublish(ctx, runID, generation, phase, rng)
 	case "mesh-freeze":
 		return s.runMeshFreeze(ctx, runID, generation, phase)
 	case "topology":
@@ -579,7 +580,7 @@ func (s *Server) runPhase(ctx context.Context, runID string, generation uint64, 
 		s.state.mu.RUnlock()
 		return s.runTopology(ctx, runID, generation, phase, seed)
 	case "leave":
-		return s.runLeave(ctx, runID, phase, rng)
+		return s.runLeave(ctx, runID, generation, phase, rng)
 	case "stop-all":
 		jobs.cancelAll()
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -712,7 +713,7 @@ func (s *Server) waitReadyUntil(ctx context.Context, runID string, generation ui
 		if phase.MinCount > 0 {
 			enoughNodes = total >= phase.MinCount
 		}
-		if failed == 0 && enoughNodes && float64(ready)/float64(total) >= phase.ReadyRatio {
+		if ctx.Err() == nil && failed == 0 && enoughNodes && float64(ready)/float64(total) >= phase.ReadyRatio {
 			return nil
 		}
 		select {
@@ -726,11 +727,11 @@ func (s *Server) waitReadyUntil(ctx context.Context, runID string, generation ui
 	}
 }
 
-func (s *Server) runPublish(ctx context.Context, runID string, phase scenario.Phase, rng *rand.Rand) error {
+func (s *Server) runPublish(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	candidates := s.matchingNodes(runID, phase.Group, model.NodeReady, phase.NodeType)
+	candidates := s.matchingNodes(runID, generation, phase.Group, model.NodeReady, phase.NodeType)
 	nodes := make([]model.Node, 0, len(candidates))
 	for _, node := range candidates {
 		if !s.nodeAgentOnline(node) {
@@ -774,19 +775,15 @@ func (s *Server) runPublish(ctx context.Context, runID string, phase scenario.Ph
 	})
 }
 
-func (s *Server) runLeave(ctx context.Context, runID string, phase scenario.Phase, rng *rand.Rand) error {
-	return s.stopNodesWithPolicy(ctx, runID, phase, rng)
-}
-
 func (s *Server) stopNodes(ctx context.Context, runID, group, nodeType string, count int, rng *rand.Rand, interval scenario.Distribution, parallel bool, parallelism int) error {
-	return s.stopNodesWithPolicy(ctx, runID, scenario.Phase{Action: "leave", Group: group, NodeType: nodeType, Count: count, Interval: interval, Parallel: parallel, Parallelism: parallelism}, rng)
+	return s.runLeave(ctx, runID, 0, scenario.Phase{Action: "leave", Group: group, NodeType: nodeType, Count: count, Interval: interval, Parallel: parallel, Parallelism: parallelism}, rng)
 }
 
-func (s *Server) stopNodesWithPolicy(ctx context.Context, runID string, phase scenario.Phase, rng *rand.Rand) error {
+func (s *Server) runLeave(ctx context.Context, runID string, generation uint64, phase scenario.Phase, rng *rand.Rand) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	nodes := s.matchingNodes(runID, phase.Group, "", phase.NodeType)
+	nodes := s.matchingNodes(runID, generation, phase.Group, "", phase.NodeType)
 	rng.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
 	count := phase.Count
 	if count <= 0 || count > len(nodes) {
@@ -885,7 +882,7 @@ func (s *Server) stopRunGeneration(ctx context.Context, runID string, generation
 			succeeded[result.agent.ID] = result.agent
 		}
 	}
-	for _, node := range s.matchingNodes(runID, "", "", "") {
+	for _, node := range s.matchingNodes(runID, 0, "", "", "") {
 		if node.Generation <= generation {
 			if _, ok := succeeded[node.AgentID]; ok {
 				s.markNodeStoppingAndReleaseCapacity(node.ID)
@@ -1334,6 +1331,7 @@ func (s *Server) markNodeStoppingAndReleaseCapacity(nodeID string) {
 func (s *Server) readyCount(runID string, generation uint64, group, nodeType string) (ready, total, failed int) {
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
+	now := time.Now()
 	for _, node := range s.state.nodes {
 		if node.RunID != runID || node.Generation != generation || group != "" && node.Group != group || nodeType != "" && node.Type != nodeType {
 			continue
@@ -1341,7 +1339,7 @@ func (s *Server) readyCount(runID string, generation uint64, group, nodeType str
 		total++
 		switch node.State {
 		case model.NodeReady:
-			if agent, ok := s.state.agents[node.AgentID]; ok && agentIsOnline(agent, time.Now()) {
+			if agent, ok := s.state.agents[node.AgentID]; ok && agentIsOnline(agent, now) {
 				ready++
 			}
 		case model.NodeFailed:
@@ -1351,12 +1349,14 @@ func (s *Server) readyCount(runID string, generation uint64, group, nodeType str
 	return ready, total, failed
 }
 
-func (s *Server) matchingNodes(runID, group, state, nodeType string) []model.Node {
+// Scenario phases supply their generation. Zero selects the whole Run for
+// cleanup or aggregate queries across generations.
+func (s *Server) matchingNodes(runID string, generation uint64, group, state, nodeType string) []model.Node {
 	s.state.mu.RLock()
 	defer s.state.mu.RUnlock()
 	var nodes []model.Node
 	for node := range s.state.activeNodesLocked() {
-		if node.RunID != runID || group != "" && node.Group != group || nodeType != "" && node.Type != nodeType {
+		if node.RunID != runID || generation != 0 && node.Generation != generation || group != "" && node.Group != group || nodeType != "" && node.Type != nodeType {
 			continue
 		}
 		if state != "" && node.State != state {
@@ -1372,7 +1372,7 @@ func (s *Server) matchingNodes(runID, group, state, nodeType string) []model.Nod
 }
 
 func (s *Server) topicSubscriberCount(runID, topic string) int {
-	nodes := s.matchingNodes(runID, "", model.NodeReady, "")
+	nodes := s.matchingNodes(runID, 0, "", model.NodeReady, "")
 	count := 0
 	for _, node := range nodes {
 		if s.nodeAgentOnline(node) && nodeSubscribesToTopic(node, topic) {
@@ -1384,7 +1384,7 @@ func (s *Server) topicSubscriberCount(runID, topic string) int {
 
 func (s *Server) topicReachTargetCount(runID, topic, publisherID string) int {
 	count := s.topicSubscriberCount(runID, topic)
-	for _, node := range s.matchingNodes(runID, "", model.NodeReady, "") {
+	for _, node := range s.matchingNodes(runID, 0, "", model.NodeReady, "") {
 		if node.ID == publisherID && s.nodeAgentOnline(node) {
 			if !nodeSubscribesToTopic(node, topic) {
 				count++
@@ -1406,7 +1406,8 @@ func (s *Server) capturePublishCohort(request *model.PublishRequest, publisher m
 	defer s.state.mu.RUnlock()
 	now := time.Now().UTC()
 	current, exists := s.state.nodes[publisher.ID]
-	if !exists || current.State != model.NodeReady || !agentIsOnline(s.state.agents[current.AgentID], now) {
+	if !exists || current.RunID != request.RunID || current.Generation != publisher.Generation || current.AgentID != publisher.AgentID ||
+		publisher.PeerID != "" && publisher.PeerID != current.PeerID || current.State != model.NodeReady || !agentIsOnline(s.state.agents[current.AgentID], now) {
 		return false
 	}
 	request.CohortCapturedAt = now
@@ -1415,7 +1416,7 @@ func (s *Server) capturePublishCohort(request *model.PublishRequest, publisher m
 	for _, topic := range topics {
 		targets := make([]string, 0)
 		for node := range s.state.activeNodesLocked() {
-			if node.ID != publisher.ID && node.RunID == request.RunID && node.State == model.NodeReady &&
+			if node.ID != publisher.ID && node.RunID == request.RunID && node.Generation == publisher.Generation && node.State == model.NodeReady &&
 				agentIsOnline(s.state.agents[node.AgentID], now) && nodeSubscribesToTopic(node, topic) {
 				targets = append(targets, node.ID)
 			}
@@ -1528,12 +1529,18 @@ func nodeHasTopic(node model.Node, topic string) bool {
 	return false
 }
 
+func nodeTopicsJSON(node model.Node) ([]string, bool) {
+	var topics []string
+	raw := node.Metadata["topicsJSON"]
+	if raw == "" || json.Unmarshal([]byte(raw), &topics) != nil || topics == nil {
+		return nil, false
+	}
+	return topics, true
+}
+
 func nodeTopics(node model.Node) []string {
-	if raw := strings.TrimSpace(node.Metadata["topicsJSON"]); raw != "" {
-		var topics []string
-		if json.Unmarshal([]byte(raw), &topics) == nil {
-			return topics
-		}
+	if topics, ok := nodeTopicsJSON(node); ok {
+		return topics
 	}
 	if raw := strings.TrimSpace(node.Metadata["topics"]); raw != "" {
 		return strings.Split(raw, ",")

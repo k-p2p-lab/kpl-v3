@@ -65,7 +65,7 @@ func (s *Server) dispatchTopologyCommand(ctx context.Context, runID string, gene
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		agent, err := s.currentTopologyAgent(runID, generation, target)
+		agent, err := s.currentTopologyAgent(ctx, runID, generation, target)
 		if err != nil {
 			return err
 		}
@@ -83,7 +83,7 @@ func (s *Server) dispatchTopologyCommand(ctx context.Context, runID string, gene
 			if err := response.Validate(request, target.ID, target.PeerID); err != nil {
 				return fmt.Errorf("node %q: %w", target.ID, err)
 			}
-			if _, err := s.currentTopologyAgent(runID, generation, target); err != nil {
+			if _, err := s.currentTopologyAgent(ctx, runID, generation, target); err != nil {
 				return err
 			}
 			return ctx.Err()

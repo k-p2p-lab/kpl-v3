@@ -222,7 +222,7 @@ func TestRunPublishSkipsReadyNodesOnOfflineAgents(t *testing.T) {
 	server.state.nodes["offline-node"] = model.Node{ID: "offline-node", RunID: "run", Group: "workers", AgentID: "offline", Type: "full", State: model.NodeReady, Metadata: metadata}
 
 	phase := scenario.Phase{Group: "workers", Count: 2, Topic: "topic", PayloadSize: 8}
-	if err := server.runPublish(context.Background(), "run", phase, rand.New(rand.NewSource(1))); err != nil {
+	if err := server.runPublish(context.Background(), "run", 0, phase, rand.New(rand.NewSource(1))); err != nil {
 		t.Fatalf("publish failed despite an online eligible node: %v", err)
 	}
 	if got := published.Load(); got != 1 {

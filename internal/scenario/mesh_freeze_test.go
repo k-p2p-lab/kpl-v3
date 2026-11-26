@@ -43,6 +43,7 @@ func TestMeshFreezeRejectsInvalidSchema(t *testing.T) {
 	peerID := meshFreezeTestPeerID(t)
 	cases := []struct{ name, fields string }{
 		{"missing selector", ""},
+		{"ignored profile selector", "group: workers, profile: selected-subset"},
 		{"empty group", "group: ' '"},
 		{"empty node selector", "group: workers, nodeIds: []"},
 		{"empty peer selector", "group: workers, peerIds: []"},

@@ -108,12 +108,12 @@ func (j *phaseJobs) waitDone(ctx context.Context, ids []string, timeout time.Dur
 }
 
 func (j *phaseJobs) waitSelected(ctx context.Context, ids []string, timeout time.Duration, failFast bool) error {
-	selectedIDs, selectedJobs, err := j.selectJobs(ids)
-	if err != nil || len(selectedJobs) == 0 {
-		return err
-	}
 	waitCtx, cancel := jobWaitContext(ctx, timeout)
 	defer cancel()
+	selectedIDs, selectedJobs, err := j.selectJobs(ids)
+	if err != nil {
+		return err
+	}
 	label := "wait for jobs"
 	if !failFast {
 		label = "wait for jobs to stop"
@@ -146,7 +146,7 @@ func (j *phaseJobs) waitSelected(ctx context.Context, ids []string, timeout time
 		j.mu.RUnlock()
 		pending = remaining
 		if len(pending) == 0 {
-			return nil
+			return waitCtx.Err()
 		}
 		// A broadcast avoids reflect.Select's 65,536-case limit and retires
 		// every completed job in one scan, including already-drained batches.

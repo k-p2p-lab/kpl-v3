@@ -247,6 +247,7 @@ func TestTopicDiscoveryRegistryFiltersAndPrioritizesCandidates(t *testing.T) {
 	}
 	addNode("requester", "run-a", "online", model.NodeReady, "peer-requester", "/ip4/127.0.0.1/tcp/10000", "full", "subscribe", `["topic-a"]`, "true")
 	addNode("subscriber", "run-a", "online", model.NodeReady, "peer-subscriber", "/ip4/127.0.0.1/tcp/10001", "full", "subscribe", `["topic-a"]`, "true")
+	addNode("spaced", "run-a", "online", model.NodeReady, "peer-spaced", "/ip4/127.0.0.1/tcp/10011", "full", "subscribe", `[" topic-a "]`, "true")
 	addNode("publisher", "run-a", "online", model.NodeReady, "peer-publisher", "/ip4/127.0.0.1/tcp/10002", "publisher", "publish", `["topic-a"]`, "true")
 	addNode("relay", "run-a", "online", model.NodeReady, "peer-relay", "/ip4/127.0.0.1/tcp/10003", "relay", "relay", `["topic-a"]`, "true")
 	addNode("wrong-topic", "run-a", "online", model.NodeReady, "peer-wrong", "/ip4/127.0.0.1/tcp/10004", "full", "subscribe", `["topic-b"]`, "true")
@@ -300,11 +301,57 @@ func TestTopicDiscoveryRegistryFiltersAndPrioritizesCandidates(t *testing.T) {
 	if nodes[0].PeerID != "peer-subscriber" || len(nodes[0].Addresses) != 1 {
 		t.Fatalf("discovery identity/address missing: %+v", nodes[0])
 	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/discovery?runId=run-a&requesterNodeId=requester&topic=%20topic-a%20", nil))
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &nodes) != nil || len(nodes) != 1 || nodes[0].NodeID != "spaced" {
+		t.Fatalf("discovery changed the requested topic: %d %s", recorder.Code, recorder.Body.String())
+	}
 
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, target, nil))
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST discovery status=%d, want 405", recorder.Code)
+	}
+}
+
+func TestRegistriesScopeDiscoveryToRequestedGeneration(t *testing.T) {
+	s := New(ServerConfig{DataDir: t.TempDir()}, nil)
+	s.state.agents["owner"] = model.Agent{ID: "owner", State: model.AgentOnline, LastSeen: time.Now()}
+	for i, id := range []string{"older", "current"} {
+		s.state.nodes[id] = model.Node{ID: id, RunID: "run", Generation: uint64(i + 1), AgentID: "owner",
+			Role: "boot", Type: "full", State: model.NodeReady, PeerID: "peer-" + id,
+			Addresses: []string{"/ip4/127.0.0.1/tcp/20000"}, Metadata: map[string]string{"topicsJSON": `["topic"]`}}
+	}
+	handler := s.apiTestHandler(t.Context())
+	for _, path := range []string{"/api/v1/bootstrap?runId=run", "/api/v1/discovery?runId=run&topic=topic&requesterNodeId=starting"} {
+		for _, test := range []struct {
+			query         string
+			status, count int
+		}{
+			{"", 200, 2}, {"&generation=2", 200, 1}, {"&generation=3", 200, 0},
+			{"&generation=", 400, 0}, {"&generation=0", 400, 0}, {"&generation=bad", 400, 0},
+			{"&generation=1&generation=2", 400, 0},
+			{"&generation=%zz", 400, 0}, {"&generation=-1", 400, 0}, {"&generation=18446744073709551616", 400, 0},
+		} {
+			t.Run(path+test.query, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path+test.query, nil))
+				if w.Code != test.status {
+					t.Fatalf("status %d, want %d", w.Code, test.status)
+				}
+				if test.status == 200 {
+					var nodes []struct {
+						NodeID string `json:"nodeId"`
+					}
+					if err := json.Unmarshal(w.Body.Bytes(), &nodes); err != nil {
+						t.Fatal(err)
+					}
+					if len(nodes) != test.count || test.count == 1 && nodes[0].NodeID != "current" {
+						t.Fatalf("unexpected registry nodes %+v", nodes)
+					}
+				}
+			})
+		}
 	}
 }
 

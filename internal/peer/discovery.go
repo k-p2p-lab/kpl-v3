@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,17 +107,24 @@ func selectDiscoveryPeers(requesterNodeID, topic string, candidates []bootstrapN
 	return selected
 }
 
+func (s *Server) registryQuery() url.Values {
+	query := url.Values{"runId": {s.config.Node.RunID}}
+	if generation := s.config.Node.Generation; generation > 0 {
+		query.Set("generation", strconv.FormatUint(generation, 10))
+	}
+	return query
+}
+
 func (s *Server) fetchDiscoveryPeers(ctx context.Context, topic string) ([]bootstrapNode, error) {
 	endpoint := strings.TrimRight(s.config.ControllerURL, "/") + "/api/v1/discovery"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	query := req.URL.Query()
+	query := s.registryQuery()
 	if s.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
-	query.Set("runId", s.config.Node.RunID)
 	query.Set("topic", topic)
 	query.Set("requesterNodeId", s.config.Node.ID)
 	req.URL.RawQuery = query.Encode()
@@ -408,7 +417,6 @@ func uniqueDiscoveryTopics(topics []string) []string {
 	seen := make(map[string]struct{}, len(topics))
 	result := make([]string, 0, len(topics))
 	for _, topic := range topics {
-		topic = strings.TrimSpace(topic)
 		if topic == "" {
 			continue
 		}

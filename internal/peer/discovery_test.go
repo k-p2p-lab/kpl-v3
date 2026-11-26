@@ -74,6 +74,13 @@ func TestSelectDiscoveryPeersIsStableAndPrefersSubscribers(t *testing.T) {
 	}
 }
 
+func TestDiscoveryUsesDistinctLiteralTopicNames(t *testing.T) {
+	got := uniqueDiscoveryTopics([]string{"topic", " topic ", "comma,topic", "topic", ""})
+	if want := []string{" topic ", "comma,topic", "topic"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("discovery topics = %q, want %q", got, want)
+	}
+}
+
 func TestFetchDiscoveryPeersEncodesRegistryQuery(t *testing.T) {
 	nodes := bootstrapTestNodes(t, 1)
 	nodes[0].NodeID = "candidate"
@@ -83,7 +90,7 @@ func TestFetchDiscoveryPeersEncodesRegistryQuery(t *testing.T) {
 			t.Error("discovery request omitted internal authentication")
 		}
 		if r.URL.Path != "/api/v1/discovery" || r.URL.Query().Get("runId") != "run with spaces" ||
-			r.URL.Query().Get("topic") != "topic/a b" || r.URL.Query().Get("requesterNodeId") != "requester" {
+			r.URL.Query().Get("topic") != "topic/a b" || r.URL.Query().Get("requesterNodeId") != "requester" || r.URL.Query().Get("generation") != "3" {
 			t.Errorf("unexpected discovery request: %s", r.URL.String())
 		}
 		_ = json.NewEncoder(w).Encode(nodes)
@@ -93,7 +100,7 @@ func TestFetchDiscoveryPeersEncodesRegistryQuery(t *testing.T) {
 	server := &Server{config: model.PeerProcessConfig{
 		ControllerURL: registry.URL,
 		Token:         "internal-test-key",
-		Node:          model.Node{ID: "requester", RunID: "run with spaces"},
+		Node:          model.Node{ID: "requester", RunID: "run with spaces", Generation: 3},
 	}}
 	got, err := server.fetchDiscoveryPeers(context.Background(), "topic/a b")
 	if err != nil {

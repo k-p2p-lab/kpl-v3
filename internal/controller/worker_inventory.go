@@ -66,10 +66,21 @@ type workerInventoryLease struct {
 
 func (b *runWorkerBroker) clearInventoryLeaseLocked() {
 	if b.inventoryLease != nil {
-		b.inventoryLease.timer.Stop()
+		if b.inventoryLease.timer != nil {
+			b.inventoryLease.timer.Stop()
+		}
 		b.inventoryLease = nil
 	}
 }
+
+func (b *runWorkerBroker) expireInventoryPage(lease *workerInventoryLease, next int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.inventoryLease == lease && lease.next == next {
+		b.inventoryLease = nil
+	}
+}
+
 func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInventoryRequest) (workerInventoryPage, error) {
 	// authorizeAgent takes state.mu before b.mu. Capture the borrowed values
 	// before acquiring b.mu as well, avoiding an RWMutex writer inversion.
@@ -109,13 +120,6 @@ func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInven
 		}
 		lease := &workerInventoryLease{token: rand.Text(), snapshot: candidate.workerInventory, revision: candidate.revision, full: candidate.full, since: request.Since}
 		b.inventoryLease = lease
-		lease.timer = time.AfterFunc(workerInventoryLeaseDuration, func() {
-			b.mu.Lock()
-			defer b.mu.Unlock()
-			if b.inventoryLease == lease {
-				b.inventoryLease = nil
-			}
-		})
 	} else if b.inventoryLease == nil || b.inventoryLease.token != request.Lease || b.inventoryLease.next != request.Next || b.inventoryLease.since != request.Since {
 		return workerInventoryPage{}, errors.New("inventory lease expired or cursor does not match")
 	}
@@ -163,6 +167,14 @@ func (b *runWorkerBroker) inventoryPage(ctx context.Context, request workerInven
 	page.Done = page.Next == total
 	if page.Done {
 		b.clearInventoryLeaseLocked()
+	} else {
+		// Expire an abandoned cursor. An active transfer can span multiple
+		// lease intervals, but each valid request must advance the cursor.
+		if lease.timer != nil {
+			lease.timer.Stop()
+		}
+		next := page.Next
+		lease.timer = time.AfterFunc(workerInventoryLeaseDuration, func() { b.expireInventoryPage(lease, next) })
 	}
 	return page, nil
 }

@@ -3,7 +3,6 @@ package controller
 import (
 	"encoding/json"
 	"math"
-	"strings"
 	"sync"
 	"time"
 
@@ -114,7 +113,6 @@ func (m *controllerMetrics) initNode(node model.Node) {
 		topics = []string{"kpl/default"}
 	}
 	for _, topic := range topics {
-		topic = strings.TrimSpace(topic)
 		if topic == "" {
 			continue
 		}

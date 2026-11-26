@@ -125,6 +125,17 @@ func (s *Server) updateQueuePositionsLocked() {
 	s.state.notify()
 }
 
+// Queue owners can acquire cancelMu after the service context was canceled
+// but before the shutdown goroutine acquires it to cancel every slot.
+func (s *Server) queueStoppingLocked() bool {
+	select {
+	case <-s.serveDone:
+		return true
+	default:
+		return s.shuttingDown
+	}
+}
+
 // The Controller runs one analysis child locally. Each eligible Agent host
 // adds one calculation for the contiguous analysis prefix, after Peer cleanup.
 func (s *Server) readyWorkSlotsLocked() []*workSlot {
@@ -140,7 +151,7 @@ func (s *Server) readyWorkSlotsLocked() []*workSlot {
 		s.analysisGroupReady = false
 		s.analysisGroupWorkers = nil
 	}
-	if s.summaryRefreshActive {
+	if s.summaryRefreshActive || s.queueStoppingLocked() {
 		return nil
 	}
 	if parallel && s.analysisGroupReady && len(s.queueCleanup) != 0 {

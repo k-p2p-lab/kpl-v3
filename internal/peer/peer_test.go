@@ -23,6 +23,9 @@ func TestFetchBootstrapSendsRunNamespace(t *testing.T) {
 		if got := r.URL.Query().Get("runId"); got != runID {
 			t.Errorf("runId = %q, want %q", got, runID)
 		}
+		if got := r.URL.Query().Get("generation"); got != "2" {
+			t.Errorf("generation = %q, want 2", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]bootstrapNode{{
 			NodeID: "boot-a", PeerID: "peer-a", Addresses: []string{"/ip4/127.0.0.1/tcp/10001"},
@@ -32,7 +35,7 @@ func TestFetchBootstrapSendsRunNamespace(t *testing.T) {
 
 	server := &Server{config: model.PeerProcessConfig{
 		Token:         "internal-test-key",
-		Node:          model.Node{RunID: runID},
+		Node:          model.Node{RunID: runID, Generation: 2},
 		ControllerURL: registry.URL,
 	}}
 	nodes, err := server.fetchBootstrap(context.Background())

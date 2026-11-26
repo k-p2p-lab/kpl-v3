@@ -40,10 +40,13 @@ func TestObservationWorkerHelper(t *testing.T) {
 		return func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
 			at := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
 			observation := analysisObservation{RunID: start.RunID, At: at, Groups: []analysisGroup{}}
-			if method == "large" {
-				// Two complete 1,400-node graph layers are a valid observation
-				// shape whose single encoded row exceeds the IPC frame limit.
-				const count = 1400
+			if method == "large" || method == "two-chunks" {
+				// The cancellation case needs a second chunk. The large-transfer
+				// case exercises a complete row beyond the IPC frame limit.
+				count := 300
+				if method == "large" {
+					count = 1400
+				}
 				graph := analysisGraph{Protocol: "transport", Nodes: make([]string, count), Edges: make([][2]int, 0, count*(count-1)/2)}
 				for from := range count {
 					graph.Nodes[from] = fmt.Sprintf("node-%04d", from)
@@ -62,7 +65,7 @@ func TestObservationWorkerHelper(t *testing.T) {
 			sum := sha256.Sum256(data)
 			info := workerObservationInfo{RunID: start.RunID, Epoch: peer.Epoch(), At: at, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
 			switch method {
-			case "large", "small":
+			case "large", "two-chunks", "small":
 				err = client.streamObservation(ctx, at, data)
 			case "begin", "bad-checksum", "bad-offset", "oversize", "wrong-run", "wrong-epoch":
 				if method == "wrong-run" {
@@ -356,10 +359,13 @@ func TestWorkerObservationCancellationCleansTransferBeforeReaping(t *testing.T) 
 		}
 	})
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- process.Call(ctx, "large", nil, nil) }()
+	go func() { done <- process.Call(ctx, "two-chunks", nil, nil) }()
 	select {
 	case <-entered:
+	case err := <-done:
+		t.Fatalf("transfer returned before its second chunk: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("transfer did not reach a pending chunk")
 	}

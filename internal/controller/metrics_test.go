@@ -107,6 +107,16 @@ func TestMetricsAccumulateBeyondRecentEventHistory(t *testing.T) {
 	}
 }
 
+func TestMetricsHeartbeatKeepsDistinctLiteralTopics(t *testing.T) {
+	s := newState(t.TempDir())
+	s.metrics.initNode(model.Node{ID: "peer", RunID: "run", AgentID: "agent", State: model.NodeReady,
+		Metadata: map[string]string{"topicsJSON": `[" topic ","topic"]`}})
+	metrics := gatherTestMetrics(t, s)
+	for _, topic := range []string{" topic ", "topic"} {
+		requireMetricValue(t, metrics, "kpl_events_total", map[string]string{"run_id": "run", "agent_id": "agent", "event_type": "publish", "topic": topic}, 0)
+	}
+}
+
 func TestMetricsHeartbeatInitializesSharedZeroSeries(t *testing.T) {
 	s := newState(t.TempDir())
 	if _, err := s.registerAgent(model.Agent{ID: "agent", URL: "http://agent"}); err != nil {

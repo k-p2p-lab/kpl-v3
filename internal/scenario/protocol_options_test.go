@@ -9,6 +9,14 @@ import (
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
 )
 
+func TestJoinRejectsEmptyTopicEntry(t *testing.T) {
+	for _, options := range []string{"topics: ['']", "gossipsub: {topics: [valid, '']}"} {
+		if _, err := Parse([]byte("name: empty-topic\nphases: [{action: join, group: workers, count: 1, node: {" + options + "}}]")); err == nil {
+			t.Errorf("accepted empty topic in %s", options)
+		}
+	}
+}
+
 func TestProtocolOptionsExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
 	data, err := os.ReadFile("../../examples/protocol-options.yaml")
 	if err != nil {

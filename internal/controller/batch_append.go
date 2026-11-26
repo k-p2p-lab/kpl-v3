@@ -265,7 +265,7 @@ func (s *Server) AppendScenarioBatch(parent context.Context, id string, addition
 	}
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	if s.shuttingDown {
+	if s.queueStoppingLocked() {
 		return model.Experiment{}, errors.New("controller is shutting down")
 	}
 	if err := parent.Err(); err != nil {

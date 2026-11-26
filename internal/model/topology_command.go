@@ -66,38 +66,48 @@ func (r TopologyRequest) PeerInfos() ([]peer.AddrInfo, error) {
 	infos := make([]peer.AddrInfo, 0, len(r.Neighbors))
 	seen := make(map[peer.ID]bool, len(r.Neighbors))
 	for i, neighbor := range r.Neighbors {
-		id, err := peer.Decode(neighbor.PeerID)
+		info, err := neighbor.AddrInfo()
 		if err != nil {
-			return nil, fmt.Errorf("topology neighbor %d has an invalid peer ID: %w", i, err)
+			return nil, fmt.Errorf("topology neighbor %d: %w", i, err)
 		}
-		if seen[id] {
-			return nil, fmt.Errorf("duplicate topology neighbor %s", id)
+		if seen[info.ID] {
+			return nil, fmt.Errorf("duplicate topology neighbor %s", info.ID)
 		}
-		seen[id] = true
-		if len(neighbor.Addresses) == 0 || len(neighbor.Addresses) > 32 {
-			return nil, fmt.Errorf("topology neighbor %s requires 1 to 32 transport addresses", id)
-		}
-		info := peer.AddrInfo{ID: id}
-		for _, raw := range neighbor.Addresses {
-			if len(raw) > 2048 {
-				return nil, fmt.Errorf("topology address exceeds 2048 bytes")
-			}
-			address, err := multiaddr.NewMultiaddr(raw)
-			if err != nil {
-				return nil, fmt.Errorf("invalid topology address for %s: %w", id, err)
-			}
-			transport, destination := peer.SplitAddr(address)
-			if destination != "" && destination != id {
-				return nil, fmt.Errorf("topology address destination does not match neighbor %s", id)
-			}
-			if transport == nil {
-				return nil, fmt.Errorf("topology neighbor %s has no transport address", id)
-			}
-			info.Addrs = append(info.Addrs, transport)
-		}
+		seen[info.ID] = true
 		infos = append(infos, info)
 	}
 	return infos, nil
+}
+
+// AddrInfo validates the identity and each advertised transport address,
+// whether the generated graph assigns this Peer any neighbors or not.
+func (p TopologyPeer) AddrInfo() (peer.AddrInfo, error) {
+	id, err := peer.Decode(p.PeerID)
+	if err != nil {
+		return peer.AddrInfo{}, fmt.Errorf("invalid peer ID: %w", err)
+	}
+	if len(p.Addresses) == 0 || len(p.Addresses) > 32 {
+		return peer.AddrInfo{}, fmt.Errorf("topology peer %s requires 1 to 32 transport addresses", id)
+	}
+	info := peer.AddrInfo{ID: id, Addrs: make([]multiaddr.Multiaddr, 0, len(p.Addresses))}
+	for _, raw := range p.Addresses {
+		if len(raw) > 2048 {
+			return peer.AddrInfo{}, fmt.Errorf("topology address exceeds 2048 bytes")
+		}
+		address, err := multiaddr.NewMultiaddr(raw)
+		if err != nil {
+			return peer.AddrInfo{}, fmt.Errorf("invalid topology address for %s: %w", id, err)
+		}
+		transport, destination := peer.SplitAddr(address)
+		if destination != "" && destination != id {
+			return peer.AddrInfo{}, fmt.Errorf("topology address destination does not match peer %s", id)
+		}
+		if transport == nil {
+			return peer.AddrInfo{}, fmt.Errorf("topology peer %s has no transport address", id)
+		}
+		info.Addrs = append(info.Addrs, transport)
+	}
+	return info, nil
 }
 
 // Validate rejects acknowledgements for another command, Peer, or neighbor set.

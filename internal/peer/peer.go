@@ -569,12 +569,10 @@ func (s *Server) fetchBootstrap(ctx context.Context) ([]bootstrapNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	query := req.URL.Query()
 	if s.config.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.config.Token)
 	}
-	query.Set("runId", s.config.Node.RunID)
-	req.URL.RawQuery = query.Encode()
+	req.URL.RawQuery = s.registryQuery().Encode()
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

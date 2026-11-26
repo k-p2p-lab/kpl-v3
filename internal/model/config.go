@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -270,6 +271,18 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 	}
 	if len(c.GossipSub.Topics) == 0 {
 		c.GossipSub.Topics = []string{"kpl/default"}
+	} else if len(c.GossipSub.Topics) > 1 {
+		// Join a literal topic once and preserve the first entry for publish.
+		// Profiles and other Peers may share the original slice.
+		topics := make([]string, 0, len(c.GossipSub.Topics))
+		seen := make(map[string]bool, len(c.GossipSub.Topics))
+		for _, topic := range c.GossipSub.Topics {
+			if !seen[topic] {
+				topics = append(topics, topic)
+				seen[topic] = true
+			}
+		}
+		c.GossipSub.Topics = topics
 	}
 	if c.Kademlia.Enabled == nil {
 		c.Kademlia.Enabled = boolPointer(true)
@@ -482,8 +495,8 @@ func (c NodeConfig) Validate() error {
 				}
 			}
 		}
-		if len(c.GossipSub.Topics) == 0 {
-			return fmt.Errorf("gossipsub topics cannot be empty")
+		if slices.Contains(c.GossipSub.Topics, "") {
+			return fmt.Errorf("gossipsub topics cannot contain an empty name")
 		}
 		switch c.GossipSub.Router {
 		case "gossipsub", "floodsub", "randomsub":

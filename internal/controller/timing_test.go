@@ -80,6 +80,29 @@ func TestTimingDistributionSamplingIsBoundedAndRepeatable(t *testing.T) {
 	}
 }
 
+func TestTimingUsesTopologyDispatchAllowance(t *testing.T) {
+	rows, columns := 5, 10
+	for _, test := range []struct {
+		name  string
+		phase scenario.Phase
+		want  time.Duration
+	}{
+		{"live cohort", scenario.Phase{}, 2 * time.Minute},
+		{"fixed size", scenario.Phase{Count: 33}, 130 * time.Second},
+		{"explicit nodes", scenario.Phase{NodeIDs: make([]string, 17)}, 125 * time.Second},
+		{"grid dimensions", scenario.Phase{Topology: &model.TopologyConfig{Model: "grid", Rows: &rows, Columns: &columns}}, 135 * time.Second},
+		{"explicit timeout", scenario.Phase{Count: 33, Timeout: "15s"}, 15 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.phase.Action = "topology"
+			plan := newTimingPlan(scenario.Scenario{Phases: []scenario.Phase{test.phase}})
+			if plan.duration != test.want.Seconds() {
+				t.Fatalf("estimated %v seconds, want %v", plan.duration, test.want)
+			}
+		})
+	}
+}
+
 func TestTimingProjectionReplacesPredictionsWithActualBoundaries(t *testing.T) {
 	plan := parsedTimingPlan(t, "phases: [{action: wait-ready, timeout: 1m}, {action: wait, duration: 30s}]")
 	start := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)

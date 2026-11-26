@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -40,13 +39,7 @@ func TestProductionControllerReplacesWorkersAndExportsAfterEachRun(t *testing.T)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build production executable: %v\n%s", err, output)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	_ = listener.Close()
-	baseURL := "http://" + address
+	var baseURL string
 	const user, password = "worker-fixture", "fixture-only-password"
 	token := auth.InternalToken(user, password)
 	jar, _ := cookiejar.New(nil)
@@ -126,7 +119,7 @@ func TestProductionControllerReplacesWorkersAndExportsAfterEachRun(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = logs.Close() })
-	process := exec.Command(binary, "run", "controller", "--listen", address, "--data-dir", filepath.Join(directory, "data"), "--run-min-free-bytes", "0")
+	process := exec.Command(binary, "run", "controller", "--listen", "127.0.0.1:0", "--data-dir", filepath.Join(directory, "data"), "--run-min-free-bytes", "0")
 	process.Env = []string{"PATH=" + os.Getenv("PATH"), "KPL_USER=" + user, "KPL_PASSWORD=" + password}
 	process.Stdout, process.Stderr = logs, logs
 	if err := process.Start(); err != nil {
@@ -185,6 +178,31 @@ func TestProductionControllerReplacesWorkersAndExportsAfterEachRun(t *testing.T)
 			}
 		}
 		return response.StatusCode
+	}
+	// Let the child own the port from the first bind. Closing a reservation
+	// in the parent leaves a race with other local listeners and dialers.
+	for baseURL == "" {
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for line := range bytes.SplitSeq(data, []byte("\n")) {
+			var record struct {
+				Message string `json:"msg"`
+				Address string `json:"address"`
+			}
+			if json.Unmarshal(line, &record) == nil && record.Message == "controller listening" && record.Address != "" {
+				baseURL = "http://" + record.Address
+				break
+			}
+		}
+		if baseURL == "" {
+			select {
+			case <-ctx.Done():
+				t.Fatal("production Controller did not report a listening address")
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
 	}
 	for {
 		response, err := client.Get(baseURL + "/api/v1/health")

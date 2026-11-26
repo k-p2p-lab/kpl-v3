@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+func TestWaitJobsEmptyCohortHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := newPhaseJobs().wait(ctx, nil, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("empty wait-jobs returned %v", err)
+	}
+}
+
 func TestPhaseJobsWaitsForNamedBackgroundJob(t *testing.T) {
 	jobs := newPhaseJobs()
 	finished := make(chan struct{})

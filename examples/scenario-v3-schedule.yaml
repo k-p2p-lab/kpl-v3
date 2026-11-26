@@ -10,6 +10,8 @@ profiles:
       params: {d: 6, dLow: 5, dHigh: 12, dScore: 3, dOut: 2}
     network: {delay: 10ms}
 phases:
+  - {action: join, group: boot, role: boot, count: 1}
+  - {action: wait-ready, group: boot, timeout: 1m}
   - {action: join, group: workers, profile: baseline, count: 8, parallel: true}
   - {action: wait-ready, group: workers, timeout: 2m}
   - action: schedule

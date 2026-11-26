@@ -2,9 +2,47 @@ package scenario
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 )
+
+func TestTopologyExampleRecyclesBootstrapConnectionsDuringWorkerStartup(t *testing.T) {
+	raw, err := os.ReadFile("../../examples/scenario-v3-topology.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boot, workers *Phase
+	for i := range spec.Phases {
+		p := &spec.Phases[i]
+		if p.Action == "join" {
+			if p.Role == "boot" {
+				boot = p
+			} else {
+				workers = p
+			}
+		}
+	}
+	if boot == nil || workers == nil || boot.Count != 1 || workers.Count != 500 {
+		t.Fatal("expected one bootstrap Peer and 500 graph workers")
+	}
+	cm := boot.Node.Libp2p.ConnectionManager
+	if cm == nil || cm.LowWater < 1 || cm.LowWater >= cm.HighWater || cm.HighWater >= rcmgr.DefaultLimits.SystemBaseLimit.ConnsInbound {
+		t.Fatal("bootstrap connection manager must free room below the base inbound limit")
+	}
+	grace, err := time.ParseDuration(cm.GracePeriod)
+	timeout, _ := time.ParseDuration(workers.Node.Kademlia.BootstrapTimeout)
+	if err != nil || grace >= timeout {
+		t.Fatalf("bootstrap grace %q must allow reconnection before worker timeout %v", cm.GracePeriod, timeout)
+	}
+}
 
 func TestTopologyV3SelectorsAndDefaults(t *testing.T) {
 	peerID := meshFreezeTestPeerID(t)

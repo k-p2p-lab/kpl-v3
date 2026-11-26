@@ -464,8 +464,17 @@ phases:
 }
 
 func TestScenarioStopAllAdvancesAgentGeneration(t *testing.T) {
+	for _, repetitions := range []int{1, 2} {
+		t.Run(strconv.Itoa(repetitions), func(t *testing.T) {
+			testStopAllAdvancesAgentGeneration(t, repetitions)
+		})
+	}
+}
+
+func testStopAllAdvancesAgentGeneration(t *testing.T, repetitions int) {
+	t.Helper()
 	controller, agent := newLifecycleTestControllerWithAgent(t)
-	raw := []byte(`
+	raw := []byte(fmt.Sprintf(`
 version: 2
 name: generation-boundary
 phases:
@@ -473,10 +482,11 @@ phases:
     group: workers
     count: 1
   - action: stop-all
+    repeat: %d
   - action: join
     group: workers
     count: 1
-`)
+`, repetitions))
 	experiment, err := controller.StartScenario(context.Background(), raw)
 	if err != nil {
 		t.Fatal(err)
@@ -489,11 +499,15 @@ phases:
 		t.Fatalf("new generation should remain live: %+v", finished)
 	}
 	creates, fences := agent.generations()
-	if !reflect.DeepEqual(creates, []uint64{1, 2}) {
-		t.Fatalf("create generations = %v, want [1 2]", creates)
+	if want := []uint64{1, uint64(repetitions + 1)}; !reflect.DeepEqual(creates, want) {
+		t.Fatalf("create generations = %v, want %v", creates, want)
 	}
-	if !reflect.DeepEqual(fences, []uint64{1}) {
-		t.Fatalf("stop-all fences = %v, want [1]", fences)
+	var wantFences []uint64
+	for i := 1; i <= repetitions; i++ {
+		wantFences = append(wantFences, uint64(i))
+	}
+	if !reflect.DeepEqual(fences, wantFences) {
+		t.Fatalf("stop-all fences = %v, want %v", fences, wantFences)
 	}
 }
 
@@ -737,7 +751,7 @@ func waitForLifecycleNodeCount(t *testing.T, controller *Server, runID string, w
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(controller.matchingNodes(runID, "", "", "")) >= want {
+		if len(controller.matchingNodes(runID, 0, "", "", "")) >= want {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)

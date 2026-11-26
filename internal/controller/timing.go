@@ -61,9 +61,15 @@ func newTimingPlan(spec scenario.Scenario) *timingPlan {
 			duration, _ := time.ParseDuration(phase.Duration)
 			seconds = duration.Seconds()
 		case "wait-ready", "mesh-freeze", "topology":
-			// Use the phase's configured allowance until actual execution
-			// provides an observed duration for readiness or freeze commands.
+			// Use the command allowance until an observed duration is available.
 			duration, _ := time.ParseDuration(phase.Timeout)
+			if phase.Action == "topology" && phase.Timeout == "" {
+				targets := max(phase.Count, len(phase.NodeIDs), len(phase.PeerIDs))
+				if graph := phase.Topology; graph != nil && graph.Rows != nil && graph.Columns != nil {
+					targets = *graph.Rows * *graph.Columns
+				}
+				duration = defaultTopologyPhaseTimeout(targets)
+			}
 			seconds = duration.Seconds()
 		case "join", "publish", "leave":
 			if phase.Parallel {

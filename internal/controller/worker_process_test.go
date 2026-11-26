@@ -37,6 +37,7 @@ type controllerWorkerFixture struct {
 	terminal      map[string]model.Node
 	created       map[string][]model.Node
 	drained       map[string]bool
+	drainCalls    int
 	commands      []*exec.Cmd
 	starts        []string
 	stops         []string
@@ -91,6 +92,7 @@ func newControllerWorkerFixture(t *testing.T) *controllerWorkerFixture {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/drain"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/runs/"), "/drain")
 			f.mu.Lock()
+			f.drainCalls++
 			pending := f.workerPending
 			already := f.drained[id]
 			nodes := append([]model.Node(nil), f.created[id]...)
@@ -220,6 +222,24 @@ func TestControllerWorkersReplaceEachRunAndKeepRawIndexOutOfMain(t *testing.T) {
 	}
 	if len(f.nodes) != 0 || len(f.drained) != 2 || len(f.stops) < 2 {
 		t.Fatalf("Peers/drain state survived Run boundary: nodes=%d drained=%d stops=%d", len(f.nodes), len(f.drained), len(f.stops))
+	}
+}
+
+func TestWorkerDrainsSingleRunEndingInResetOnce(t *testing.T) {
+	f := newControllerWorkerFixture(t)
+	raw := []byte("version: 5\nname: final-reset\nphases: [{action: join, group: workers, count: 1}, {action: reset}]\n")
+	run, err := f.server.StartScenario(t.Context(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitWorkerRuns(t, f.server)
+	f.server.state.mu.RLock()
+	result := f.server.state.experiments[run.ID]
+	f.server.state.mu.RUnlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if result.State != "completed" || result.DataState != "complete" || f.drainCalls != 1 {
+		t.Fatalf("run state=%s data=%s final drain calls=%d, error=%s", result.State, result.DataState, f.drainCalls, result.Error)
 	}
 }
 

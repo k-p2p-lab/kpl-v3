@@ -82,8 +82,11 @@ func TestTelemetryPersistenceWaiterPrecedesLaterMetadataWriters(t *testing.T) {
 		}
 		response <- err
 	}()
+	stack := make([]byte, 2<<20)
 	telemetryCancellationWait(t, "actual late HTTP batch did not wait for persistence", func() bool {
-		stack := make([]byte, 2<<20)
+		if len(s.telemetrySlots) < 1 {
+			return false
+		}
 		n := runtime.Stack(stack, true)
 		return bytes.Contains(stack[:n], []byte("(*state).appendJournalEventsContext"))
 	})
@@ -188,8 +191,13 @@ func TestSteadyMetadataWritesAllowEarlierFinalTelemetry(t *testing.T) {
 			results <- err
 		}(data)
 	}
+	// On a single P, polling every goroutine while the clients are still
+	// connecting can starve the HTTP handlers that the test is waiting for.
+	stack := make([]byte, 2<<20)
 	telemetryCancellationWait(t, "actual two late HTTP batches did not wait for persistence", func() bool {
-		stack := make([]byte, 2<<20)
+		if len(s.telemetrySlots) < 2 {
+			return false
+		}
 		n := runtime.Stack(stack, true)
 		return bytes.Count(stack[:n], []byte("(*state).appendJournalEventsContext")) >= 2
 	})

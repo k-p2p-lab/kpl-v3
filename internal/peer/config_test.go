@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
+	"github.com/k-p2p-lab/kpl-v3/internal/scenario"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -19,6 +20,26 @@ import (
 )
 
 type discardEventTracer struct{}
+
+func TestJoinRepeatedTopicNamesStartsOneSubscriptionPerLiteral(t *testing.T) {
+	spec, err := scenario.Parse([]byte("name: topics\nphases: [{action: join, group: workers, count: 1, node: {gossipsub: {topics: [z, a, z, ' a ', a]}}}]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := model.Node{ID: "peer", RunID: "run"}
+	s := &Server{config: model.PeerProcessConfig{Node: node, NodeConfig: spec.Phases[0].Node},
+		host: newConfigTestHost(t), topics: make(map[string]*pubsub.Topic), telemetry: newTelemetry(node, "", "", nil)}
+	defer s.Close()
+	if err := s.startPubSub(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.subs) != 3 || len(s.topics) != 3 {
+		t.Fatalf("started %d subscriptions and %d topics", len(s.subs), len(s.topics))
+	}
+	if topics, err := s.publishTopics(""); err != nil || !reflect.DeepEqual(topics, []string{"z"}) {
+		t.Fatalf("default publish topics %q, error %v", topics, err)
+	}
+}
 
 func TestHostOptionsPreserveV2TCPNoiseYamuxStack(t *testing.T) {
 	options, err := hostOptions(model.NodeConfig{}.WithDefaults())

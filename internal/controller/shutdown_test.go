@@ -164,6 +164,25 @@ func TestControllerShutdownCancelsQueuedExperimentBeforeItsClockStarts(t *testin
 	}
 }
 
+func TestQueueAdmissionStopsBeforeShutdownAcquiresSchedulerLock(t *testing.T) {
+	server := newLifecycleTestController(t)
+	lifetime, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	server.serveDone = lifetime.Done()
+	server.experimentQueue = []*workSlot{{item: model.WorkQueueItem{Kind: "experiment"}}}
+	if len(server.readyWorkSlotsLocked()) != 1 {
+		t.Fatal("expected the head of a live queue to be eligible")
+	}
+	cancel()
+	if len(server.readyWorkSlotsLocked()) != 0 {
+		t.Fatal("queued work became eligible after service cancellation")
+	}
+	_, err := server.StartScenario(t.Context(), []byte("name: late admission\nphases: [{action: wait, duration: 1ms}]"))
+	if err == nil || !strings.Contains(err.Error(), "controller is shutting down") {
+		t.Fatalf("late scenario admission: %v", err)
+	}
+}
+
 func TestControllerShutdownCancelsIncompleteScenarioUpload(t *testing.T) {
 	server := newLifecycleTestController(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

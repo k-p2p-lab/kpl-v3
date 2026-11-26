@@ -237,6 +237,14 @@ phases:
     readyRatio: 1
     timeout: 1m
 
+  - name: wait for both publishers
+    action: wait-ready
+    group: publishers
+    type: publisher
+    minCount: 2
+    readyRatio: 1
+    timeout: 1m
+
   - name: publish sample messages
     action: publish
     group: publishers

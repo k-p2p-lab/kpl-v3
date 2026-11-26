@@ -6,7 +6,6 @@ import (
 	"io"
 	"math"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -132,7 +131,7 @@ func (s *Scenario) Validate() error {
 			}
 		}
 	}
-	backgroundJoins := make(map[string]map[string]struct{})
+	backgroundJoins := make(map[string]*Phase)
 	knownJobs := make(map[string]struct{})
 	joinedGroups := make(map[string][]*Phase)
 	for i := range s.Phases {
@@ -260,10 +259,7 @@ func (s *Scenario) Validate() error {
 			}
 			joinedGroups[p.Group] = append(joinedGroups[p.Group], p)
 			if !p.ShouldAwait() {
-				if backgroundJoins[p.Group] == nil {
-					backgroundJoins[p.Group] = make(map[string]struct{})
-				}
-				backgroundJoins[p.Group][p.Job] = struct{}{}
+				backgroundJoins[p.Job] = p
 			}
 		case "wait":
 			duration, err := time.ParseDuration(p.Duration)
@@ -281,11 +277,13 @@ func (s *Scenario) Validate() error {
 				if _, exists := knownJobs[job]; !exists {
 					return fmt.Errorf("phase %q: job %q has not been started", p.Name, job)
 				}
+				delete(backgroundJoins, job)
 			}
-			if job := firstUnwaitedBackgroundJoin(backgroundJoins, p.Group, p.Jobs); job != "" && p.MinCount == 0 {
-				return fmt.Errorf("phase %q: wait-ready after background join %q requires minCount or all relevant join jobs", p.Name, job)
+			if p.MinCount == 0 {
+				if job := firstUnwaitedBackgroundJoin(backgroundJoins, p); job != "" {
+					return fmt.Errorf("phase %q: wait-ready after background join %q requires minCount or all relevant join jobs", p.Name, job)
+				}
 			}
-			removeBackgroundJoinJobs(backgroundJoins, p.Jobs)
 			if p.ReadyRatio == 0 {
 				p.ReadyRatio = 1
 			}
@@ -323,8 +321,8 @@ func (s *Scenario) Validate() error {
 					if _, exists := knownJobs[job]; !exists {
 						return fmt.Errorf("phase %q: job %q has not been started", p.Name, job)
 					}
+					delete(backgroundJoins, job)
 				}
-				removeBackgroundJoinJobs(backgroundJoins, p.Jobs)
 			}
 		case "publish":
 			if p.DeliveryWindow == "" {
@@ -390,6 +388,9 @@ func (s *Scenario) Validate() error {
 func validateMeshFreezePhase(p *Phase) error {
 	if err := validatePeerSelector(p); err != nil {
 		return err
+	}
+	if p.Profile != "" {
+		return fmt.Errorf("mesh-freeze does not support a profile selector; select by group, nodeIds, or peerIds")
 	}
 	if p.Count != 0 || p.Parallelism != 0 || p.Interval != (Distribution{}) || p.Lifetime != (Distribution{}) || p.Topic != "" {
 		return fmt.Errorf("mesh-freeze does not support count, parallelism, interval, lifetime, or topic; it freezes all selected peers and their joined topics")
@@ -471,43 +472,17 @@ func validateTopologyPhase(p *Phase) error {
 	return nil
 }
 
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
-func firstUnwaitedBackgroundJoin(background map[string]map[string]struct{}, group string, waited []string) string {
-	var candidates []string
-	for candidateGroup, jobs := range background {
-		if group != "" && candidateGroup != group {
+func firstUnwaitedBackgroundJoin(background map[string]*Phase, barrier *Phase) string {
+	var first string
+	for job, join := range background {
+		if barrier.Group != "" && barrier.Group != join.Group || barrier.NodeType != "" && barrier.NodeType != join.NodeType {
 			continue
 		}
-		for job := range jobs {
-			if !contains(waited, job) {
-				candidates = append(candidates, job)
-			}
+		if first == "" || job < first {
+			first = job
 		}
 	}
-	sort.Strings(candidates)
-	if len(candidates) == 0 {
-		return ""
-	}
-	return candidates[0]
-}
-
-func removeBackgroundJoinJobs(background map[string]map[string]struct{}, waited []string) {
-	for group, jobs := range background {
-		for _, job := range waited {
-			delete(jobs, job)
-		}
-		if len(jobs) == 0 {
-			delete(background, group)
-		}
-	}
+	return first
 }
 
 func (s *Scenario) resolveNodeConfig(phase *Phase) error {

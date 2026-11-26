@@ -110,7 +110,7 @@ func (s *Server) resumeScenarioBatch(parent context.Context, id string, retry bo
 func (s *Server) resumeScenarioBatchExpected(parent context.Context, id string, retry bool, expectedRunIDs []string) (model.Experiment, error) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	if s.shuttingDown {
+	if s.queueStoppingLocked() {
 		return model.Experiment{}, errors.New("controller is shutting down")
 	}
 	if err := parent.Err(); err != nil {

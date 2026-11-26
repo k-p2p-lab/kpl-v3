@@ -74,11 +74,17 @@ phases:
     await: false
     group: experiment-clock
     topic: kpl/network-schedule
-    count: 180
+    # Each repetition waits five seconds, then samples one ready publisher.
+    count: 1
+    repeat: 180
+    parallel: true
     payloadSize: 1024
     interval:
       model: fixed
       value: 5s
   - action: wait
     duration: 16m
+  - action: wait-jobs
+    jobs: [scheduled-network-traffic]
+    timeout: 2m
   - action: stop-all

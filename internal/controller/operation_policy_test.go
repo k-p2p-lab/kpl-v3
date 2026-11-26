@@ -45,9 +45,9 @@ func TestOperationContinueRecordsFailuresAndAttemptsRemainingNodes(t *testing.T)
 				phase := scenario.Phase{Name: "churn", Job: "job-1", Action: action, Group: "workers", Count: 2, OnError: "continue", Parallel: parallel, PayloadSize: 8, Interval: scenario.Distribution{Model: "fixed", Value: "1ms"}}
 				var err error
 				if action == "publish" {
-					err = server.runPublish(context.Background(), "run", phase, rand.New(rand.NewSource(1)))
+					err = server.runPublish(context.Background(), "run", 0, phase, rand.New(rand.NewSource(1)))
 				} else {
-					err = server.runLeave(context.Background(), "run", phase, rand.New(rand.NewSource(1)))
+					err = server.runLeave(context.Background(), "run", 0, phase, rand.New(rand.NewSource(1)))
 				}
 				if err != nil || len(attempts) != 2 {
 					t.Fatalf("error = %v, attempts = %v", err, attempts)
@@ -68,6 +68,49 @@ func TestOperationContinueRecordsFailuresAndAttemptsRemainingNodes(t *testing.T)
 	}
 }
 
+func TestPublishAndLeaveSelectOnlyCurrentGeneration(t *testing.T) {
+	for _, action := range []string{"publish", "leave"} {
+		t.Run(action, func(t *testing.T) {
+			var paths []string
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.URL.Path)
+				if action == "publish" {
+					var request model.PublishRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+					}
+					if !reflect.DeepEqual(request.TargetNodeIDs, []string{"receiver"}) {
+						t.Errorf("wrong delivery cohort: %v", request.TargetNodeIDs)
+					}
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer api.Close()
+			s := newLifecycleTestController(t)
+			s.state.agents["agent"] = model.Agent{ID: "agent", URL: api.URL, State: model.AgentOnline}
+			for _, n := range []model.Node{
+				{ID: "old", Group: "workers", Generation: 1},
+				{ID: "current", Group: "workers", Generation: 2},
+				{ID: "receiver", Group: "subscribers", Generation: 2},
+			} {
+				n.RunID, n.AgentID, n.State, n.Type = "run", "agent", model.NodeReady, "full"
+				s.state.nodes[n.ID] = n
+			}
+			phase := scenario.Phase{Action: action, Group: "workers", Count: 2}
+			if err := s.runPhase(t.Context(), "run", 2, phase, rand.New(rand.NewSource(1)), newPhaseJobs(), time.Second); err != nil {
+				t.Fatal(err)
+			}
+			path := "/api/v1/nodes/current"
+			if action == "publish" {
+				path += "/publish"
+			}
+			if !reflect.DeepEqual(paths, []string{path}) {
+				t.Fatalf("commands sent to %v, want only %s", paths, path)
+			}
+		})
+	}
+}
+
 func TestPublishDefaultPolicyFails(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer expired", http.StatusNotFound)
@@ -76,7 +119,7 @@ func TestPublishDefaultPolicyFails(t *testing.T) {
 	server := New(ServerConfig{DataDir: t.TempDir()}, nil)
 	server.state.agents["agent"] = model.Agent{ID: "agent", URL: api.URL, State: model.AgentOnline}
 	server.state.nodes["node"] = model.Node{ID: "node", RunID: "run", Group: "workers", AgentID: "agent", Type: "full", State: model.NodeReady}
-	err := server.runPublish(context.Background(), "run", scenario.Phase{Group: "workers", Count: 1}, rand.New(rand.NewSource(1)))
+	err := server.runPublish(context.Background(), "run", 0, scenario.Phase{Group: "workers", Count: 1}, rand.New(rand.NewSource(1)))
 	if err == nil || !strings.Contains(err.Error(), "peer expired") {
 		t.Fatalf("publish error = %v", err)
 	}
@@ -90,12 +133,12 @@ func TestContinueWithoutCandidatesAndCancellation(t *testing.T) {
 		if action == "leave" {
 			run = server.runLeave
 		}
-		if err := run(context.Background(), "run", phase, rand.New(rand.NewSource(1))); err != nil {
+		if err := run(context.Background(), "run", 0, phase, rand.New(rand.NewSource(1))); err != nil {
 			t.Fatalf("empty %s: %v", action, err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := run(ctx, "run", phase, rand.New(rand.NewSource(1))); !errors.Is(err, context.Canceled) {
+		if err := run(ctx, "run", 0, phase, rand.New(rand.NewSource(1))); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled %s error = %v", action, err)
 		}
 		for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
@@ -106,7 +149,7 @@ func TestContinueWithoutCandidatesAndCancellation(t *testing.T) {
 		}
 		deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer deadlineCancel()
-		if err := run(deadlineCtx, "run", phase, rand.New(rand.NewSource(1))); !errors.Is(err, context.DeadlineExceeded) {
+		if err := run(deadlineCtx, "run", 0, phase, rand.New(rand.NewSource(1))); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("%s swallowed phase deadline: %v", action, err)
 		}
 	}
@@ -128,7 +171,7 @@ func TestWildcardPublishUsesRawPayloadAndPerTopicTargets(t *testing.T) {
 	server.state.nodes["publisher"] = model.Node{ID: "publisher", RunID: "run", Group: "workers", AgentID: "agent", Type: "publisher", State: model.NodeReady, Metadata: map[string]string{"topicsJSON": `["z,priority","a","a"]`}}
 	server.state.nodes["subscriber"] = model.Node{ID: "subscriber", RunID: "run", AgentID: "agent", Type: "subscriber", State: model.NodeReady, Metadata: map[string]string{"topicsJSON": `["z,priority"]`}}
 	phase := scenario.Phase{Action: "publish", Group: "workers", Count: 1, Topic: "*", PayloadSize: 32, PayloadEncoding: "raw", OnError: "continue"}
-	if err := server.runPublish(context.Background(), "run", phase, rand.New(rand.NewSource(1))); err != nil {
+	if err := server.runPublish(context.Background(), "run", 0, phase, rand.New(rand.NewSource(1))); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 1 || requests[0].Topic != "*" || !reflect.DeepEqual(requests[0].TargetNodesByTopic, map[string]int{"a": 1, "z,priority": 2}) {
@@ -163,7 +206,7 @@ func TestContinuePreservesPhaseAfterIndividualRequestTimeout(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := run(ctx, "run", phase, rand.New(rand.NewSource(1))); err != nil {
+			if err := run(ctx, "run", 0, phase, rand.New(rand.NewSource(1))); err != nil {
 				t.Fatal(err)
 			}
 			if len(server.state.events) != 2 || ctx.Err() != nil {

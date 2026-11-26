@@ -474,7 +474,7 @@ func TestScenarioStopAllAdvancesAgentGeneration(t *testing.T) {
 func testStopAllAdvancesAgentGeneration(t *testing.T, repetitions int) {
 	t.Helper()
 	controller, agent := newLifecycleTestControllerWithAgent(t)
-	raw := []byte(fmt.Sprintf(`
+	raw := fmt.Appendf(nil, `
 version: 2
 name: generation-boundary
 phases:
@@ -486,7 +486,7 @@ phases:
   - action: join
     group: workers
     count: 1
-`, repetitions))
+`, repetitions)
 	experiment, err := controller.StartScenario(context.Background(), raw)
 	if err != nil {
 		t.Fatal(err)

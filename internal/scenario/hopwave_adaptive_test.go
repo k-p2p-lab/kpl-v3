@@ -76,7 +76,7 @@ phases:
 			"name: unused\nprofiles: {unused: {gossipsub: {params: {hopwaveAdaptive: {}}}}}\nphases: [{action: wait, duration: 1ms}]",
 			"name: inline\nphases: [{action: join, group: g, count: 1, node: {gossipsub: {hopwave: true, params: {hopwaveAdaptive: {}}}}}]",
 		} {
-			if _, err := Parse([]byte(fmt.Sprintf("version: %d\n%s", version, source))); err == nil || !strings.Contains(err.Error(), "requires version 5") {
+			if _, err := Parse(fmt.Appendf(nil, "version: %d\n%s", version, source)); err == nil || !strings.Contains(err.Error(), "requires version 5") {
 				t.Fatalf("v%d: %v", version, err)
 			}
 		}

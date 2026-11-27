@@ -82,7 +82,7 @@ phases:
 	if start != "" {
 		startLine = "\n          hopwaveStart: " + start
 	}
-	spec, err := scenario.Parse([]byte(fmt.Sprintf(yaml, startLine)))
+	spec, err := scenario.Parse(fmt.Appendf(nil, yaml, startLine))
 	if err != nil {
 		t.Fatal(err)
 	}

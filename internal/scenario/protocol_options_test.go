@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/k-p2p-lab/kpl-v3/internal/model"
@@ -104,10 +105,35 @@ func TestHopwaveExampleSurvivesResolutionAndPeerJSON(t *testing.T) {
 		}
 		// JSON decoding ignores key case, so a round trip alone would not
 		// detect regressions in the canonical spellings sent to the Agent/Peer.
-		for _, field := range []string{`"hopwave":true`, `"hopwaveFactor":0.5`, `"hopwaveInterval":3`} {
+		for _, field := range []string{`"hopwave":true`, `"hopwaveFactor":0.5`, `"hopwaveInterval":3`, `"hopwaveStart":"trough"`} {
 			if !bytes.Contains(wire, []byte(field)) {
 				t.Fatalf("Peer config is missing canonical field %s", field)
 			}
 		}
+	}
+}
+
+func TestHopwaveStartProfileAndJoinOverride(t *testing.T) {
+	const input = `version: 2
+name: hopwave-start
+profiles:
+  wave:
+    gossipsub: {hopwave: true, params: {hopwaveInterval: 3, hopwaveStart: crest}}
+phases:
+  - {action: join, group: crest, count: 1, profile: wave}
+  - {action: join, group: trough, count: 1, profile: wave, node: {gossipsub: {params: {hopwaveStart: trough}}}}
+`
+	spec, err := Parse([]byte(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"crest", "trough"} {
+		got := spec.Phases[i].Node.GossipSub.Params
+		if got.HopwaveStart != want || *got.HopwaveInterval != 3 {
+			t.Errorf("group %s got start %q and interval %d", spec.Phases[i].Group, got.HopwaveStart, *got.HopwaveInterval)
+		}
+	}
+	if _, err := Parse([]byte(strings.Replace(input, "hopwaveStart: crest", "hopwaveStart: peak", 1))); err == nil || !strings.Contains(err.Error(), "hopwaveStart") {
+		t.Fatalf("invalid start mode: %v", err)
 	}
 }

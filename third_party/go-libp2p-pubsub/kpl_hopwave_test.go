@@ -153,25 +153,41 @@ func (tr hopwaveTraceCollector) Trace(event *pb.TraceEvent) {
 	}
 }
 
-func TestKPLHopwaveSignedPropagationAcrossTwoHops(t *testing.T) {
-	for _, mode := range []string{"default", "metadata", "waves"} {
+func TestKPLHopwaveSignedPropagationAcrossHops(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		hops []int32 // Local delivery followed by each remote delivery.
+	}{
+		{"default", []int32{0, 0, 0}},
+		{"metadata", []int32{0, 1, 2}},
+		{"trough", []int32{0, 1, 2, 0, 1, 2, 0, 1}},
+		{"crest", []int32{0, 0, 1, 2, 0, 1, 2, 0}},
+	} {
+		mode := tc.mode
 		enabled := mode != "default"
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		t.Cleanup(cancel)
-		hosts := newHopwaveHosts(t, 3)
-		psubs := make([]*PubSub, 3)
-		topics := make([]*Topic, 3)
-		subs := make([]*Subscription, 3)
-		traces := make([]hopwaveTraceCollector, 3)
+		hosts := newHopwaveHosts(t, len(tc.hops))
+		psubs := make([]*PubSub, len(hosts))
+		topics := make([]*Topic, len(hosts))
+		subs := make([]*Subscription, len(hosts))
+		traces := make([]hopwaveTraceCollector, len(hosts))
 		for i, h := range hosts {
 			traces[i] = hopwaveTraceCollector{make(chan *pb.TraceEvent, 4)}
 			options := []Option{WithEventTracer(traces[i])}
-			if mode == "waves" {
+			if mode == "trough" || mode == "crest" {
 				params := DefaultGossipSubParams()
-				params.HopwaveFactor, params.HopwaveInterval = 0.5, 2
+				params.HopwaveFactor, params.HopwaveInterval = 0.5, 3
+				params.HopwaveCrestStart = mode == "crest"
+				if i > 0 {
+					// Each relay uses the opposite mode for its own publications.
+					params.HopwaveCrestStart = !params.HopwaveCrestStart
+				}
 				options = append(options, WithGossipSubParams(params), WithHopwavePublish(true))
 			} else if enabled {
-				options = append(options, WithHopwave())
+				params := DefaultGossipSubParams()
+				params.HopwaveCrestStart = true
+				options = append(options, WithGossipSubParams(params), WithHopwave())
 			}
 			psubs[i] = getGossipsub(ctx, h, options...)
 			var err error
@@ -184,12 +200,13 @@ func TestKPLHopwaveSignedPropagationAcrossTwoHops(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		connect(t, hosts[0], hosts[1])
-		connect(t, hosts[1], hosts[2])
+		for i := 1; i < len(hosts); i++ {
+			connect(t, hosts[i-1], hosts[i])
+		}
 		for i, ps := range psubs {
-			neighbors := 1
-			if i == 1 {
-				neighbors = 2
+			neighbors := 2
+			if i == 0 || i == len(hosts)-1 {
+				neighbors = 1
 			}
 			for {
 				ready := make(chan bool, 1)
@@ -214,17 +231,14 @@ func TestKPLHopwaveSignedPropagationAcrossTwoHops(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i, sub := range subs {
-			expected := int32(i)
-			if mode == "waves" {
-				expected %= 2
-			}
+			expected := tc.hops[i]
 			msg, err := sub.Next(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if enabled {
 				if msg.HopCount == nil || msg.GetHopCount() != expected || msg.GetPropaType() != pb.PropagationType_EAGER_PUSH {
-					t.Fatalf("subscriber %d: %+v", i, msg.Message)
+					t.Fatalf("%s subscriber %d: got %+v, want hop %d", mode, i, msg.Message, expected)
 				}
 			} else if msg.HopCount != nil || msg.PropaType != nil {
 				t.Fatal("default GossipSub emitted Hopwave metadata")
@@ -260,21 +274,26 @@ func TestKPLHopwavePeriodicForwardingAndPullRecovery(t *testing.T) {
 		interval int
 		want     int
 		outHops  int32
+		local    bool
 	}{
-		{"fraction", int32ptr(0), 0.5, 3, 5, 1},
-		{"before-wave", int32ptr(1), 0.5, 3, 5, 2},
-		{"full-wave", int32ptr(2), 0.5, 3, 10, 0},
-		{"minimum-one", int32ptr(0), 0.01, 3, 1, 1},
-		{"zero-factor", int32ptr(0), 0, 3, 0, 1},
-		{"zero-factor-full-wave", int32ptr(2), 0, 3, 10, 0},
-		{"all-recipients", int32ptr(0), 1, 3, 10, 1},
-		{"interval-one", int32ptr(0), 0.5, 1, 10, 0},
-		{"legacy", nil, 0.5, 3, 10, 0},
-		{"negative", int32ptr(-1), 0.5, 3, 10, 0},
-		{"overflow", int32ptr(math.MaxInt32), 0.5, 3, 10, 0},
+		{"fraction", int32ptr(0), 0.5, 3, 5, 1, false},
+		{"before-wave", int32ptr(1), 0.5, 3, 5, 2, false},
+		{"full-wave", int32ptr(2), 0.5, 3, 10, 0, false},
+		{"minimum-one", int32ptr(0), 0.01, 3, 1, 1, false},
+		{"zero-factor", int32ptr(0), 0, 3, 0, 1, false},
+		{"zero-factor-full-wave", int32ptr(2), 0, 3, 10, 0, false},
+		{"all-recipients", int32ptr(0), 1, 3, 10, 1, false},
+		{"interval-one", int32ptr(0), 0.5, 1, 10, 0, false},
+		{"legacy", nil, 0.5, 3, 10, 0, false},
+		{"negative", int32ptr(-1), 0.5, 3, 10, 0, false},
+		{"overflow", int32ptr(math.MaxInt32), 0.5, 3, 10, 0, false},
+		{"publisher-crest", int32ptr(0), 0, 3, 10, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			topic, previous, author := "topic", peer.ID("previous"), peer.ID("author")
+			if tc.local {
+				previous = h.ID()
+			}
 			candidates := make(map[peer.ID]struct{})
 			queues := make(map[peer.ID]*rpcQueue)
 			protocols := make(map[peer.ID]protocol.ID)
@@ -290,13 +309,19 @@ func TestKPLHopwavePeriodicForwardingAndPullRecovery(t *testing.T) {
 				peerFilter: func(peer.ID, string) bool { return true }}
 			params := DefaultGossipSubParams()
 			params.HopwaveFactor, params.HopwaveInterval = tc.factor, tc.interval
+			params.HopwaveCrestStart = true
 			msg := &Message{Message: &pb.Message{Topic: &topic, Data: []byte("payload"), From: []byte(author), Seqno: []byte("seq"), HopCount: tc.hops, PropaType: pb.PropagationType_LAZY_PULL.Enum()}, ReceivedFrom: previous}
 			mid := DefaultMsgIdFn(msg.Message)
 			gs := &GossipSubRouter{p: p, hopwavePublish: true, params: params, feature: GossipSubDefaultFeatures,
 				mcache: NewMessageCache(3, 5), mesh: map[string]map[peer.ID]struct{}{topic: candidates}, peers: protocols,
 				unwanted: map[peer.ID]map[checksum]int{"unwanted": {computeChecksum(mid): 1}}}
 			before, _ := msg.Message.Marshal()
+			observedTrough := false
+			gs.hopwavePolicy.ObserveDecision = func(HopwaveDecision) { observedTrough = true }
 			gs.Publish(msg)
+			if observedTrough != (tc.outHops != 0) {
+				t.Fatalf("observed trough=%t for outgoing hop %d", observedTrough, tc.outHops)
+			}
 			known := tc.hops != nil && *tc.hops >= 0 && *tc.hops < math.MaxInt32
 			sent := 0
 			for pid, q := range queues {

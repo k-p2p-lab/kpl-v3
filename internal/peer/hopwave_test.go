@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -50,11 +51,17 @@ func (c *hopwaveSendCount) Trace(e *pb.TraceEvent) {
 	}
 }
 
-// At the first (Trough) hop a 1023-byte envelope has a larger wire size than
-// the 1024-byte raw message. Only the latter should reach the remote Peer.
 func TestAdaptiveHopwaveScenarioReachesPeerForwarding(t *testing.T) {
+	t.Run("default trough", func(t *testing.T) { testAdaptiveHopwaveFirstSend(t, "") })
+	t.Run("explicit trough", func(t *testing.T) { testAdaptiveHopwaveFirstSend(t, "trough") })
+	t.Run("crest", func(t *testing.T) { testAdaptiveHopwaveFirstSend(t, "crest") })
+}
+
+// The Trough payload policy suppresses the 1023-byte publication despite its
+// larger wire envelope. A first-hop Crest forwards both publications.
+func testAdaptiveHopwaveFirstSend(t *testing.T, start string) {
 	const yaml = `version: 5
-name: first-trough
+name: first-send
 phases:
   - action: join
     group: workers
@@ -64,14 +71,18 @@ phases:
         hopwave: true
         floodPublish: true
         params:
-          hopwaveInterval: 3
+          hopwaveInterval: 3%s
           hopwaveFactor: 1
           heartbeatInitialDelay: 1h
           hopwaveAdaptive:
             retentionWindow: 0s
             payloadRanges: [{minBytes: 0, maxBytes: 1024, factor: 0}]
 `
-	spec, err := scenario.Parse([]byte(yaml))
+	startLine := ""
+	if start != "" {
+		startLine = "\n          hopwaveStart: " + start
+	}
+	spec, err := scenario.Parse([]byte(fmt.Sprintf(yaml, startLine)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,21 +140,30 @@ phases:
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := sub.Next(ctx)
-	if err != nil {
-		t.Fatal(err)
+	want := map[string][]byte{raw.pubsubID: boundary}
+	wantHop := int32(1)
+	if start == "crest" {
+		want[small.pubsubID] = small.wire
+		wantHop = 0
 	}
-	if got.GetHopCount() != 1 || !bytes.Equal(got.Data, boundary) {
-		t.Fatalf("unexpected first delivery: hop %d, size %d", got.GetHopCount(), len(got.Data))
-	}
-	if id := hex.EncodeToString([]byte(got.ID)); id != raw.pubsubID {
-		t.Fatalf("delivery ID %q differs from the raw publication ID %q", id, raw.pubsubID)
+	wantSends := len(want)
+	for len(want) > 0 {
+		got, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := hex.EncodeToString([]byte(got.ID))
+		data, ok := want[id]
+		if !ok || !bytes.Equal(got.Data, data) || got.HopCount == nil || got.GetHopCount() != wantHop {
+			t.Fatalf("unexpected first-hop delivery: id %q, hop %d (present=%t, want %d), size %d", id, got.GetHopCount(), got.HopCount != nil, wantHop, len(got.Data))
+		}
+		delete(want, id)
 	}
 	// ListPeers synchronizes with the publisher event loop after the accepted
 	// message went on the wire. A reordered remote delivery cannot mask a send.
 	source.ListPeers()
-	if count := sent.messages.Load(); count != 1 {
-		t.Fatalf("sent %d messages, want only the 1024-byte publication", count)
+	if count := sent.messages.Load(); int(count) != wantSends {
+		t.Fatalf("sent %d messages, want %d", count, wantSends)
 	}
 	sourceTelemetry.checkpoint()
 	if len(sourceTelemetry.events) != 2 {
@@ -156,6 +176,12 @@ phases:
 	snapshot, ok := event.Fields["hopwaveAdaptive"].(hopwaveAdaptiveSnapshot)
 	if event.Type != "measurement_checkpoint" || event.NodeID != "source" || !ok {
 		t.Fatalf("missing adaptive checkpoint from source: %+v", event)
+	}
+	if start == "crest" {
+		if snapshot.TroughDecisions != 0 || snapshot.Adjustments != 0 {
+			t.Fatalf("Crest applied the adaptive Trough policy: %+v", snapshot)
+		}
+		return
 	}
 	if snapshot.TroughDecisions != 2 || snapshot.Adjustments != 1 || snapshot.PayloadAdjustments != 1 ||
 		snapshot.RetentionAdjustments != 0 || snapshot.OmittedRecords != 0 || len(snapshot.Records) != 1 {

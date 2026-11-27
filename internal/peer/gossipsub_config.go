@@ -108,6 +108,7 @@ func gossipSubOptions(config model.GossipSubConfig, tracer pubsub.EventTracer, s
 	params.IDontWantMessageTTL = *p.IDontWantMessageTTL
 	params.HopwaveFactor = *p.HopwaveFactor
 	params.HopwaveInterval = *p.HopwaveInterval
+	params.HopwaveCrestStart = p.HopwaveStart == "crest"
 
 	durations := []struct {
 		name   string

@@ -52,9 +52,14 @@ func validateHopwaveParams(params GossipSubParams) error {
 	return nil
 }
 
-func (gs *GossipSubRouter) hopwaveMessage(message *pb.Message, propagation pb.PropagationType) *pb.Message {
-	out := hopwaveMessage(message, propagation)
-	if gs.hopwavePublish && out.HopCount != nil && *out.HopCount >= int32(gs.params.HopwaveInterval) {
+func (gs *GossipSubRouter) hopwaveMessage(msg *Message, propagation pb.PropagationType) *pb.Message {
+	out := hopwaveMessage(msg.Message, propagation)
+	if !gs.hopwavePublish || out.HopCount == nil {
+		return out
+	}
+	// ReceivedFrom identifies a local publication even with an anonymous or
+	// custom author. Relays always advance the counter from the wire.
+	if *out.HopCount >= int32(gs.params.HopwaveInterval) || (gs.params.HopwaveCrestStart && msg.ReceivedFrom == gs.p.host.ID()) {
 		*out.HopCount = 0
 	}
 	return out

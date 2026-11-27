@@ -180,8 +180,8 @@ func TestKPLHopwaveCustomMessageIDIgnoresOnlyMutableMetadata(t *testing.T) {
 				canonical := *arrival
 				canonical.HopCount, canonical.PropaType = nil, nil
 				wantID := hashMessage(&canonical)
-				push := gs.hopwaveMessage(arrival, pb.PropagationType_EAGER_PUSH)
-				pull := gs.hopwaveMessage(push, pb.PropagationType_LAZY_PULL)
+				push := gs.hopwaveMessage(&Message{Message: arrival}, pb.PropagationType_EAGER_PUSH)
+				pull := gs.hopwaveMessage(&Message{Message: push}, pb.PropagationType_LAZY_PULL)
 				variants := []*pb.Message{arrival, push, pull}
 				for i, msg := range variants {
 					before, _ := msg.Marshal()

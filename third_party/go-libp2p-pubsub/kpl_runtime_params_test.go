@@ -19,6 +19,7 @@ func TestKPLRuntimeParamsAcknowledgementPreservesOtherState(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		p := &PubSub{ctx: ctx, eval: make(chan func())}
 		gs := &GossipSubRouter{p: p, params: DefaultGossipSubParams(), meshFrozen: frozen, mesh: map[string]map[peer.ID]struct{}{"topic": {"member": {}}}}
+		gs.params.HopwaveCrestStart = true
 		p.rt = gs
 		before := gs.params
 		want := runtimeParamsTestValue()

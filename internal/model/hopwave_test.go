@@ -51,6 +51,19 @@ func TestHopwaveRejectsUnsafeParametersAndPreservesZeroFactor(t *testing.T) {
 	}
 }
 
+func TestHopwaveStartSurvivesRuntimeIntervalChange(t *testing.T) {
+	on := true
+	base := NodeConfig{GossipSub: GossipSubConfig{Hopwave: &on, Params: GossipSubParamsConfig{HopwaveStart: "crest"}}}
+	patch := RuntimeProfilePatch{GossipSub: &RuntimeGossipSubConfig{Params: RuntimeGossipSubParams{HopwaveInterval: intPointer(3)}}}
+	updated, err := patch.Apply(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.GossipSub.Params; got.HopwaveStart != "crest" || *got.HopwaveInterval != 3 {
+		t.Fatalf("interval change produced start %q, interval %d", got.HopwaveStart, *got.HopwaveInterval)
+	}
+}
+
 func TestHopwaveAdaptiveRangesAndWindow(t *testing.T) {
 	factor := .7
 	band := func(low int, high *int) HopwavePayloadRange {

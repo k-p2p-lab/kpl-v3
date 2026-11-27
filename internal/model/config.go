@@ -412,6 +412,9 @@ func (c NodeConfig) WithDefaults() NodeConfig {
 	if p.HopwaveInterval == nil {
 		p.HopwaveInterval = intPointer(1)
 	}
+	if p.HopwaveStart == "" {
+		p.HopwaveStart = "trough"
+	}
 
 	c.defaultAttacks()
 	c.Topics = append([]string(nil), c.GossipSub.Topics...)
@@ -430,6 +433,9 @@ func (c NodeConfig) Validate() error {
 	}
 	if c.GossipSub.MeshFreeze != nil && *c.GossipSub.MeshFreeze && (c.GossipSub.Enabled == nil || !*c.GossipSub.Enabled) {
 		return fmt.Errorf("meshFreeze requires enabled GossipSub")
+	}
+	if start := c.GossipSub.Params.HopwaveStart; start != "trough" && start != "crest" {
+		return fmt.Errorf("gossipsub hopwaveStart must be trough or crest, got %q", start)
 	}
 	if policy := c.GossipSub.Params.HopwaveAdaptive; policy != nil {
 		if !*c.GossipSub.Enabled || c.GossipSub.Router != "gossipsub" || c.GossipSub.Hopwave == nil || !*c.GossipSub.Hopwave {

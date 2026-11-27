@@ -245,6 +245,9 @@ type GossipSubParams struct {
 	// HopwaveInterval resets the transmitted hop counter to zero for a full wave.
 	// This is a hop interval, not a timer or an absolute path length.
 	HopwaveInterval int
+	// HopwaveCrestStart starts locally published messages with a full wave
+	// when periodic Hopwave forwarding is enabled.
+	HopwaveCrestStart bool
 }
 
 // NewGossipSub returns a new PubSub object using the default GossipSubRouter as the router.
@@ -977,7 +980,7 @@ func (gs *GossipSubRouter) handleIWant(p peer.ID, ctl *pb.ControlMessage) []*pb.
 			}
 			out := msg.Message
 			if gs.p.hopwave {
-				out = gs.hopwaveMessage(msg.Message, pb.PropagationType_LAZY_PULL)
+				out = gs.hopwaveMessage(msg, pb.PropagationType_LAZY_PULL)
 			}
 			ihave[mid] = out
 		}
@@ -1349,7 +1352,7 @@ func (gs *GossipSubRouter) Publish(msg *Message) {
 
 	message := msg.Message
 	if gs.p.hopwave {
-		message = gs.hopwaveMessage(message, pb.PropagationType_EAGER_PUSH)
+		message = gs.hopwaveMessage(msg, pb.PropagationType_EAGER_PUSH)
 	}
 	delete(tosend, from)
 	delete(tosend, peer.ID(msg.GetFrom()))
